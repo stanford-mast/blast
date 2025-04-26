@@ -11,8 +11,7 @@ logger = logging.getLogger(__name__)
 
 # Import non-browser_use modules first
 from .response import AgentHistoryListResponse, AgentReasoning
-from .settings import Settings
-from .constraints import Constraints
+from .config import Settings, Constraints
 from .resource_manager import ResourceManager
 from .scheduler import Scheduler
 from .cache import CacheManager

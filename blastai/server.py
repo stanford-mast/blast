@@ -21,8 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 # Import settings first as it doesn't trigger browser_use
-from .settings import Settings
-from .constraints import Constraints
+from .config import Settings, Constraints
 
 # Configure root logger to error by default
 logging.basicConfig(
@@ -102,7 +101,7 @@ def load_config(config_path: Optional[str] = None) -> tuple[Settings, Constraint
     # Configure logging before any further imports or operations
     configure_logging(settings)
     
-    constraints = Constraints.from_string(
+    constraints = Constraints.create(
         max_memory=config['constraints']['max_memory'],
         max_concurrent_browsers=config['constraints']['max_concurrent_browsers'],
         allow_parallelism=config['constraints']['allow_parallelism'],
