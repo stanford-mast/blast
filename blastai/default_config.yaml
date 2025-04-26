@@ -1,0 +1,15 @@
+settings:
+  persist_cache: false
+  browser_use_log_level: "debug"  # Logging level for browser-use module
+  blastai_log_level: "debug"  # Logging level for blastai module
+
+constraints:
+  max_memory: null  # No default memory limit
+  max_concurrent_browsers: 20
+  max_cost_per_minute: null  # No default cost per minute limit
+  max_cost_per_hour: null  # No default cost per hour limit
+  allow_parallelism: true
+  max_parallelism_nesting_depth: 1
+  llm_model: "gpt-4.1"
+  allow_vision: true
+  require_headless: true

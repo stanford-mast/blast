@@ -1,0 +1,3 @@
+[submodule "browser-use"]
+	path = browser-use
+	url = git@github.com:browser-use/browser-use.git

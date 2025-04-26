@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blast"
+version = "0.1.0"
+description = "Browser-LLM Auto-Scaling Technology"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "browser-use>=0.1.41"
+]
+
+[tool.setuptools]
+packages = ["blastai"]
