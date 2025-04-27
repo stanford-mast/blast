@@ -52,6 +52,7 @@ from datetime import datetime
 from .response import AgentReasoning, AgentHistoryListResponse
 from browser_use.agent.views import AgentHistoryList
 from .executor import Executor
+from .planner import Planner
 
 logger = logging.getLogger(__name__)
 
@@ -146,9 +147,7 @@ class Scheduler:
         result = []
         while num >= 0:
             num, remainder = divmod(num, 26)
-            # Convert remainder to character (A=0, B=1, etc)
             result.append(chr(65 + remainder))  # 65 is ASCII for 'A'
-            # Decrement num since we want A->Z before AA
             num -= 1
         return ''.join(reversed(result))
         
@@ -332,14 +331,15 @@ class Scheduler:
             await asyncio.sleep(0.1)  # Prevent tight loop
             
     async def start_task_exec(self, task_id: str, executor: Executor,
-                            cached_plan: Optional[AgentHistoryList] = None):
+                           cached_plan: Optional[AgentHistoryList] = None):
         """Start task execution.
         
         This method:
         1. Assigns executor to task
         2. Records start time
-        3. Creates execution coroutine
-        4. Starts async execution task
+        3. Gets plan from planner
+        4. Creates execution coroutine
+        5. Starts async execution task
         
         Args:
             task_id: Task ID
@@ -360,7 +360,14 @@ class Scheduler:
         if cached_plan:
             coro = executor.run(cached_plan)
         else:
-            coro = executor.run(task.description, task.initial_url)
+            # Get plan from planner
+            plan = await self.planner.plan(task.description)
+            
+            # Combine plan and description
+            full_description = f"{plan}\n{task.description}"
+            
+            # Run with combined description
+            coro = executor.run(full_description, task.initial_url)
             
         # Create and store task
         task.executor_run_task = asyncio.create_task(coro)
