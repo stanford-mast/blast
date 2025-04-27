@@ -5,7 +5,10 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
+from langchain_core.language_models.chat_models import BaseChatModel
+from browser_use import Agent, Controller
 from browser_use.agent.views import AgentHistoryList
+from .tools import register_tools
 
 from .utils import get_appdata_dir
 
@@ -37,6 +40,33 @@ class CacheManager:
         self._results_cache: Dict[str, AgentHistoryList] = {}
         self._plans_cache: Dict[str, AgentHistoryList] = {}
         
+    def _load_history_with_output_model(self, cache_file: Path) -> Optional[AgentHistoryList]:
+        """Load history from file with proper output model that includes custom actions.
+        
+        Args:
+            cache_file: Path to the cache file to load
+            
+        Returns:
+            Loaded history if successful, None otherwise
+        """
+        try:
+            # Create controller and register custom tools
+            controller = Controller()
+            register_tools(controller)
+            
+            # Create a dummy agent just to get the output model
+            # We don't need a real LLM since we're just loading history
+            dummy_agent = Agent(
+                task="dummy",
+                llm=BaseChatModel(),  # type: ignore
+                controller=controller
+            )
+            
+            return AgentHistoryList.load_from_file(cache_file, dummy_agent.AgentOutput)
+        except Exception as e:
+            logger.error(f"Error loading history with output model from {cache_file}: {e}")
+            return None
+            
     def _parse_cache_control(self, cache_control: str) -> Dict[str, bool]:
         """Parse cache control string into settings.
         
@@ -99,7 +129,7 @@ class CacheManager:
             cache_file = self.results_dir / f"{cache_key}.json"
             if cache_file.exists():
                 try:
-                    return AgentHistoryList.load_from_file(cache_file)
+                    return self._load_history_with_output_model(cache_file)
                 except Exception as e:
                     logger.error(f"Error loading cache file {cache_file}: {e}")
                     
@@ -130,7 +160,7 @@ class CacheManager:
             cache_file = self.plans_dir / f"{cache_key}.json"
             if cache_file.exists():
                 try:
-                    return AgentHistoryList.load_from_file(cache_file)
+                    return self._load_history_with_output_model(cache_file)
                 except Exception as e:
                     logger.error(f"Error loading cache file {cache_file}: {e}")
                     

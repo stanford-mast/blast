@@ -134,6 +134,24 @@ class Scheduler:
     letting the resource manager handle executor lifecycle.
     """
     
+    def _generate_task_id(self) -> str:
+        """Generate an alphabetic task ID.
+        
+        Generates IDs in sequence: A, B, C, ..., Z, AA, AB, AC, ...
+        
+        Returns:
+            Alphabetic task ID
+        """
+        num = len(self.tasks)
+        result = []
+        while num >= 0:
+            num, remainder = divmod(num, 26)
+            # Convert remainder to character (A=0, B=1, etc)
+            result.append(chr(65 + remainder))  # 65 is ASCII for 'A'
+            # Decrement num since we want A->Z before AA
+            num -= 1
+        return ''.join(reversed(result))
+        
     def __init__(self, constraints, cache_manager, planner):
         """Initialize scheduler with constraints and cache manager."""
         self.constraints = constraints
@@ -157,8 +175,8 @@ class Scheduler:
         Returns:
             Task ID
         """
-        # Generate unique task ID
-        task_id = f"{int(time.time() * 1000)}_{len(self.tasks)}"
+        # Generate unique alphabetic task ID
+        task_id = self._generate_task_id()
         
         # Create task state
         task = TaskState(
