@@ -497,6 +497,24 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             task_id = update.task_id
             msg_id = f"msg_{task_id}"  # Keep task ID visible
             
+            # Initialize content_parts for task if needed (for cached results)
+            if task_id not in content_parts:
+                content_parts[task_id] = []
+                output_items[task_id] = {
+                    'id': msg_id,
+                    'type': 'message',
+                    'status': 'in_progress',
+                    'role': 'assistant',
+                    'content': []
+                }
+                # Send output item added event
+                data = {
+                    'type': 'response.output_item.added',
+                    'output_index': len(output_items) - 1,
+                    'item': output_items[task_id]
+                }
+                yield f"event: response.output_item.added\ndata: {json.dumps(data)}\n\n"
+            
             # Add final result content part
             content_index = len(content_parts[task_id])
             part = {
