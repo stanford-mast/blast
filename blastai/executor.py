@@ -2,9 +2,11 @@
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import List, Optional, Union, AsyncIterator, Dict, Any
 from datetime import datetime
+from urllib.parse import urlparse, quote_plus
 
 from browser_use import Agent, Browser, Controller
 from browser_use.agent.views import AgentHistoryList
@@ -41,6 +43,33 @@ class Executor:
         self._last_state: Optional[Dict[str, Any]] = None
         self._total_cost = 0.0  # Track total LLM cost
         
+    def _get_url_or_search(self, input_str: Optional[str]) -> Optional[str]:
+        """Convert input to URL or Google search URL.
+        
+        Args:
+            input_str: Input string (URL or search query)
+            
+        Returns:
+            URL to use (either direct URL or Google search URL)
+            None if input_str is None
+        """
+        if not input_str:
+            return None
+            
+        # Check if it's a valid URL
+        try:
+            result = urlparse(input_str)
+            is_url = all([result.scheme, result.netloc])
+        except:
+            is_url = False
+            
+        if is_url:
+            return input_str
+        else:
+            # Convert to Google search URL
+            search_query = quote_plus(input_str)
+            return f'https://www.google.com/search?q={search_query}'
+        
     async def run(self, task_or_plan: Union[str, AgentHistoryList], initial_url: Optional[str] = None) -> AgentHistoryList:
         """Run a task or reuse a cached plan.
         
@@ -60,10 +89,11 @@ class Executor:
                 
                 # Create agent if this is first run, otherwise add new task
                 if not self.agent:
-                    # Create initial actions if URL provided
+                    # Create initial actions if URL/search provided
                     initial_actions = None
-                    if initial_url:
-                        initial_actions = [{'open_tab': {'url': initial_url}}]
+                    url = self._get_url_or_search(initial_url)
+                    if url:
+                        initial_actions = [{'open_tab': {'url': url}}]
                         
                     self.agent = Agent(
                         task=task,
@@ -75,8 +105,9 @@ class Executor:
                         initial_actions=initial_actions
                     )
                 else:
-                    if initial_url:
-                        await self.agent.multi_act([{'open_tab': {'url': initial_url}}])
+                    url = self._get_url_or_search(initial_url)
+                    if url:
+                        await self.agent.multi_act([{'open_tab': {'url': url}}])
                     self.agent.add_new_task(task)
                 
                 # Run task with cost tracking

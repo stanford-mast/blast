@@ -251,8 +251,8 @@ class ResourceManager:
         browser = Browser(config=browser_config)
         browser_context = BrowserContext(browser=browser)
         
-        # Create fresh Tools instance with scheduler for this executor
-        tools = Tools(scheduler=self.scheduler)
+        # Create fresh Tools instance with scheduler and task_id for this executor
+        tools = Tools(scheduler=self.scheduler, task_id=task_id)
         
         # Create LLM
         llm = ChatOpenAI(model=self.constraints.llm_model)
@@ -331,11 +331,6 @@ class ResourceManager:
                         if other_task.is_completed and other_task.executor:
                             other_lineage = self.scheduler.get_lineage(other_task.id)
                             
-                            # Check if lineages match except for last task
-                            logger.debug(f"Comparing lineages for executor reuse:")
-                            logger.debug(f"Task {task.id} lineage: {task_lineage}")
-                            logger.debug(f"Other task {other_task.id} lineage: {other_lineage}")
-                            
                             if (len(task_lineage) == len(other_lineage) + 1 and
                                 task_lineage[:-1] == other_lineage):
                                 # Actually reuse the executor
@@ -345,8 +340,10 @@ class ResourceManager:
                                 
                                 logger.debug(f"Reusing executor from task {other_task.id} for task {task.id}")
                                 
-                                # Update executor's task ID
+                                # Update executor's task ID and create new Tools instance
                                 executor.task_id = task.id
+                                tools = Tools(scheduler=self.scheduler, task_id=task.id)
+                                executor.controller = tools.controller
                                 
                                 # Start execution with reused executor
                                 cached_plan = self.cache_manager.get_plan(

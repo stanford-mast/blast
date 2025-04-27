@@ -27,14 +27,22 @@ def setup_logging(settings: Optional[Settings] = None):
     # Silence deprecation warnings (e.g. from uvicorn)
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     
-    # Determine if we need detailed logging format
+    # Get log levels
     blastai_level = getattr(logging, settings.blastai_log_level.upper())
     browser_level = getattr(logging, settings.browser_use_log_level.upper())
-    use_detailed_format = (blastai_level < logging.ERROR or browser_level < logging.ERROR)
+    
+    # Show timestamps for all levels except ERROR and CRITICAL
+    def should_show_timestamp(level):
+        return level not in {logging.ERROR, logging.CRITICAL}
     
     # Set format based on log levels
+    show_blastai_timestamp = should_show_timestamp(blastai_level)
+    show_browser_timestamp = should_show_timestamp(browser_level)
+    use_detailed_format = show_blastai_timestamp or show_browser_timestamp
+    
+    # Use consistent timestamp format without milliseconds
     log_format = '%(asctime)s [%(name)s] %(message)s' if use_detailed_format else '%(message)s'
-    date_format = '%Y-%m-%d %H:%M:%S' if use_detailed_format else None
+    date_format = '%Y-%m-%d %H:%M:%S'
     
     # Configure root logger
     handler = logging.StreamHandler(sys.stdout)

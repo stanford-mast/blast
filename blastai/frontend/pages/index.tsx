@@ -83,6 +83,7 @@ export default function Home() {
     setIsLoading(true);
     firstTaskId.current = null;
     isFirstTaskDone.current = false;
+    const startTime = Date.now();
     
     // Create new conversation item with clean task state
     const newConversationItem: ConversationItem = {
@@ -152,7 +153,7 @@ export default function Home() {
             };
           }
 
-          // Add update
+          // Add update if not duplicate
           const update: TaskUpdate = {
             content: delta,
             timestamp: Date.now(),
@@ -230,6 +231,8 @@ export default function Home() {
           }
         }
       }
+      const endTime = Date.now();
+      console.log(`Request completed in ${(endTime - startTime) / 1000} seconds at time (PST): ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}`);
     } catch (error) {
       console.error('Error:', error);
       setIsLoading(false);

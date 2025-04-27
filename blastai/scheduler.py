@@ -312,8 +312,9 @@ class Scheduler:
         if not task:
             raise ValueError(f"Task {task_id} not found")
             
-        # Track seen reasonings to avoid duplicates
+        # Track seen reasonings and completed subtasks to avoid duplicates
         seen_reasonings = {}
+        yielded_completed_subtasks = set()
         
         while True:
             # First check subtasks recursively
@@ -338,15 +339,18 @@ class Scheduler:
                         try:
                             result = await subtask.executor_run_task
                             await self.complete_task(subtask_id, result)
-                            yield AgentHistoryListResponse.from_history(
-                                history=result,
-                                task_id=subtask_id
-                            )
+                            if subtask_id not in yielded_completed_subtasks:
+                                yielded_completed_subtasks.add(subtask_id)
+                                yield AgentHistoryListResponse.from_history(
+                                    history=result,
+                                    task_id=subtask_id
+                                )
                         except Exception as e:
                             logger.error(f"Subtask {subtask_id} failed: {e}")
                 
                 # Handle cached subtask results
-                elif subtask.is_completed:
+                elif subtask.is_completed and subtask_id not in yielded_completed_subtasks:
+                    yielded_completed_subtasks.add(subtask_id)
                     yield AgentHistoryListResponse.from_history(
                         history=subtask.result,
                         task_id=subtask_id

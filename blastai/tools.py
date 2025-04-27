@@ -1,19 +1,22 @@
 """Custom tools for BlastAI."""
 
-from typing import Optional, Any
+import asyncio
+from typing import Optional, Any, List
 from browser_use import Controller, ActionResult
 from .scheduler import Scheduler
 
 class Tools:
     """Manages a Controller instance with registered tools."""
     
-    def __init__(self, scheduler: Optional[Scheduler] = None):
-        """Initialize Tools with optional scheduler.
+    def __init__(self, scheduler: Optional[Scheduler] = None, task_id: Optional[str] = None):
+        """Initialize Tools with optional scheduler and task_id.
         
         Args:
             scheduler: Optional scheduler instance for subtask management
+            task_id: Optional task ID for tracking parent-child relationships
         """
         self.controller = Controller()
+        self.task_id = task_id
         
         # Register subtask tools if scheduler is provided
         if scheduler:
@@ -34,10 +37,8 @@ class Tools:
             Returns:
                 Result of launching the subtask
             """
-            # Get current task ID from browser if available
-            parent_task_id = None
-            if browser and hasattr(browser, 'task_id'):
-                parent_task_id = browser.task_id
+            # Use task_id from Tools instance as parent_task_id
+            parent_task_id = self.task_id
                 
             # Schedule the subtask
             task_id = scheduler.schedule_subtask(
@@ -52,35 +53,44 @@ class Tools:
                 
             return ActionResult(
                 success=True,
-                extracted_content=f"🚀 Launched task {task_id} to \"{task}\""
+                extracted_content=f"🚀 Launched subtask {task_id} to \"{task}\""
             )
-            
-        @self.controller.action("Get results of a subtask")
-        async def get_subtask_results(task_id: str, browser: Optional[Any] = None) -> ActionResult:
-            """Get the results of a previously launched subtask.
+                
+        @self.controller.action("Get result(s) of subtask(s)")
+        async def get_subtask_results(comma_separated_list_of_task_ids: str, browser: Optional[Any] = None) -> ActionResult:
+            """Get the results of multiple subtasks in parallel.
             
             Args:
-                task_id: ID of the subtask
+                comma_separated_list_of_task_ids: Comma-separated list of task IDs
                 browser: Optional browser instance
                 
             Returns:
-                Results of the subtask
-            """            
-            # Get task result
+                Combined results of all subtasks
+            """
+            # Parse task IDs
+            task_ids = [tid.strip() for tid in comma_separated_list_of_task_ids.split(',')]
+            
+            # Create tasks for getting results in parallel
+            tasks = [scheduler.get_task_result(task_id) for task_id in task_ids]
+            
             try:
-                result = await scheduler.get_task_result(task_id)
-                if result:
-                    return ActionResult(
-                        success=True,
-                        extracted_content=f"📋 Result of task {task_id}: {result.final_result()}"
-                    )
-                else:
-                    return ActionResult(
-                        success=False,
-                        error=f"No result available for task {task_id}"
-                    )
+                # Wait for all results in parallel
+                results = await asyncio.gather(*tasks)
+                
+                # Combine results
+                combined_results = []
+                for task_id, result in zip(task_ids, results):
+                    if result:
+                        combined_results.append(f"  Subtask {task_id}: {result.final_result()}")
+                    else:
+                        combined_results.append(f"  Subtask {task_id}: No result available")
+                
+                return ActionResult(
+                    success=True,
+                    extracted_content="📋 Subtask results:\n" + "\n".join(combined_results)
+                )
             except Exception as e:
                 return ActionResult(
                     success=False,
-                    error=f"Failed to get result for task {task_id}: {str(e)}"
+                    error=f"Failed to get subtask results: {str(e)}"
                 )
