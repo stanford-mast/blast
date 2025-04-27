@@ -1,26 +1,24 @@
-# Configure environment variables and logging before any imports
+# Set anonymized telemetry to false before any imports
 import os
-import sys
-import logging
-
-# Set environment variables before any browser-use imports
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
-os.environ["BROWSER_USE_LOGGING_LEVEL"] = "error"
 
-# Configure root logger to error by default
-logging.basicConfig(
-    level=logging.ERROR,
-    format='%(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+"""CLI interface for BLAST."""
 
-# Configure all loggers to error level
-logging.getLogger().setLevel(logging.ERROR)
-logging.getLogger('uvicorn').setLevel(logging.ERROR)
-logging.getLogger('uvicorn.access').setLevel(logging.ERROR)
+import sys
+import click
+import httpx
+import uvicorn
+import asyncio
+import threading
+import subprocess
+import shutil
+from pathlib import Path
+from typing import Optional
+from openai import OpenAI
 
-# Import server first to ensure logging is configured before browser-use import
 from .server import app, init_app_state
+from .logging_setup import should_show_metrics
+from .config import Settings
 
 """CLI interface for BLAST."""
 
@@ -291,35 +289,51 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                 print(f"Error: Backend server not running. Start it with 'blastai serve engine'")
                 continue
 
-    async def display_metrics(client):
-        """Display and update metrics every 5s."""
-        # Print initial metrics
-        print("Tasks scheduled/running/completed: 0/0/0")
-        print("Concurrent browsers: 0")
-        print("Total memory usage: 0.0 GB")
-        print("Total cost: $0.00")
-
-        while True:
-            try:
-                response = await client.get("http://127.0.0.1:8000/metrics")
-                metrics = response.json()
+    async def display_metrics(client, settings: Settings):
+            """Display and update metrics every 5s if log levels allow."""
+            # Only show metrics if log levels are error/critical
+            if not should_show_metrics(settings):
+                return
                 
-                # Clear previous lines and update metrics
-                print("\033[2K\033[1G\033[4A", end='')  # Clear line, move to start, up 4 lines
-                print(f"Tasks scheduled/running/completed: {metrics['tasks']['scheduled']}/{metrics['tasks']['running']}/{metrics['tasks']['completed']}")
-                print(f"Concurrent browsers: {metrics['concurrent_browsers']}")
-                print(f"Total memory usage: {metrics['memory_usage_gb']:.1f} GB")
-                print(f"Total cost: ${metrics['total_cost']:.2f}", flush=True)
-                
-            except Exception:
-                # On error, just update timestamp
-                print("\033[2K\033[1G\033[4A", end='')  # Clear line, move to start, up 4 lines
-                print("Tasks scheduled/running/completed: 0/0/0")
-                print("Concurrent browsers: 0")
-                print("Total memory usage: 0.0 GB")
-                print("Total cost: $0.00", flush=True)
-                
-            await asyncio.sleep(5)
+            # Print initial metrics header
+            print("Tasks:")
+            print("  Scheduled: 0")
+            print("  Running:   0")
+            print("  Completed: 0")
+            print("Resources:")
+            print("  Active browsers: 0")
+            print("  Memory usage:    0.0 GB")
+            print("  Total cost:      $0.00")
+    
+            while True:
+                try:
+                    response = await client.get("http://127.0.0.1:8000/metrics")
+                    metrics = response.json()
+                    
+                    # Clear previous lines and update metrics
+                    print("\033[2K\033[1G\033[8A", end='')  # Clear line, move to start, up 8 lines
+                    print("Tasks:")
+                    print(f"  Scheduled: {metrics['tasks']['scheduled']}")
+                    print(f"  Running:   {metrics['tasks']['running']}")
+                    print(f"  Completed: {metrics['tasks']['completed']}")
+                    print("Resources:")
+                    print(f"  Active browsers: {metrics['concurrent_browsers']}")
+                    print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
+                    print(f"  Total cost:      ${metrics['total_cost']:.2f}", flush=True)
+                    
+                except Exception:
+                    # On error, just update timestamp
+                    print("\033[2K\033[1G\033[8A", end='')  # Clear line, move to start, up 8 lines
+                    print("Tasks:")
+                    print("  Scheduled: 0")
+                    print("  Running:   0")
+                    print("  Completed: 0")
+                    print("Resources:")
+                    print("  Active browsers: 0")
+                    print("  Memory usage:    0.0 GB")
+                    print("  Total cost:      $0.00", flush=True)
+                    
+                await asyncio.sleep(5)
 
     async def run_server_and_frontend():
         """Run server and frontend concurrently."""
@@ -340,6 +354,15 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
         server.force_exit = False  # Allow graceful shutdown
 
         # Print server endpoint and start metrics if enabled
+        # Get settings from config
+        settings = Settings()
+        if config:
+            with open(config) as f:
+                import yaml
+                user_config = yaml.safe_load(f)
+                if 'settings' in user_config:
+                    settings = Settings(**user_config['settings'])
+
         if component == 'engine':
             print("Server: http://127.0.0.1:8000")
         elif component == 'web':
@@ -350,7 +373,7 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
         if not no_metrics_output and component != 'web':
             print("\n\n\n\n")  # Four lines for metrics
             async with httpx.AsyncClient() as client:
-                metrics_task = asyncio.create_task(display_metrics(client))
+                metrics_task = asyncio.create_task(display_metrics(client, settings))
 
         if component is None:
             # Default behavior: run both backend and web frontend

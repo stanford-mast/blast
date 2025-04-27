@@ -193,17 +193,19 @@ class Engine:
     async def get_metrics(self):
         """Get current engine metrics."""
         tasks = self.scheduler.tasks
-        running_tasks = [t for t in tasks.values() if t.executor and t.executor.is_completed]
+        running_tasks = [t for t in tasks.values() if t.executor and not t.is_completed]
         completed_tasks = [t for t in tasks.values() if t.is_completed]
         scheduled_tasks = [t for t in tasks.values() if not t.is_completed and not t.executor]
         
-        # Calculate memory usage
-        import psutil
-        process = psutil.Process()
-        memory_gb = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert to GB
+        # Get memory usage from resource manager
+        total_memory = 0
+        for task in tasks.values():
+            if task.executor:
+                total_memory += self.resource_manager._get_memory_usage(task.executor)
+        memory_gb = total_memory / (1024 * 1024 * 1024)  # Convert to GB
         
-        # Calculate cost (placeholder - implement actual cost tracking)
-        total_cost = 0.00  # TODO: Implement actual cost tracking
+        # Get cost from resource manager
+        total_cost = self.resource_manager._get_cost()
         
         return {
             "tasks": {

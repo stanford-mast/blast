@@ -1,17 +1,15 @@
 """FastAPI server providing OpenAI-compatible API endpoints."""
 
-# Configure environment variables first
+# Set anonymized telemetry to false before any imports
 import os
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
-os.environ["BROWSER_USE_LOGGING_LEVEL"] = "error"  # Will be overridden by config if provided
 
-# Basic imports that don't trigger browser_use
 import sys
-import logging
 import json
 import yaml
 import time
 import asyncio
+import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import List, Optional, Union, Dict, Any, TYPE_CHECKING
@@ -20,40 +18,11 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# Import settings first as it doesn't trigger browser_use
 from .config import Settings, Constraints
-
-# Configure root logger to error by default
-logging.basicConfig(
-    level=logging.ERROR,
-    format='%(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-
-# Configure uvicorn loggers to error
-logging.getLogger('uvicorn').setLevel(logging.ERROR)
-logging.getLogger('uvicorn.access').setLevel(logging.ERROR)
+from .logging_setup import setup_logging
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
-
-def configure_logging(settings: Settings):
-    """Configure logging based on settings."""
-    # Configure blastai logger
-    blastai_logger = logging.getLogger('blastai')
-    blastai_level = getattr(logging, settings.blastai_log_level.upper())
-    blastai_logger.setLevel(blastai_level)
-    
-    # Configure browser-use logger via environment variable
-    # Set this before any browser-use imports
-    os.environ["BROWSER_USE_LOGGING_LEVEL"] = settings.browser_use_log_level.lower()
-    
-    # Set module logger to same level as blastai
-    logger.setLevel(blastai_level)
-    
-    # Configure uvicorn loggers to match blastai level
-    logging.getLogger('uvicorn').setLevel(blastai_level)
-    logging.getLogger('uvicorn.access').setLevel(blastai_level)
 
 # Global state
 _engine: Optional["Engine"] = None
@@ -61,9 +30,9 @@ _settings: Optional[Settings] = None
 _constraints: Optional[Constraints] = None
 
 # Initialize logging with default settings
-configure_logging(Settings())
+setup_logging(Settings())
 
-# Only import browser_use related modules after logging is fully configured
+# Only import these after logging is configured
 from .engine import Engine
 from .response import AgentReasoning, AgentHistoryListResponse
 
@@ -98,8 +67,8 @@ def load_config(config_path: Optional[str] = None) -> tuple[Settings, Constraint
         blastai_log_level=config['settings']['blastai_log_level']
     )
     
-    # Configure logging before any further imports or operations
-    configure_logging(settings)
+    # Configure logging with new settings
+    setup_logging(settings)
     
     constraints = Constraints.create(
         max_memory=config['constraints']['max_memory'],
@@ -222,29 +191,8 @@ async def get_metrics():
         
     try:
         # Get metrics from engine
-        tasks = _engine.scheduler.tasks
-        running_tasks = [t for t in tasks.values() if t.executor and not t.is_completed]
-        completed_tasks = [t for t in tasks.values() if t.is_completed]
-        scheduled_tasks = [t for t in tasks.values() if not t.is_completed and not t.executor]
-        
-        # Calculate memory usage
-        import psutil
-        process = psutil.Process()
-        memory_gb = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert to GB
-        
-        # Calculate cost (placeholder - implement actual cost tracking)
-        total_cost = 0.00  # TODO: Implement actual cost tracking
-        
-        return {
-            "tasks": {
-                "scheduled": len(scheduled_tasks),
-                "running": len(running_tasks),
-                "completed": len(completed_tasks)
-            },
-            "concurrent_browsers": len([t for t in tasks.values() if t.executor and t.executor.browser]),
-            "memory_usage_gb": round(memory_gb, 2),
-            "total_cost": round(total_cost, 2)
-        }
+        metrics = await _engine.get_metrics()
+        return metrics
     except Exception as e:
         logger.error(f"Error getting metrics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
