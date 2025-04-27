@@ -22,23 +22,36 @@ interface TaskModalProps {
   finalResult?: string;
 }
 
-const findMatchingScreenshot = (thought: TaskUpdate, screenshots: TaskUpdate[]): TaskUpdate | null => {
-  // First try to find the most recent screenshot before this thought
-  const previousScreenshot = screenshots.reduce((latest, screenshot) => {
-    if (screenshot.timestamp > thought.timestamp) return latest;
-    if (!latest) return screenshot;
-    return screenshot.timestamp > latest.timestamp ? screenshot : latest;
-  }, null as TaskUpdate | null);
+const findMatchingScreenshot = (thought: TaskUpdate, screenshots: TaskUpdate[], isLastThought: boolean): TaskUpdate | null => {
+  // For the last thought, always show the most recent screenshot
+  if (isLastThought && screenshots.length > 0) {
+    return screenshots.reduce((latest, screenshot) => {
+      if (!latest) return screenshot;
+      return screenshot.timestamp > latest.timestamp ? screenshot : latest;
+    }, null as TaskUpdate | null);
+  }
 
-  if (previousScreenshot) return previousScreenshot;
+  // Split screenshots into before and after the current thought
+  const before = screenshots.filter(s => s.timestamp <= thought.timestamp);
+  const after = screenshots.filter(s => s.timestamp > thought.timestamp);
 
-  // If no previous screenshot, find the closest one after
-  return screenshots.reduce((closest, screenshot) => {
-    if (!closest) return screenshot;
-    const currentDiff = Math.abs(screenshot.timestamp - thought.timestamp);
-    const closestDiff = Math.abs(closest.timestamp - thought.timestamp);
-    return currentDiff < closestDiff ? screenshot : closest;
-  }, null as TaskUpdate | null);
+  // If we have screenshots before the thought, use the most recent one
+  if (before.length > 0) {
+    return before.reduce((latest, screenshot) => {
+      if (!latest) return screenshot;
+      return screenshot.timestamp > latest.timestamp ? screenshot : latest;
+    }, null as TaskUpdate | null);
+  }
+
+  // If no screenshots before, use the earliest one after
+  if (after.length > 0) {
+    return after.reduce((earliest, screenshot) => {
+      if (!earliest) return screenshot;
+      return screenshot.timestamp < earliest.timestamp ? screenshot : earliest;
+    }, null as TaskUpdate | null);
+  }
+
+  return null;
 };
 
 const TaskModal = ({ isOpen, onClose, updates, finalResult }: TaskModalProps) => {
@@ -58,8 +71,12 @@ const TaskModal = ({ isOpen, onClose, updates, finalResult }: TaskModalProps) =>
 
   // Find the appropriate screenshot for the selected thought
   const selectedThought = thoughts[selectedIndex];
-  const currentScreenshot = selectedThought 
-    ? findMatchingScreenshot(selectedThought, screenshots)
+  const currentScreenshot = selectedThought
+    ? findMatchingScreenshot(
+        selectedThought,
+        screenshots,
+        selectedIndex === thoughts.length - 1
+      )
     : null;
 
   return (

@@ -142,17 +142,6 @@ export default function Home() {
           // Set first task ID if not set
           if (!firstTaskId.current) {
             firstTaskId.current = taskId;
-
-            // First hide the loading logo and show the response
-            setConversation(prev => {
-              const newConv = [...prev];
-              const lastItem = newConv[newConv.length - 1];
-              if (lastItem.type === 'tasks') {
-                lastItem.showLoading = false;
-                lastItem.hasFirstResponse = true;
-              }
-              return newConv;
-            });
           }
 
           // Initialize task if needed
@@ -170,6 +159,19 @@ export default function Home() {
             type: delta.includes(' ') ? 'thought' : 'screenshot'
           };
           currentTasks[taskId].updates.push(update);
+
+          // Show first response and hide loading when we get a screenshot
+          if (update.type === 'screenshot') {
+            setConversation(prev => {
+              const newConv = [...prev];
+              const lastItem = newConv[newConv.length - 1];
+              if (lastItem.type === 'tasks') {
+                lastItem.showLoading = false;
+                lastItem.hasFirstResponse = true;
+              }
+              return newConv;
+            });
+          }
 
           // Update tasks in conversation
           setConversation(prev => {
@@ -212,9 +214,11 @@ export default function Home() {
                 const newConv = [...prev];
                 const lastItem = newConv[newConv.length - 1];
                 if (lastItem.type === 'tasks') {
-                  // For first task, set the conversation's final result
+                  // For first task, set the conversation's final result and hide loading
                   if (firstTaskId.current === taskId) {
                     lastItem.finalResult = finalResult;
+                    lastItem.showLoading = false;
+                    lastItem.hasFirstResponse = true;
                   }
                   // Always update the task's final result
                   task.finalResult = finalResult;
@@ -291,12 +295,13 @@ export default function Home() {
                         animate={{ opacity: 1 }}
                         className="space-y-6"
                       >
-                        <AnimatePresence>
+                        <AnimatePresence mode="wait">
                           {item.showLoading && (
                             <motion.div
                               initial={{ opacity: 0 }}
                               animate={{ opacity: 1 }}
                               exit={{ opacity: 0 }}
+                              transition={{ duration: 0.3 }}
                               className="ml-2"
                             >
                               <LoadingLogo />
