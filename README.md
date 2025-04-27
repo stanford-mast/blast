@@ -1,4 +1,4 @@
-# Blast - Browser-LLM Auto-Scaling Technology
+# BLAST - Browser-LLM Auto-Scaling Technology
 
 ## Development
 

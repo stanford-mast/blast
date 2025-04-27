@@ -70,7 +70,7 @@ class Engine:
             try:
                 # First stop any running tasks
                 for task_id, task in list(self.scheduler.tasks.items()):
-                    if task.executor and task.executor.is_running:
+                    if task.executor:
                         if task.run_task and not task.run_task.done():
                             task.run_task.cancel()
                             try:

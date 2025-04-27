@@ -194,8 +194,6 @@ async def ping():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    logger.debug("Health check requested")
-    
     try:
         ready = _engine is not None and _engine.scheduler is not None
         
@@ -225,7 +223,7 @@ async def get_metrics():
     try:
         # Get metrics from engine
         tasks = _engine.scheduler.tasks
-        running_tasks = [t for t in tasks.values() if t.executor and t.executor.is_running]
+        running_tasks = [t for t in tasks.values() if t.executor and not t.is_completed]
         completed_tasks = [t for t in tasks.values() if t.is_completed]
         scheduled_tasks = [t for t in tasks.values() if not t.is_completed and not t.executor]
         
