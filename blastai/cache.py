@@ -6,11 +6,12 @@ import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
 from langchain_core.language_models.chat_models import BaseChatModel
-from browser_use import Agent, Controller
+from browser_use import Agent
 from browser_use.agent.views import AgentHistoryList
-from .tools import register_tools
 
 from .utils import get_appdata_dir
+from .tools import Tools
+from .scheduler import Scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,28 @@ class CacheManager:
         self._results_cache: Dict[str, AgentHistoryList] = {}
         self._plans_cache: Dict[str, AgentHistoryList] = {}
         
+        # Dummy agent for loading history - initialized in load()
+        self._dummy_agent: Optional[Agent] = None
+        
+    def load(self, scheduler: Scheduler):
+        """Initialize the dummy agent for loading history.
+        
+        This should be called after scheduler is fully set up.
+        
+        Args:
+            scheduler: Scheduler instance for tools
+        """
+        if not self._dummy_agent:
+            # Create fresh Tools instance for dummy agent
+            tools = Tools(scheduler=scheduler)
+            
+            # Create dummy agent with tools controller
+            self._dummy_agent = Agent(
+                task="dummy",
+                llm=BaseChatModel(),  # type: ignore
+                controller=tools.controller
+            )
+            
     def _load_history_with_output_model(self, cache_file: Path) -> Optional[AgentHistoryList]:
         """Load history from file with proper output model that includes custom actions.
         
@@ -50,19 +73,10 @@ class CacheManager:
             Loaded history if successful, None otherwise
         """
         try:
-            # Create controller and register custom tools
-            controller = Controller()
-            register_tools(controller)
-            
-            # Create a dummy agent just to get the output model
-            # We don't need a real LLM since we're just loading history
-            dummy_agent = Agent(
-                task="dummy",
-                llm=BaseChatModel(),  # type: ignore
-                controller=controller
-            )
-            
-            return AgentHistoryList.load_from_file(cache_file, dummy_agent.AgentOutput)
+            if not self._dummy_agent:
+                raise ValueError("Cache manager not loaded - call load() first")
+                
+            return AgentHistoryList.load_from_file(cache_file, self._dummy_agent.AgentOutput)
         except Exception as e:
             logger.error(f"Error loading history with output model from {cache_file}: {e}")
             return None

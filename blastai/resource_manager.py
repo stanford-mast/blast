@@ -40,12 +40,13 @@ import time
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass
 
-from browser_use import Browser, Controller
+from browser_use import Browser
 from browser_use.browser.context import BrowserContext
 from langchain_openai import ChatOpenAI
 
 from .config import Settings, Constraints
 from .executor import Executor
+from .tools import Tools
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +200,9 @@ class ResourceManager:
         # Create browser components
         browser = Browser(headless=self.constraints.require_headless)
         browser_context = BrowserContext(browser=browser)
-        controller = Controller()
+        
+        # Create fresh Tools instance with scheduler for this executor
+        tools = Tools(scheduler=self.scheduler)
         
         # Create LLM
         llm = ChatOpenAI(model=self.constraints.llm_model)
@@ -208,7 +211,7 @@ class ResourceManager:
         return Executor(
             browser=browser,
             browser_context=browser_context,
-            controller=controller,
+            controller=tools.controller,
             llm=llm,
             constraints=self.constraints,
             task_id=task_id,

@@ -25,7 +25,6 @@ class Engine:
     
     # Import browser_use only when needed
     from browser_use.agent.views import AgentHistoryList
-    """Main BLAST engine for running browser-based tasks."""
     
     def __init__(self, constraints: Optional[Constraints] = None, settings: Optional[Settings] = None):
         """Initialize engine with optional constraints and settings."""
@@ -36,12 +35,26 @@ class Engine:
         hash_input = f"{time.time()}-{id(self)}"
         self._instance_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         
-        # Set up cache manager
-        self.cache_manager = CacheManager(self._instance_hash, persist=self.settings.persist_cache)
-        
-        # Set up scheduler and resource manager
+        # Initialize components in correct order to handle dependencies
         self.planner = Planner(constraints)
-        self.scheduler = Scheduler(self.constraints, self.cache_manager, self.planner)
+        
+        # Create CacheManager first (no scheduler needed yet)
+        self.cache_manager = CacheManager(
+            instance_hash=self._instance_hash,
+            persist=self.settings.persist_cache
+        )
+        
+        # Create Scheduler with CacheManager
+        self.scheduler = Scheduler(
+            constraints=self.constraints,
+            cache_manager=self.cache_manager,
+            planner=self.planner
+        )
+        
+        # Load CacheManager with scheduler
+        self.cache_manager.load(self.scheduler)
+        
+        # Finally create ResourceManager with all dependencies
         self.resource_manager = ResourceManager(
             scheduler=self.scheduler,
             constraints=self.constraints,
@@ -180,7 +193,7 @@ class Engine:
     async def get_metrics(self):
         """Get current engine metrics."""
         tasks = self.scheduler.tasks
-        running_tasks = [t for t in tasks.values() if t.executor and t.executor.is_running]
+        running_tasks = [t for t in tasks.values() if t.executor and t.executor.is_completed]
         completed_tasks = [t for t in tasks.values() if t.is_completed]
         scheduled_tasks = [t for t in tasks.values() if not t.is_completed and not t.executor]
         
