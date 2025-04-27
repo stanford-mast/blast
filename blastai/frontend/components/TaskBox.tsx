@@ -116,7 +116,7 @@ const TaskModal = ({ isOpen, onClose, updates, finalResult }: TaskModalProps) =>
                 >
                   <p className="text-sm text-gray-300">{thought.content}</p>
                   {index === thoughts.length - 1 && (
-                    <p className="text-xs text-gray-500 mt-1">Final Result</p>
+                    <p className="text-xs text-gray-500 mt-1">Last Result</p>
                   )}
                 </motion.div>
               ))}

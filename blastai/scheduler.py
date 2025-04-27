@@ -485,45 +485,59 @@ class Scheduler:
             )
             
     def get_lineage(self, task_id: str) -> List[str]:
-        """Get list of task descriptions from root to given task.
+        """Get list of task descriptions representing the conversation history.
         
-        This method walks up the parent chain to build the complete
-        lineage from root task to this task. Used for:
+        This method follows prerequisite relationships to build the complete
+        conversation context leading up to this task. Used for:
         - Cache key generation
         - Executor reuse decisions
+        - Conversation continuity
         
         Args:
             task_id: Task ID
             
         Returns:
-            List of task descriptions
+            List of task descriptions in conversation order
         """
         task = self.tasks.get(task_id)
         if not task:
             raise ValueError(f"Task {task_id} not found")
             
         lineage = [task.description]
-        current_id = task.parent_task_id
+        current_id = task.prerequisite_task_id
         
         while current_id:
-            parent = self.tasks.get(current_id)
-            if not parent:
+            prereq = self.tasks.get(current_id)
+            if not prereq:
                 break
-            lineage.insert(0, parent.description)
-            current_id = parent.parent_task_id
+            lineage.insert(0, prereq.description)
+            current_id = prereq.prerequisite_task_id
             
         return lineage
         
     def _get_subtask_ids(self, task_id: str) -> List[str]:
-        """Get IDs of all subtasks of a task.
+        """Get IDs of all subtasks of a task recursively.
+        
+        This method returns all subtasks at any depth in the task tree,
+        not just immediate children.
         
         Args:
             task_id: Task ID
             
         Returns:
-            List of subtask IDs
+            List of all subtask IDs in the task tree
         """
-        return [t.id for t in self.tasks.values() if t.parent_task_id == task_id]
+        subtask_ids = []
+        
+        # Get immediate children
+        direct_subtasks = [t.id for t in self.tasks.values() if t.parent_task_id == task_id]
+        
+        # Recursively get their subtasks
+        for subtask_id in direct_subtasks:
+            subtask_ids.append(subtask_id)
+            subtask_ids.extend(self._get_subtask_ids(subtask_id))
+            
+        return subtask_ids
         
     def priority_sort(self, task_ids: List[str]) -> List[TaskPriorityGroup]:
         """Sort tasks by priority.

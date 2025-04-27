@@ -332,22 +332,30 @@ class ResourceManager:
                             other_lineage = self.scheduler.get_lineage(other_task.id)
                             
                             # Check if lineages match except for last task
+                            logger.debug(f"Comparing lineages for executor reuse:")
+                            logger.debug(f"Task {task.id} lineage: {task_lineage}")
+                            logger.debug(f"Other task {other_task.id} lineage: {other_lineage}")
+                            
                             if (len(task_lineage) == len(other_lineage) + 1 and
                                 task_lineage[:-1] == other_lineage):
-                                # Swap executor and process list
-                                logger.debug(f"Reused executor for task {task.id} (previously used for task {other_task.id})")
-                                task.executor = other_task.executor
-                                other_task.executor = None
+                                # Actually reuse the executor
+                                executor = other_task.executor
+                                other_task.executor = None  # Remove reference from old task
                                 self._executor_processes[task.id] = self._executor_processes.pop(other_task.id, [])
                                 
-                                # Start execution
+                                logger.debug(f"Reusing executor from task {other_task.id} for task {task.id}")
+                                
+                                # Update executor's task ID
+                                executor.task_id = task.id
+                                
+                                # Start execution with reused executor
                                 cached_plan = self.cache_manager.get_plan(
                                     task_lineage,
                                     task.cache_options
                                 )
                                 await self.scheduler.start_task_exec(
                                     task_id,
-                                    task.executor,
+                                    executor,
                                     cached_plan
                                 )
                                 ready_tasks.remove(task_id)

@@ -42,6 +42,10 @@ interface StreamEvent {
   delta?: string;
   item?: {
     id: string;
+    content?: Array<{
+      type: string;
+      text: string;
+    }>;
   };
   response?: {
     id: string;
@@ -80,11 +84,20 @@ export default function Home() {
     firstTaskId.current = null;
     isFirstTaskDone.current = false;
     
-    // Add user message and initial loading state
+    // Create new conversation item with clean task state
+    const newConversationItem: ConversationItem = {
+      type: 'tasks',
+      content: '',
+      tasks: {},
+      showLoading: true,
+      hasFirstResponse: false
+    };
+    
+    // Add user message and new conversation item
     setConversation(prev => [
-      ...prev, 
+      ...prev,
       { type: 'user', content: message },
-      { type: 'tasks', content: '', tasks: {}, showLoading: true, hasFirstResponse: false }
+      newConversationItem
     ]);
 
     try {
@@ -101,7 +114,8 @@ export default function Home() {
         previous_response_id: previousResponseId
       });
 
-      let currentTasks: Record<string, TaskState> = {};
+      // Track tasks for this conversation item only
+      const currentTasks: Record<string, TaskState> = {};
       let responseId: string | undefined;
 
       // Process each event from the stream
@@ -162,7 +176,17 @@ export default function Home() {
             const newConv = [...prev];
             const lastItem = newConv[newConv.length - 1];
             if (lastItem.type === 'tasks') {
-              lastItem.tasks = { ...currentTasks };
+              // Create new tasks object to avoid state mixing
+              lastItem.tasks = Object.fromEntries(
+                Object.entries(currentTasks).map(([id, task]) => [
+                  id,
+                  {
+                    taskId: task.taskId,
+                    updates: [...task.updates],
+                    finalResult: task.finalResult
+                  }
+                ])
+              );
             }
             return newConv;
           });
@@ -170,46 +194,30 @@ export default function Home() {
           const taskId = event.item.id.split('_')[1];
           if (!taskId) continue;
 
-          // If this is the first task and it's done, we can stop loading
+          // Handle task completion
           if (firstTaskId.current === taskId) {
             isFirstTaskDone.current = true;
             setIsLoading(false);
-
-            // Get the final result from the task's updates
-            const task = currentTasks[taskId];
-            if (task) {
-              const finalResult = task.updates
-                .filter(u => u.type === 'thought')
-                .pop()?.content;
-
-              if (finalResult) {
-                // Update the conversation with the final result
-                setConversation(prev => {
-                  const newConv = [...prev];
-                  const lastItem = newConv[newConv.length - 1];
-                  if (lastItem.type === 'tasks') {
-                    lastItem.finalResult = finalResult;
-                  }
-                  return newConv;
-                });
-              }
-            }
           }
 
-          // Update final result for the task
-          if (currentTasks[taskId]) {
-            const finalResult = currentTasks[taskId].updates
-              .filter(u => u.type === 'thought')
-              .pop()?.content;
-            
+          // Get the final result from the task's updates
+          const task = currentTasks[taskId];
+          if (task) {
+            // Get final result from the event's content
+            const finalResult = event.item.content?.[event.item.content.length - 1]?.text;
+
             if (finalResult) {
-              currentTasks[taskId].finalResult = finalResult;
-              
-              // Update tasks in conversation
+              // Update the conversation with the final result
               setConversation(prev => {
                 const newConv = [...prev];
                 const lastItem = newConv[newConv.length - 1];
                 if (lastItem.type === 'tasks') {
+                  // For first task, set the conversation's final result
+                  if (firstTaskId.current === taskId) {
+                    lastItem.finalResult = finalResult;
+                  }
+                  // Always update the task's final result
+                  task.finalResult = finalResult;
                   lastItem.tasks = { ...currentTasks };
                 }
                 return newConv;
