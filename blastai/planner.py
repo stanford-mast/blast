@@ -57,5 +57,4 @@ Keep plans brief and actionable."""
         if len(plan.split('\n')) > 2:
             plan = ' '.join(plan.split('\n')[:2])
             
-        logger.debug(f"Generated plan for task: {plan}")
         return plan

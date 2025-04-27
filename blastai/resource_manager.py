@@ -84,6 +84,11 @@ class ResourceManager:
         self._total_cost_evicted_executors = 0.0
         self._executor_processes: Dict[str, List[int]] = {}  # task_id -> list of process IDs
         self._cost_history: List[Tuple[float, datetime]] = []  # List of (cost, timestamp) tuples
+        self._prev_not_allocated = 0  # Track previous not_allocated count
+
+        # For debugging output
+        self._last_constraint_report = 0.0  # Last time we reported constraint violation
+        self._reported_constraint_tasks: Set[str] = set()  # Tasks we've already reported constraints for
         
     async def start(self):
         """Start resource management."""
@@ -227,6 +232,30 @@ class ResourceManager:
     async def _request_executor(self, task_id: str) -> Optional[Executor]:
         """Request a new executor if constraints allow."""
         if not self.check_constraints_sat(with_new_executor=True):
+            # Only log constraint violation once per task
+            if task_id not in self._reported_constraint_tasks:
+                self._reported_constraint_tasks.add(task_id)
+                
+                # Check which constraint was violated
+                running_executors = sum(1 for task in self.scheduler.tasks.values() if task.executor)
+                if running_executors + 1 > self.constraints.max_concurrent_browsers:
+                    logger.debug(f"Cannot create executor for task {task_id}: would exceed max_concurrent_browsers ({running_executors + 1} > {self.constraints.max_concurrent_browsers})")
+                    return None
+                    
+                total_memory = sum(self._get_memory_usage(task.executor) for task in self.scheduler.tasks.values() if task.executor)
+                if total_memory + (500 * 1024 * 1024) > self.constraints.max_memory:
+                    logger.debug(f"Cannot create executor for task {task_id}: would exceed max_memory ({(total_memory + 500 * 1024 * 1024) / (1024 * 1024):.1f}MB > {self.constraints.max_memory / (1024 * 1024):.1f}MB)")
+                    return None
+                    
+                cost_last_minute = self._get_cost(timedelta(minutes=1))
+                if cost_last_minute > self.constraints.max_cost_per_minute:
+                    logger.debug(f"Cannot create executor for task {task_id}: exceeded max_cost_per_minute (${cost_last_minute:.2f} > ${self.constraints.max_cost_per_minute:.2f})")
+                    return None
+                    
+                cost_last_hour = self._get_cost(timedelta(hours=1))
+                if cost_last_hour > self.constraints.max_cost_per_hour:
+                    logger.debug(f"Cannot create executor for task {task_id}: exceeded max_cost_per_hour (${cost_last_hour:.2f} > ${self.constraints.max_cost_per_hour:.2f})")
+                    return None
             return None
             
         # Create browser components
@@ -240,6 +269,7 @@ class ResourceManager:
         llm = ChatOpenAI(model=self.constraints.llm_model)
         
         # Create and return executor
+        logger.debug(f"Created new executor for task {task_id}")
         return Executor(
             browser=browser,
             browser_context=browser_context,
@@ -257,6 +287,7 @@ class ResourceManager:
         task = self.scheduler.tasks.get(task_id)
         if not task or not task.executor:
             return
+        logger.debug(f"Evicted executor for task {task_id}")
             
         # Wait for any running task to complete
         if task.executor_run_task:
@@ -315,6 +346,7 @@ class ResourceManager:
                             if (len(task_lineage) == len(other_lineage) + 1 and
                                 task_lineage[:-1] == other_lineage):
                                 # Swap executor and process list
+                                logger.debug(f"Reused executor for task {task.id} (previously used for task {other_task.id})")
                                 task.executor = other_task.executor
                                 other_task.executor = None
                                 self._executor_processes[task.id] = self._executor_processes.pop(other_task.id, [])
@@ -336,6 +368,8 @@ class ResourceManager:
                 priority_groups = self.scheduler.priority_sort(ready_tasks)
                 
                 # Try to allocate new executors
+                tasks_allocated = 0
+                tasks_not_allocated = len(ready_tasks)
                 for group in priority_groups:
                     for task_id in group.task_ids:
                         # Skip tasks that have cached results (they were handled above)
@@ -362,6 +396,12 @@ class ResourceManager:
                             executor,
                             cached_plan
                         )
+                        tasks_allocated += 1
+                        tasks_not_allocated -= 1
+                        
+                if tasks_allocated > 0 or tasks_not_allocated != self._prev_not_allocated:
+                    logger.debug(f"Allocated executors for {tasks_allocated} tasks (not allocated for: {tasks_not_allocated})")
+                    self._prev_not_allocated = tasks_not_allocated
                         
             except Exception as e:
                 logger.error(f"Error in resource allocation: {e}")
@@ -374,6 +414,28 @@ class ResourceManager:
             try:
                 # Check if constraints are satisfied
                 if not self.check_constraints_sat():
+                    current_time = time.time()
+                    # Only log constraint violations every 30 seconds
+                    if current_time - self._last_constraint_report >= 30:
+                        self._last_constraint_report = current_time
+                        
+                        # Log which constraint was violated
+                        running_executors = sum(1 for task in self.scheduler.tasks.values() if task.executor)
+                        if running_executors > self.constraints.max_concurrent_browsers:
+                            logger.debug(f"Resource monitor: exceeded max_concurrent_browsers ({running_executors} > {self.constraints.max_concurrent_browsers})")
+                        
+                        total_memory = sum(self._get_memory_usage(task.executor) for task in self.scheduler.tasks.values() if task.executor)
+                        if total_memory > self.constraints.max_memory:
+                            logger.debug(f"Resource monitor: exceeded max_memory ({total_memory / (1024 * 1024):.1f}MB > {self.constraints.max_memory / (1024 * 1024):.1f}MB)")
+                        
+                        cost_last_minute = self._get_cost(timedelta(minutes=1))
+                        if cost_last_minute > self.constraints.max_cost_per_minute:
+                            logger.debug(f"Resource monitor: exceeded max_cost_per_minute (${cost_last_minute:.2f} > ${self.constraints.max_cost_per_minute:.2f})")
+                        
+                        cost_last_hour = self._get_cost(timedelta(hours=1))
+                        if cost_last_hour > self.constraints.max_cost_per_hour:
+                            logger.debug(f"Resource monitor: exceeded max_cost_per_hour (${cost_last_hour:.2f} > ${self.constraints.max_cost_per_hour:.2f})")
+                    
                     # First try evicting completed executors
                     for task in self.scheduler.tasks.values():
                         if task.is_completed and task.executor:
@@ -399,6 +461,7 @@ class ResourceManager:
                                                 if t.executor)
                                     if running > min_running:
                                         await task.executor.pause()
+                                        logger.debug(f"Paused task {task_id}")
                                         paused += 1
                                         if self.check_constraints_sat():
                                             break

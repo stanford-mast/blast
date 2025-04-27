@@ -191,6 +191,7 @@ class Scheduler:
         lineage = self.get_lineage(task_id)
         cached_result = self.cache_manager.get_result(lineage, cache_control)
         if cached_result:
+            logger.debug(f"Reused result from cache for task {task_id}")
             task.result = cached_result
             task.completed = True
             task.success = True
@@ -372,11 +373,13 @@ class Scheduler:
                 
             # Get plan from planner with depth info
             plan = await self.planner.plan(task.description, subtask_depth=depth)
+            logger.debug(f"Planned task {task_id} to '{task.description}' with '{plan}'")
             
             # Combine plan and description
             full_description = f"{plan}\n{task.description}"
             
             # Run with combined description
+            logger.debug(f"Running task {task_id} with browser_use")
             coro = executor.run(full_description, task.initial_url)
             
         # Create and store task
@@ -408,6 +411,7 @@ class Scheduler:
         if result:
             task.result = result
             task.success = True
+            logger.debug(f"Completed task {task_id}")
             
             # Cache result
             self.cache_manager.update_result(
