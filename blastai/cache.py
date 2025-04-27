@@ -5,7 +5,7 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
-from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_openai import ChatOpenAI
 from browser_use import Agent
 from browser_use.agent.views import AgentHistoryList
 
@@ -59,7 +59,7 @@ class CacheManager:
             # Create dummy agent with tools controller
             self._dummy_agent = Agent(
                 task="dummy",
-                llm=BaseChatModel(),  # type: ignore
+                llm=ChatOpenAI(model="gpt-4.1-mini"),  # Use same model as default_config.yaml
                 controller=tools.controller
             )
             

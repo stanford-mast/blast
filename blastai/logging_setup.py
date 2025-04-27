@@ -27,11 +27,22 @@ def setup_logging(settings: Optional[Settings] = None):
     # Silence deprecation warnings (e.g. from uvicorn)
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     
-    # Configure root logger to error by default
+    # Determine if we need detailed logging format
+    blastai_level = getattr(logging, settings.blastai_log_level.upper())
+    browser_level = getattr(logging, settings.browser_use_log_level.upper())
+    use_detailed_format = (blastai_level < logging.ERROR or browser_level < logging.ERROR)
+    
+    # Set format based on log levels
+    log_format = '%(asctime)s [%(name)s] %(message)s' if use_detailed_format else '%(message)s'
+    date_format = '%Y-%m-%d %H:%M:%S' if use_detailed_format else None
+    
+    # Configure root logger
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(log_format, date_format))
+    
     logging.basicConfig(
         level=logging.ERROR,
-        format='%(message)s',
-        handlers=[logging.StreamHandler(sys.stdout)]
+        handlers=[handler]
     )
     
     # Configure all loggers to error level
@@ -39,12 +50,20 @@ def setup_logging(settings: Optional[Settings] = None):
     
     # Configure blastai logger
     blastai_logger = logging.getLogger('blastai')
-    blastai_level = getattr(logging, settings.blastai_log_level.upper())
     blastai_logger.setLevel(blastai_level)
     
-    # Configure browser-use logger via environment variable
-    # Set this before any browser-use imports
+    # Configure browser-use logger via environment variable and direct configuration
+    # Set env var for browser-use's own setup
     os.environ["BROWSER_USE_LOGGING_LEVEL"] = settings.browser_use_log_level.lower()
+    
+    # Also configure browser-use logger directly after its setup
+    browser_level = getattr(logging, settings.browser_use_log_level.upper())
+    browser_use_logger = logging.getLogger('browser_use')
+    browser_use_logger.setLevel(browser_level)
+    
+    # And ensure playwright logger matches the level
+    playwright_logger = logging.getLogger('playwright')
+    playwright_logger.setLevel(browser_level)
     
     # Silence third-party loggers
     for logger_name in [
@@ -64,15 +83,18 @@ def setup_logging(settings: Optional[Settings] = None):
 def should_show_metrics(settings: Settings) -> bool:
     """Determine if metrics should be shown based on log levels.
     
+    Only show metrics if both blastai and browser-use loggers are at ERROR
+    or CRITICAL level, since there will be too many logs otherwise.
+    
     Args:
         settings: Settings instance with logging configuration
         
     Returns:
         True if metrics should be shown, False otherwise
     """
-    # Only show metrics if both loggers are at error or critical level
     blastai_level = settings.blastai_log_level.upper()
-    browser_use_level = settings.browser_use_log_level.upper()
+    browser_level = settings.browser_use_log_level.upper()
     
+    # Only show metrics if both loggers are at ERROR or CRITICAL
     allowed_levels = {'ERROR', 'CRITICAL'}
-    return blastai_level in allowed_levels and browser_use_level in allowed_levels
+    return blastai_level in allowed_levels and browser_level in allowed_levels

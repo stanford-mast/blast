@@ -41,7 +41,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from browser_use import Browser
+from browser_use import Browser, BrowserConfig
 from browser_use.browser.context import BrowserContext
 from langchain_openai import ChatOpenAI
 
@@ -50,20 +50,6 @@ from .executor import Executor
 from .tools import Tools
 
 logger = logging.getLogger(__name__)
-
-@dataclass
-class TaskPriorityGroup:
-    """Group of tasks with same priority level.
-    
-    Used by scheduler.priority_sort() to organize tasks by priority.
-    ResourceManager respects this ordering when allocating executors.
-    
-    Attributes:
-        name: Priority group name (e.g. "cached_result", "subtask")
-        task_ids: List of task IDs in this group
-    """
-    name: str
-    task_ids: List[str]
 
 class ResourceManager:
     """Manages executor allocation and resource constraints."""
@@ -258,8 +244,11 @@ class ResourceManager:
                     return None
             return None
             
-        # Create browser components
-        browser = Browser(headless=self.constraints.require_headless)
+        # Create browser components with proper configuration
+        browser_config = BrowserConfig(
+            headless=self.constraints.require_headless
+        )
+        browser = Browser(config=browser_config)
         browser_context = BrowserContext(browser=browser)
         
         # Create fresh Tools instance with scheduler for this executor
@@ -400,7 +389,7 @@ class ResourceManager:
                         tasks_not_allocated -= 1
                         
                 if tasks_allocated > 0 or tasks_not_allocated != self._prev_not_allocated:
-                    logger.debug(f"Allocated executors for {tasks_allocated} tasks (not allocated for: {tasks_not_allocated})")
+                    logger.debug(f"Allocated executors for {tasks_allocated} tasks ({tasks_not_allocated} tasks not allocated)")
                     self._prev_not_allocated = tasks_not_allocated
                         
             except Exception as e:

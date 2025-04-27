@@ -111,9 +111,28 @@ class TaskState:
         return self.completed
         
     @property
+    def is_running(self) -> bool:
+        """Check if task is currently running."""
+        return bool(self.executor_run_task and not self.executor_run_task.done())
+        
+    @property
     def lineage(self) -> List[str]:
         """Get task lineage (list of ancestor task descriptions)."""
         return [self.description]  # Will be extended by get_lineage
+
+@dataclass
+class TaskPriorityGroup:
+    """Group of tasks with same priority level.
+    
+    Used by scheduler.priority_sort() to organize tasks by priority.
+    ResourceManager respects this ordering when allocating executors.
+    
+    Attributes:
+        name: Priority group name (e.g. "cached_result", "subtask")
+        task_ids: List of task IDs in this group
+    """
+    name: str
+    task_ids: List[str]
 
 class Scheduler:
     """Manages task scheduling and execution.
@@ -187,7 +206,10 @@ class Scheduler:
             time_schedule=datetime.now()
         )
         
-        # Check cache first
+        # Add task to dictionary first
+        self.tasks[task_id] = task
+        
+        # Then check cache
         lineage = self.get_lineage(task_id)
         cached_result = self.cache_manager.get_result(lineage, cache_control)
         if cached_result:
@@ -196,8 +218,6 @@ class Scheduler:
             task.completed = True
             task.success = True
             task.time_complete = datetime.now()
-            
-        self.tasks[task_id] = task
         return task_id
         
     def schedule_subtask(self, description: str, parent_task_id: str,
@@ -249,16 +269,25 @@ class Scheduler:
                 await self.get_task_result(task.prerequisite_task_id)
                 
         # Return cached result if available
-        if task.result:
+        if task.is_completed:
             return task.result
             
-        # Wait for executor result and actually get result (even if it finished super fast)
+        # Wait for executor result if running
         if task.executor_run_task:
             try:
-                task.result = await task.executor_run_task
-                return task.result
+                # Wait for task to complete
+                result = await task.executor_run_task
+                
+                # Mark task as complete and cache result
+                await self.complete_task(task_id, result)
+                
+                # Return result
+                return result
+                
             except Exception as e:
                 logger.error(f"Task {task_id} failed: {e}")
+                # Mark task as complete but failed
+                await self.complete_task(task_id)
                 raise
                 
         # No result available
@@ -290,8 +319,10 @@ class Scheduler:
             # First check subtasks recursively
             subtask_ids = self._get_subtask_ids(task_id)
             for subtask_id in subtask_ids:
-                subtask = self.scheduler.tasks[subtask_id]
-                if subtask.executor and subtask.is_running:
+                subtask = self.tasks[subtask_id]
+                
+                # Handle running subtasks
+                if subtask.executor:
                     # Get new reasonings
                     reasonings = subtask.executor.get_reasoning()
                     for reasoning in reasonings:
@@ -302,15 +333,27 @@ class Scheduler:
                             seen_reasonings[subtask_id].add(key)
                             yield reasoning
                             
-                    # Check for result
-                    if subtask.is_completed and subtask.result:
-                        yield AgentHistoryListResponse.from_history(
-                            history=subtask.result,
-                            task_id=subtask_id
-                        )
+                    # Check for executor result
+                    if subtask.executor_run_task and subtask.executor_run_task.done():
+                        try:
+                            result = await subtask.executor_run_task
+                            await self.complete_task(subtask_id, result)
+                            yield AgentHistoryListResponse.from_history(
+                                history=result,
+                                task_id=subtask_id
+                            )
+                        except Exception as e:
+                            logger.error(f"Subtask {subtask_id} failed: {e}")
+                
+                # Handle cached subtask results
+                elif subtask.is_completed:
+                    yield AgentHistoryListResponse.from_history(
+                        history=subtask.result,
+                        task_id=subtask_id
+                    )
                         
             # Then check main task
-            if task.executor and task.is_running:
+            if task.executor:
                 # Get new reasonings
                 reasonings = task.executor.get_reasoning()
                 for reasoning in reasonings:
@@ -321,13 +364,27 @@ class Scheduler:
                         seen_reasonings[task_id].add(key)
                         yield reasoning
                         
-                # Check for result
-                if task.is_completed and task.result:
-                    yield AgentHistoryListResponse.from_history(
-                        history=task.result,
-                        task_id=task_id
-                    )
-                    break
+                # Check for executor result
+                if task.executor_run_task and task.executor_run_task.done():
+                    try:
+                        result = await task.executor_run_task
+                        await self.complete_task(task_id, result)
+                        yield AgentHistoryListResponse.from_history(
+                            history=result,
+                            task_id=task_id
+                        )
+                        break
+                    except Exception as e:
+                        logger.error(f"Task {task_id} failed: {e}")
+                        break
+                    
+            # Handle cached main task result
+            elif task.is_completed:
+                yield AgentHistoryListResponse.from_history(
+                    history=task.result,
+                    task_id=task_id
+                )
+                break
                     
             await asyncio.sleep(0.1)  # Prevent tight loop
             
@@ -468,7 +525,7 @@ class Scheduler:
         """
         return [t.id for t in self.tasks.values() if t.parent_task_id == task_id]
         
-    def priority_sort(self, task_ids: List[str]) -> List[str]:
+    def priority_sort(self, task_ids: List[str]) -> List[TaskPriorityGroup]:
         """Sort tasks by priority.
         
         Priority order (highest to lowest):
@@ -482,7 +539,7 @@ class Scheduler:
             task_ids: List of task IDs
             
         Returns:
-            Sorted list of task IDs
+            List of TaskPriorityGroup objects
         """
         # Group tasks by priority
         groups = []
@@ -495,39 +552,48 @@ class Scheduler:
             if self.cache_manager.get_result(lineage, task.cache_options):
                 cached_result_tasks.append(task_id)
         if cached_result_tasks:
-            groups.append(("cached_result", cached_result_tasks)) 
+            groups.append(TaskPriorityGroup("cached_result", cached_result_tasks))
         
         # Group 1: Tasks with cached plans
         cached_plan_tasks = []
         for task_id in task_ids:
-            task = self.tasks[task_id]
-            lineage = self.get_lineage(task_id)
-            if self.cache_manager.get_plan(lineage, task.cache_options):
-                cached_plan_tasks.append(task_id)
+            if task_id not in cached_result_tasks:  # Skip if already in higher priority group
+                task = self.tasks[task_id]
+                lineage = self.get_lineage(task_id)
+                if self.cache_manager.get_plan(lineage, task.cache_options):
+                    cached_plan_tasks.append(task_id)
         if cached_plan_tasks:
-            groups.append(("cached_plan", cached_plan_tasks))
+            groups.append(TaskPriorityGroup("cached_plan", cached_plan_tasks))
             
         # Group 2: Subtasks
         subtasks = []
         for task_id in task_ids:
-            task = self.tasks[task_id]
-            if task.parent_task_id:
-                subtasks.append(task_id)
+            if task_id not in cached_result_tasks and task_id not in cached_plan_tasks:
+                task = self.tasks[task_id]
+                if task.parent_task_id:
+                    subtasks.append(task_id)
         if subtasks:
-            groups.append(("subtask", subtasks))
+            groups.append(TaskPriorityGroup("subtask", subtasks))
             
         # Group 3: Tasks with paused executors
         paused_tasks = []
         for task_id in task_ids:
-            task = self.tasks[task_id]
-            if task.executor and hasattr(task.executor, '_paused') and task.executor._paused:
-                paused_tasks.append(task_id)
+            if task_id not in cached_result_tasks and task_id not in cached_plan_tasks and task_id not in subtasks:
+                task = self.tasks[task_id]
+                if task.executor and hasattr(task.executor, '_paused') and task.executor._paused:
+                    paused_tasks.append(task_id)
         if paused_tasks:
-            groups.append(("resume", paused_tasks))
+            groups.append(TaskPriorityGroup("resume", paused_tasks))
             
         # Group 4: Remaining tasks (FIFO)
-        remaining = [t for t in task_ids if t not in cached_plan_tasks + subtasks + paused_tasks]
+        remaining = [
+            task_id for task_id in task_ids
+            if task_id not in cached_result_tasks
+            and task_id not in cached_plan_tasks
+            and task_id not in subtasks
+            and task_id not in paused_tasks
+        ]
         if remaining:
-            groups.append(("fifo", remaining))
+            groups.append(TaskPriorityGroup("fifo", remaining))
             
         return groups

@@ -3,14 +3,31 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "blast"
+name = "blastai"
 version = "0.1.0"
 description = "Browser-LLM Auto-Scaling Technology"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
-    "browser-use>=0.1.41"
+    "browser-use>=0.1.41",
+    "fastapi>=0.68.0",
+    "uvicorn>=0.15.0",
+    "click>=8.0.0",
+    "httpx>=0.24.0",
+    "PyYAML>=6.0",
+    "langchain_community>=0.3.20",
+    "playwright>=1.41.0"
 ]
+
+[project.scripts]
+blastai = "blastai.cli:main"
 
 [tool.setuptools]
 packages = ["blastai"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+blastai = [
+    "frontend/**/*",
+    "default_config.yaml"
+]

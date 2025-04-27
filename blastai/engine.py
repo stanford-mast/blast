@@ -84,10 +84,10 @@ class Engine:
                 # First stop any running tasks
                 for task_id, task in list(self.scheduler.tasks.items()):
                     if task.executor:
-                        if task.run_task and not task.run_task.done():
-                            task.run_task.cancel()
+                        if task.executor_run_task and not task.executor_run_task.done():
+                            task.executor_run_task.cancel()
                             try:
-                                await asyncio.wait_for(task.run_task, timeout=2.0)
+                                await asyncio.wait_for(task.executor_run_task, timeout=2.0)
                             except (asyncio.CancelledError, asyncio.TimeoutError):
                                 pass
                 

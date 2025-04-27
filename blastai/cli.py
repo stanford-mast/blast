@@ -17,7 +17,7 @@ from typing import Optional
 from openai import OpenAI
 
 from .server import app, init_app_state
-from .logging_setup import should_show_metrics
+from .logging_setup import should_show_metrics, setup_logging
 from .config import Settings
 
 """CLI interface for BLAST."""
@@ -127,8 +127,6 @@ async def run_cli_frontend():
         base_url="http://127.0.0.1:8000"
     )
     
-    print("> ", end='', flush=True)
-    
     previous_response_id = None
     
     while True:
@@ -144,13 +142,21 @@ async def run_cli_frontend():
                 previous_response_id=previous_response_id
             )
             
+            # Track the current thought
+            current_thought = ""
+            
             for event in stream:
                 if event.type == "response.completed":
                     previous_response_id = event.response.id
                 elif event.type == "response.output_text.delta":
+                    # Accumulate the thought
                     if ' ' in event.delta:  # Skip screenshots
-                        print(event.delta, end='', flush=True)
-            print()
+                        current_thought += event.delta
+                elif event.type == "response.output_text.done":
+                    # Print complete thought and reset
+                    if current_thought:
+                        print(current_thought)
+                        current_thought = ""
             
         except KeyboardInterrupt:
             break
@@ -175,10 +181,20 @@ def cli():
 @click.option('--config', type=str, help='Path to config YAML file')
 @click.option('--no-metrics-output', is_flag=True, help='Disable metrics output')
 @click.argument('component', type=click.Choice(['web', 'cli', 'engine']), required=False)
-def serve(config: Optional[str], no_metrics_output: bool, component: Optional[str]):
-    """Start BLAST components. If no component specified, serves both backend and web frontend."""
-    # For backward compatibility, if no component specified, default to web frontend
-    frontend = 'web' if component is None else component
+def serve(config: Optional[str], no_metrics_output: bool, component: Optional[str] = None):
+    """Start BLAST components.
+    
+    Args:
+        config: Optional path to config file
+        no_metrics_output: Whether to disable metrics display
+        component: Which component to run:
+            - None: Run both backend and web frontend
+            - 'web': Run only web frontend
+            - 'cli': Run only CLI frontend
+            - 'engine': Run only backend server
+    """
+    # Initialize app state with config (this loads default_config.yaml)
+    init_app_state(config)
     
     async def run_web_frontend():
         """Run just the web frontend."""
@@ -250,7 +266,6 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
             base_url="http://127.0.0.1:8000"
         )
         
-        
         previous_response_id = None
         
         while True:
@@ -268,13 +283,27 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                         previous_response_id=previous_response_id
                     )
                     
+                    # Track the current thought
+                    current_thought = ""
+                    final_result = None
+                    
                     for event in stream:
                         if event.type == "response.completed":
                             previous_response_id = event.response.id
+                            final_result = event.response.output[0].content[0].text
                         elif event.type == "response.output_text.delta":
+                            # Accumulate the thought
                             if ' ' in event.delta:  # Skip screenshots
-                                print(event.delta, flush=True)
-                    print()
+                                current_thought += event.delta
+                        elif event.type == "response.output_text.done":
+                            # Print complete thought and reset
+                            if current_thought:
+                                print(current_thought)
+                                current_thought = ""
+                    
+                    # Print final result if different from last thought
+                    if final_result and (not current_thought or final_result != current_thought):
+                        print(final_result, flush=True)
                     
                 except Exception as e:
                     if "Backend server not running" in str(e):
@@ -290,16 +319,13 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                 continue
 
     async def display_metrics(client, settings: Settings):
-            """Display and update metrics every 5s if log levels allow."""
-            # Only show metrics if log levels are error/critical
-            if not should_show_metrics(settings):
-                return
-                
-            # Print initial metrics header
+            """Display and update metrics every 5s."""
+            # Print initial metrics
             print("Tasks:")
             print("  Scheduled: 0")
             print("  Running:   0")
             print("  Completed: 0")
+            print("")
             print("Resources:")
             print("  Active browsers: 0")
             print("  Memory usage:    0.0 GB")
@@ -307,27 +333,36 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
     
             while True:
                 try:
+                    # Get metrics from server
                     response = await client.get("http://127.0.0.1:8000/metrics")
                     metrics = response.json()
                     
-                    # Clear previous lines and update metrics
-                    print("\033[2K\033[1G\033[8A", end='')  # Clear line, move to start, up 8 lines
+                    # Move cursor up 10 lines and clear each line
+                    for _ in range(9):
+                        print("\033[1A\033[2K", end='')
+                    
+                    # Print updated metrics
                     print("Tasks:")
                     print(f"  Scheduled: {metrics['tasks']['scheduled']}")
                     print(f"  Running:   {metrics['tasks']['running']}")
                     print(f"  Completed: {metrics['tasks']['completed']}")
+                    print("")
                     print("Resources:")
                     print(f"  Active browsers: {metrics['concurrent_browsers']}")
                     print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
                     print(f"  Total cost:      ${metrics['total_cost']:.2f}", flush=True)
                     
-                except Exception:
-                    # On error, just update timestamp
-                    print("\033[2K\033[1G\033[8A", end='')  # Clear line, move to start, up 8 lines
+                except Exception as e:
+                    # Move cursor up 10 lines and clear each line
+                    for _ in range(9):
+                        print("\033[1A\033[2K", end='')
+                    
+                    # Print zeroed metrics
                     print("Tasks:")
                     print("  Scheduled: 0")
                     print("  Running:   0")
                     print("  Completed: 0")
+                    print("")
                     print("Resources:")
                     print("  Active browsers: 0")
                     print("  Memory usage:    0.0 GB")
@@ -337,12 +372,21 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
 
     async def run_server_and_frontend():
         """Run server and frontend concurrently."""
-        # Create server
-        config = uvicorn.Config(
-            app,
+        # Initialize app state with config (this loads default_config.yaml)
+        init_app_state(config)
+        
+        # Get settings that were loaded by init_app_state
+        from .server import _settings
+        if _settings is None:
+            raise RuntimeError("Settings not initialized properly")
+        settings = _settings
+
+        # Create server with proper logging level
+        server_config = uvicorn.Config(
+            "blastai.server:app",
             host="127.0.0.1",
             port=8000,
-            log_level="error",
+            log_level=settings.blastai_log_level.lower(),
             reload=False,
             workers=1,
             lifespan="on",
@@ -350,19 +394,10 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
             timeout_graceful_shutdown=10,
             access_log=False
         )
-        server = uvicorn.Server(config)
+        server = uvicorn.Server(server_config)
         server.force_exit = False  # Allow graceful shutdown
 
-        # Print server endpoint and start metrics if enabled
-        # Get settings from config
-        settings = Settings()
-        if config:
-            with open(config) as f:
-                import yaml
-                user_config = yaml.safe_load(f)
-                if 'settings' in user_config:
-                    settings = Settings(**user_config['settings'])
-
+        # Print server endpoint
         if component == 'engine':
             print("Server: http://127.0.0.1:8000")
         elif component == 'web':
@@ -370,81 +405,102 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
         elif component is None:
             print("Server: http://127.0.0.1:8000")
             print("Web: http://localhost:3000")
-        if not no_metrics_output and component != 'web':
-            print("\n\n\n\n")  # Four lines for metrics
-            async with httpx.AsyncClient() as client:
-                metrics_task = asyncio.create_task(display_metrics(client, settings))
 
-        if component is None:
-            # Default behavior: run both backend and web frontend
-            frontend_dir = Path(__file__).parent / 'frontend'
-            
-            # Check Node.js and npm installation
-            if not check_node_installation():
-                await run_cli_server(server)
-                return
+        # Create metrics task if needed
+        metrics_task = None
+        metrics_client = None
+        try:
+            # Only show metrics if:
+            # 1. Metrics output is not disabled via --no-metrics-output
+            # 2. Running engine component (either standalone or with web)
+            # 3. Both log levels are ERROR or CRITICAL
+            if (not no_metrics_output and
+                (component == 'engine' or component is None) and
+                should_show_metrics(settings)):
+                print()  # Single line for spacing
+                metrics_client = httpx.AsyncClient()
+                metrics_task = asyncio.create_task(display_metrics(metrics_client, settings))
+
+            if component is None:
+                # Default behavior: run both backend and web frontend
+                frontend_dir = Path(__file__).parent / 'frontend'
                 
-            npm_cmd = check_npm_installation()
-            if not npm_cmd:
-                await run_cli_server(server)
-                return
-                
-            # Install dependencies if needed
-            if not (frontend_dir / 'node_modules').exists():
+                # Check Node.js and npm installation
+                if not check_node_installation():
+                    await run_cli_server(server)
+                    return
+                    
+                npm_cmd = check_npm_installation()
+                if not npm_cmd:
+                    await run_cli_server(server)
+                    return
+                    
+                # Install dependencies if needed
+                if not (frontend_dir / 'node_modules').exists():
+                    try:
+                        subprocess.run([npm_cmd, 'install'], cwd=frontend_dir, check=True, text=True)
+                    except subprocess.CalledProcessError as e:
+                        print(f"Error installing frontend dependencies: {e}")
+                        await run_cli_server(server)
+                        return
+
+                # Start frontend process
                 try:
-                    subprocess.run([npm_cmd, 'install'], cwd=frontend_dir, check=True, text=True)
+                    process = subprocess.Popen(
+                        [npm_cmd, 'run', 'dev'],
+                        cwd=frontend_dir,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True
+                    )
                 except subprocess.CalledProcessError as e:
-                    print(f"Error installing frontend dependencies: {e}")
+                    print(f"Error starting frontend: {e}")
                     await run_cli_server(server)
                     return
 
-            # Start frontend process
-            try:
-                process = subprocess.Popen(
-                    [npm_cmd, 'run', 'dev'],
-                    cwd=frontend_dir,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True
-                )
-            except subprocess.CalledProcessError as e:
-                print(f"Error starting frontend: {e}")
-                await run_cli_server(server)
-                return
+                # Monitor frontend output
+                def print_output():
+                    for line in process.stdout:
+                        pass  # Just consume output
+                threading.Thread(target=print_output, daemon=True).start()
 
-            # Monitor frontend output
-            def print_output():
-                for line in process.stdout:
-                    pass  # Just consume output
-            threading.Thread(target=print_output, daemon=True).start()
-
-            # Run server until interrupted
-            try:
-                await server.serve()
-            except asyncio.CancelledError:
-                # Let server handle its own shutdown
-                await server.shutdown()
-                raise
-            finally:
-                process.terminate()
+                # Run server until interrupted
                 try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+                    await server.serve()
+                except asyncio.CancelledError:
+                    # Let server handle its own shutdown
+                    await server.shutdown()
+                    raise
+                finally:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
 
-        elif component == 'web':
-            await run_web_frontend()
-        elif component == 'cli':
-            await run_standalone_cli()
-        elif component == 'engine':
-            # Only run the backend server
-            try:
+            elif component == 'web':
+                await run_web_frontend()
+            elif component == 'cli':
+                await run_standalone_cli()
+            elif component == 'engine':
+                # Only run the backend server
                 await server.serve()
-            except asyncio.CancelledError:
-                # Let server handle its own shutdown
-                await server.shutdown()
-                raise
+
+        except asyncio.CancelledError:
+            # Let server handle its own shutdown
+            await server.shutdown()
+            raise
+        finally:
+            # Clean up metrics task if it exists
+            if metrics_task and not metrics_task.done():
+                metrics_task.cancel()
+                try:
+                    await metrics_task
+                except asyncio.CancelledError:
+                    pass
+            if metrics_client:
+                await metrics_client.aclose()
     
     # Run everything in event loop
     loop = asyncio.new_event_loop()
@@ -467,6 +523,11 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                 loop.run_until_complete(main_task)
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                import traceback
+                print(f"\nError: {e}")
+                print("\nStack trace:")
+                print(traceback.format_exc())
     except Exception as e:
         print(f"\nError: {e}")
     finally:
@@ -487,8 +548,108 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
         finally:
             loop.close()
 
+def check_installation_state() -> bool:
+    """Check if browsers and dependencies are already installed."""
+    from pathlib import Path
+    from .utils import get_appdata_dir
+    
+    state_file = get_appdata_dir() / "installation_state.json"
+    if state_file.exists():
+        import json
+        with open(state_file) as f:
+            state = json.load(f)
+            return state.get("browsers_installed", False)
+    return False
+
+def save_installation_state():
+    """Save that installation was successful."""
+    from pathlib import Path
+    from .utils import get_appdata_dir
+    import json
+    
+    state_file = get_appdata_dir() / "installation_state.json"
+    with open(state_file, "w") as f:
+        json.dump({"browsers_installed": True}, f)
+
+def install_browsers(quiet: bool = False):
+    """Install required browsers and dependencies for Playwright."""
+    import subprocess
+    import sys
+    import platform
+    
+    try:
+        # Check if already installed
+        if check_installation_state():
+            return
+            
+        # First install browsers
+        subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], check=True)
+        if not quiet:
+            print("Successfully installed Playwright browsers")
+        
+        # Then install system dependencies if on Linux
+        if platform.system() == 'Linux':
+            try:
+                # Try using playwright install-deps first
+                subprocess.run([sys.executable, '-m', 'playwright', 'install-deps'], check=True)
+            except subprocess.CalledProcessError:
+                # If that fails, try apt-get directly
+                try:
+                    subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+                    subprocess.run(['sudo', 'apt-get', 'install', '-y',
+                        'libnss3',
+                        'libnspr4',
+                        'libasound2',
+                        'libatk1.0-0',
+                        'libc6',
+                        'libcairo2',
+                        'libcups2',
+                        'libdbus-1-3',
+                        'libexpat1',
+                        'libfontconfig1',
+                        'libgcc1',
+                        'libglib2.0-0',
+                        'libgtk-3-0',
+                        'libpango-1.0-0',
+                        'libx11-6',
+                        'libx11-xcb1',
+                        'libxcb1',
+                        'libxcomposite1',
+                        'libxcursor1',
+                        'libxdamage1',
+                        'libxext6',
+                        'libxfixes3',
+                        'libxi6',
+                        'libxrandr2',
+                        'libxrender1',
+                        'libxss1',
+                        'libxtst6'
+                    ], check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"Error installing system dependencies: {e}")
+                    print("Please run 'sudo apt-get install libnss3 libnspr4 libasound2' manually")
+                    return
+                
+        # Save successful installation state
+        save_installation_state()
+        
+    except Exception as e:
+        print(f"Error installing browsers: {e}")
+        print("Please run 'python -m playwright install chromium' manually")
+
 def main():
     """Main entry point for CLI."""
+    # Check if already installed first
+    already_installed = check_installation_state()
+    
+    # Install browsers and dependencies if needed
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            if not p.chromium.executable_path.exists():
+                install_browsers(quiet=already_installed)
+    except Exception:
+        install_browsers(quiet=already_installed)
     cli()
 
 if __name__ == '__main__':

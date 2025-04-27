@@ -96,6 +96,15 @@ async def lifespan(app: FastAPI):
     global _engine
     shutdown_event = asyncio.Event()
     
+    # Define shutdown handler first
+    async def handle_shutdown():
+        if _engine:
+            try:
+                await asyncio.wait_for(_engine.stop(), timeout=30.0)
+            except Exception as e:
+                logger.error(f"Error stopping engine: {e}")
+        shutdown_event.set()
+    
     try:
         # Initialize engine
         if not _engine:
@@ -105,15 +114,7 @@ async def lifespan(app: FastAPI):
             _engine = Engine(settings=_settings, constraints=_constraints)
             await _engine.start()
         
-        # Set up shutdown handler
-        async def handle_shutdown():
-            if _engine:
-                try:
-                    await asyncio.wait_for(_engine.stop(), timeout=10.0)
-                except Exception as e:
-                    logger.error(f"Error stopping engine: {e}")
-            shutdown_event.set()
-        
+        # Store shutdown handler
         app.state.handle_shutdown = handle_shutdown
         
         try:
@@ -299,7 +300,7 @@ async def format_chat_stream(engine_stream, model: str):
             yield f"data: {json.dumps(data)}\n\n"
                 
         elif isinstance(update, AgentHistoryListResponse):
-            task_id = update.response_id.split('_')[1]
+            task_id = update.task_id
             response_id = f"chatcmpl-{task_id}"
             system_fingerprint = f"fp_{task_id[-8:]}"
             
@@ -351,60 +352,70 @@ async def format_chat_stream(engine_stream, model: str):
             }
             yield f"data: {json.dumps(data)}\n\n"
 
-async def format_response_stream(engine_stream, response_id: str, model: str, request: ResponseRequest):
+async def format_response_stream(engine_stream, model: str, request: ResponseRequest):
     """Format responses streaming response."""
     created_at = int(time.time())
-    
-    # Initial response created
-    initial_response = {
-        'id': response_id,
-        'object': 'response',
-        'created_at': created_at,
-        'status': 'in_progress',
-        'error': None,
-        'incomplete_details': None,
-        'instructions': request.instructions,
-        'max_output_tokens': None,
-        'model': model,
-        'output': [],
-        'parallel_tool_calls': True,
-        'previous_response_id': request.previous_response_id,
-        'reasoning': {
-            'effort': None,
-            'generate_summary': None,
-            'summary': None
-        },
-        'store': request.store,
-        'temperature': 1.0,
-        'text': {'format': {'type': 'text'}},
-        'tool_choice': 'auto',
-        'tools': [],
-        'top_p': 1.0,
-        'truncation': 'disabled',
-        'usage': None,
-        'user': None,
-        'metadata': {},
-        'service_tier': 'default'  # Always use default for consistency
-    }
-    data = {
-        'type': 'response.created',
-        'response': initial_response
-    }
-    yield f"event: response.created\ndata: {json.dumps(data)}\n\n"
-    
-    # Response in progress
-    data = {
-        'type': 'response.in_progress',
-        'response': initial_response
-    }
-    yield f"event: response.in_progress\ndata: {json.dumps(data)}\n\n"
     
     # Track output items and content parts
     output_items = {}  # task_id -> output item
     content_parts = {}  # task_id -> list of content parts
+    response_id = None
     
     # Process stream updates
     async for update in engine_stream:
+        # Get task_id and set response_id on first update
+        task_id = None
+        if isinstance(update, AgentHistoryListResponse):
+            task_id = update.task_id
+        elif isinstance(update, AgentReasoning):
+            task_id = update.task_id
+            
+        if task_id and not response_id:
+            response_id = f"resp_{task_id}"
+            # Initial response created
+            initial_response = {
+                'id': response_id,
+                'object': 'response',
+                'created_at': created_at,
+                'status': 'in_progress',
+                'error': None,
+                'incomplete_details': None,
+                'instructions': request.instructions,
+                'max_output_tokens': None,
+                'model': model,
+                'output': [],
+                'parallel_tool_calls': True,
+                'previous_response_id': request.previous_response_id,
+                'reasoning': {
+                    'effort': None,
+                    'generate_summary': None,
+                    'summary': None
+                },
+                'store': request.store,
+                'temperature': 1.0,
+                'text': {'format': {'type': 'text'}},
+                'tool_choice': 'auto',
+                'tools': [],
+                'top_p': 1.0,
+                'truncation': 'disabled',
+                'usage': None,
+                'user': None,
+                'metadata': {},
+                'service_tier': 'default'  # Always use default for consistency
+            }
+            data = {
+                'type': 'response.created',
+                'response': initial_response
+            }
+            yield f"event: response.created\ndata: {json.dumps(data)}\n\n"
+            
+            # Response in progress
+            data = {
+                'type': 'response.in_progress',
+                'response': initial_response
+            }
+            yield f"event: response.in_progress\ndata: {json.dumps(data)}\n\n"
+        
         if isinstance(update, AgentReasoning):
             task_id = update.task_id
             msg_id = f"msg_{task_id}"  # Keep task ID visible
@@ -483,7 +494,7 @@ async def format_response_stream(engine_stream, response_id: str, model: str, re
             yield f"event: response.content_part.done\ndata: {json.dumps(data)}\n\n"
             
         elif isinstance(update, AgentHistoryListResponse):
-            task_id = update.response_id.split('_')[1]
+            task_id = update.task_id
             msg_id = f"msg_{task_id}"  # Keep task ID visible
             
             # Add final result content part
@@ -682,17 +693,8 @@ async def responses(request: ResponseRequest):
             previous_response_id=request.previous_response_id,
             cache_control=request.cache_control
         )
-        # Get task ID from first update
-        async for update in result:
-            if isinstance(update, AgentHistoryListResponse):
-                task_id = update.response_id.split('_')[1]
-                break
-            elif isinstance(update, AgentReasoning):
-                task_id = update.task_id
-                break
-        response_id = f"resp_{task_id}"
         return StreamingResponse(
-            format_response_stream(result, response_id, request.model, request),
+            format_response_stream(result, request.model, request),
             media_type="text/event-stream"
         )
     else:
