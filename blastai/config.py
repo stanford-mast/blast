@@ -72,7 +72,10 @@ class Constraints(BaseModel):
     @classmethod
     def create(cls, max_memory: Optional[str] = None,
                    max_concurrent_browsers: int = 20,
+                   max_cost_per_minute: Optional[float] = None,
+                   max_cost_per_hour: Optional[float] = None,
                    allow_parallelism: bool = True,
+                   max_parallelism_nesting_depth: int = 1,
                    llm_model: str = "gpt-4.1",
                    allow_vision: bool = True,
                    require_headless: bool = True) -> "Constraints":
@@ -81,7 +84,10 @@ class Constraints(BaseModel):
         Args:
             max_memory: Maximum memory as string (e.g. "4GB")
             max_concurrent_browsers: Maximum concurrent browsers
+            max_cost_per_minute: Maximum cost per minute in USD
+            max_cost_per_hour: Maximum cost per hour in USD
             allow_parallelism: Whether to allow parallel execution
+            max_parallelism_nesting_depth: Maximum depth of nested parallel tasks
             llm_model: LLM model identifier
             allow_vision: Whether to allow vision capabilities
             require_headless: Whether to require headless mode
@@ -116,7 +122,10 @@ class Constraints(BaseModel):
         return cls(
             max_memory=memory_bytes,
             max_concurrent_browsers=max_concurrent_browsers,
+            max_cost_per_minute=max_cost_per_minute,
+            max_cost_per_hour=max_cost_per_hour,
             allow_parallelism=allow_parallelism,
+            max_parallelism_nesting_depth=max_parallelism_nesting_depth,
             llm_model=llm_model,
             allow_vision=allow_vision,
             require_headless=require_headless

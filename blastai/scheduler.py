@@ -360,8 +360,18 @@ class Scheduler:
         if cached_plan:
             coro = executor.run(cached_plan)
         else:
-            # Get plan from planner
-            plan = await self.planner.plan(task.description)
+            # Calculate subtask depth
+            depth = 0
+            current_id = task.parent_task_id
+            while current_id:
+                depth += 1
+                parent = self.tasks.get(current_id)
+                if not parent:
+                    break
+                current_id = parent.parent_task_id
+                
+            # Get plan from planner with depth info
+            plan = await self.planner.plan(task.description, subtask_depth=depth)
             
             # Combine plan and description
             full_description = f"{plan}\n{task.description}"

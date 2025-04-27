@@ -37,8 +37,9 @@ import asyncio
 import logging
 import psutil
 import time
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from browser_use import Browser
 from browser_use.browser.context import BrowserContext
@@ -82,6 +83,7 @@ class ResourceManager:
         self._running = False
         self._total_cost_evicted_executors = 0.0
         self._executor_processes: Dict[str, List[int]] = {}  # task_id -> list of process IDs
+        self._cost_history: List[Tuple[float, datetime]] = []  # List of (cost, timestamp) tuples
         
     async def start(self):
         """Start resource management."""
@@ -143,16 +145,47 @@ class ResourceManager:
                 
         return total_memory
         
-    def _get_cost(self) -> float:
-        """Get total cost across all executors."""
-        total_cost = self._total_cost_evicted_executors
+    def _get_cost(self, time_window: Optional[timedelta] = None) -> float:
+        """Get total cost across all executors within time window.
         
-        # Add costs from active executors
+        Args:
+            time_window: Optional time window to calculate cost for
+                        None means get total cost
+        """
+        now = datetime.now()
+        
+        # Calculate current total cost
+        current_cost = self._total_cost_evicted_executors
         for task in self.scheduler.tasks.values():
             if task.executor:
-                total_cost += task.executor.get_total_cost()
+                current_cost += task.executor.get_total_cost()
                 
-        return total_cost
+        # Add to history
+        self._cost_history.append((current_cost, now))
+        
+        if time_window:
+            cutoff = now - time_window
+            
+            # Keep most recent entry before cutoff if it exists
+            oldest_entry = None
+            for cost, ts in self._cost_history:
+                if ts < cutoff:
+                    oldest_entry = (cost, ts)
+                else:
+                    break
+            
+            # Filter history but keep oldest entry if found
+            self._cost_history = (
+                ([oldest_entry] if oldest_entry else []) +
+                [(c, t) for c, t in self._cost_history if t >= cutoff]
+            )
+            
+            # Calculate cost within window
+            if len(self._cost_history) > 0:
+                return self._cost_history[-1][0] - self._cost_history[0][0]
+            return 0.0
+            
+        return current_cost
         
     def check_constraints_sat(self, with_new_executor: bool = False) -> bool:
         """Check if resource constraints are satisfied."""
@@ -180,14 +213,13 @@ class ResourceManager:
                 return False
                 
         # Check cost limits if set
-        total_cost = self._get_cost()
         if self.constraints.max_cost_per_minute:
-            cost_per_minute = total_cost / ((time.time() - self._start_time) / 60)
-            if cost_per_minute > self.constraints.max_cost_per_minute:
+            cost_last_minute = self._get_cost(timedelta(minutes=1))
+            if cost_last_minute > self.constraints.max_cost_per_minute:
                 return False
         if self.constraints.max_cost_per_hour:
-            cost_per_hour = total_cost / ((time.time() - self._start_time) / 3600)
-            if cost_per_hour > self.constraints.max_cost_per_hour:
+            cost_last_hour = self._get_cost(timedelta(hours=1))
+            if cost_last_hour > self.constraints.max_cost_per_hour:
                 return False
                 
         return True

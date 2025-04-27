@@ -27,15 +27,24 @@ Focus only on if/how/when to launch subtasks and get their results.
 Be specific about URLs or search queries to pass to subtasks.
 Keep plans brief and actionable."""
         
-    async def plan(self, task_description: str) -> str:
+    async def plan(self, task_description: str, subtask_depth: int = 0) -> str:
         """Generate a plan for task execution.
         
         Args:
             task_description: Description of the task to plan
+            subtask_depth: Current depth in subtask tree (0 for root tasks)
             
         Returns:
             Brief plan focusing on subtask management
         """
+        # Check if we're at max depth
+        if subtask_depth >= self.constraints.max_parallelism_nesting_depth:
+            return "Do not launch subtasks"
+            
+        # Check if parallelism is allowed
+        if not self.constraints.allow_parallelism and subtask_depth > 0:
+            return "Do not launch subtasks"
+            
         messages = [
             SystemMessage(content=self.system_prompt),
             HumanMessage(content=f"Plan this task: {task_description}")
