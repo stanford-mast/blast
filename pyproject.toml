@@ -6,7 +6,21 @@ build-backend = "setuptools.build_meta"
 name = "blastai"
 version = "0.1.0"
 description = "Browser-LLM Auto-Scaling Technology"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Caleb Winston" }
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet :: WWW/HTTP :: Browsers"
+]
 dependencies = [
     "pydantic>=2.0",
     "browser-use>=0.1.41",
@@ -18,6 +32,14 @@ dependencies = [
     "langchain_community>=0.3.20",
     "playwright>=1.41.0"
 ]
+
+[project.urls]
+Homepage = "https://github.com/stanford-mast/blast"
+Documentation = "https://github.com/stanford-mast/blast#readme"
+Issues = "https://github.com/stanford-mast/blast/issues"
+
+[project.optional-dependencies]
+web = []  # No Python dependencies needed for web frontend, requires Node.js/npm
 
 [project.scripts]
 blastai = "blastai.cli:main"

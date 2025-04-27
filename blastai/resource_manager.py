@@ -395,7 +395,7 @@ class ResourceManager:
             except Exception as e:
                 logger.error(f"Error in resource allocation: {e}")
                 
-            await asyncio.sleep(1)  # Check every second
+            await asyncio.sleep(0.1)  # Check every second
             
     async def _monitor_resources(self):
         """Background task for monitoring resource usage."""
@@ -460,4 +460,4 @@ class ResourceManager:
             except Exception as e:
                 logger.error(f"Error in resource monitoring: {e}")
                 
-            await asyncio.sleep(5)  # Check every 5 seconds
+            await asyncio.sleep(1)  # Check every 5 seconds

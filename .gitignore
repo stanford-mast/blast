@@ -40,3 +40,16 @@ htmlcov/
 
 docs/instructions/
 blast-venv/
+
+# Next.js
+blastai/frontend/node_modules/
+blastai/frontend/.next/
+blastai/frontend/out/
+blastai/frontend/.next-env.d.ts
+blastai/frontend/*.tsbuildinfo
+
+# npm
+blastai/frontend/package-lock.json
+blastai/frontend/.npm
+blastai/frontend/.env*.local
+blastai/frontend/.vercel
