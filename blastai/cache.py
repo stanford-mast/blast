@@ -12,13 +12,14 @@ from browser_use.agent.views import AgentHistoryList
 from .utils import get_appdata_dir
 from .tools import Tools
 from .scheduler import Scheduler
+from .config import Constraints
 
 logger = logging.getLogger(__name__)
 
 class CacheManager:
     """Manages both in-memory and on-disk caching of task results and plans."""
     
-    def __init__(self, instance_hash: str, persist: bool = True):
+    def __init__(self, instance_hash: str, persist: bool = True, constraints: Optional[Constraints] = None):
         """Initialize the cache manager.
         
         Args:
@@ -43,6 +44,7 @@ class CacheManager:
         
         # Dummy agent for loading history - initialized in load()
         self._dummy_agent: Optional[Agent] = None
+        self.constraints = constraints or Constraints()
         
     def load(self, scheduler: Scheduler):
         """Initialize the dummy agent for loading history.
@@ -59,7 +61,7 @@ class CacheManager:
             # Create dummy agent with tools controller
             self._dummy_agent = Agent(
                 task="dummy",
-                llm=ChatOpenAI(model="gpt-4.1-mini"),  # Use same model as default_config.yaml
+                llm=ChatOpenAI(model=self.constraints.llm_model or "gpt-4.1"),  # Use same model as default_config.yaml
                 controller=tools.controller
             )
             

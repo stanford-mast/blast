@@ -41,7 +41,8 @@ class Engine:
         # Create CacheManager first (no scheduler needed yet)
         self.cache_manager = CacheManager(
             instance_hash=self._instance_hash,
-            persist=self.settings.persist_cache
+            persist=self.settings.persist_cache,
+            constraints=self.constraints,
         )
         
         # Create Scheduler with CacheManager

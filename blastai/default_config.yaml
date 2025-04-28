@@ -11,5 +11,5 @@ constraints:
   allow_parallelism: true
   max_parallelism_nesting_depth: 1
   llm_model: "gpt-4.1"
-  allow_vision: true
-  require_headless: true
+  allow_vision: false
+  require_headless: false

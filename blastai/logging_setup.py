@@ -38,7 +38,7 @@ def setup_logging(settings: Optional[Settings] = None):
     # Set format based on log levels
     show_blastai_timestamp = should_show_timestamp(blastai_level)
     show_browser_timestamp = should_show_timestamp(browser_level)
-    use_detailed_format = show_blastai_timestamp or show_browser_timestamp
+    use_detailed_format = True # show_blastai_timestamp or show_browser_timestamp
     
     # Use consistent timestamp format without milliseconds
     log_format = '%(asctime)s [%(name)s] %(message)s' if use_detailed_format else '%(message)s'
