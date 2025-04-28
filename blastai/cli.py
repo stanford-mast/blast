@@ -350,7 +350,7 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                     print("Resources:")
                     print(f"  Active browsers: {metrics['concurrent_browsers']}")
                     print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
-                    print(f"  Total cost:      ${metrics['total_cost']:.2f}", flush=True)
+                    print(f"  Total cost:      ${metrics['total_cost']:.4f}", flush=True)
                     
                 except Exception as e:
                     # Move cursor up 10 lines and clear each line

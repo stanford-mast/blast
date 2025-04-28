@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 from .config import Settings, Constraints
 from .response import AgentReasoning, AgentHistoryListResponse
+from .utils import estimate_llm_cost
 
 class Executor:
     """Wrapper around browser_use Agent for task execution."""
@@ -113,7 +114,16 @@ class Executor:
                 # Run task with cost tracking
                 with get_openai_callback() as cb:
                     self._history = await self.agent.run()
-                    self._total_cost += cb.total_cost
+                    cost = cb.total_cost
+                    if cost == 0 and cb.total_tokens > 0:
+                        cached_tokens = getattr(cb, "prompt_tokens_cached", 0)
+                        cost = estimate_llm_cost(
+                            model_name=self.constraints.llm_model,
+                            prompt_tokens=cb.prompt_tokens,
+                            completion_tokens=cb.completion_tokens,
+                            cached_tokens=cached_tokens
+                        )
+                    self._total_cost += cost
                 return self._history
                 
             else:
@@ -131,7 +141,16 @@ class Executor:
                 # Run plan with cost tracking
                 with get_openai_callback() as cb:
                     self._history = await self.agent.rerun_history(task_or_plan)
-                    self._total_cost += cb.total_cost
+                    cost = cb.total_cost
+                    if cost == 0 and cb.total_tokens > 0:
+                        cached_tokens = getattr(cb, "prompt_tokens_cached", 0)
+                        cost = estimate_llm_cost(
+                            model_name=self.constraints.llm_model,
+                            prompt_tokens=cb.prompt_tokens,
+                            completion_tokens=cb.completion_tokens,
+                            cached_tokens=cached_tokens
+                        )
+                    self._total_cost += cost
                 return self._history
             
         except Exception as e:

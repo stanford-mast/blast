@@ -68,8 +68,8 @@ class ResourceManager:
         self._monitor_task = None
         self._running = False
         self._total_cost_evicted_executors = 0.0
-        self._executor_processes: Dict[str, List[int]] = {}  # task_id -> list of process IDs
         self._cost_history: List[Tuple[float, datetime]] = []  # List of (cost, timestamp) tuples
+        self._start_time = time.time()  # Track when the resource manager was created
         self._prev_not_allocated = 0  # Track previous not_allocated count
 
         # For debugging output
@@ -100,39 +100,34 @@ class ResourceManager:
                 except asyncio.CancelledError:
                     pass
                     
-    def _get_memory_usage(self, executor: Executor) -> float:
-        """Get memory usage for an executor.
+    def _get_total_memory_usage(self) -> float:
+        """Get total memory usage for all browser processes created since engine start.
         
-        Uses process info to find Playwright/Chromium processes
-        and sum their memory usage.
-        
-        Args:
-            executor: Executor to check
-            
         Returns:
-            Memory usage in bytes
+            Total memory usage in bytes
         """
-        # Get process IDs for this executor
-        if executor.task_id not in self._executor_processes:
-            # First time - find all related processes
-            pids = []
-            for proc in psutil.process_iter(['pid', 'name']):
-                try:
-                    if 'playwright' in proc.info['name'].lower() or 'chromium' in proc.info['name'].lower():
-                        pids.append(proc.info['pid'])
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            self._executor_processes[executor.task_id] = pids
-            
-        # Sum memory for known processes
         total_memory = 0
-        for pid in self._executor_processes[executor.task_id][:]:  # Copy list to allow modification
+        
+        # Find all headless_shell processes created after engine start
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
             try:
-                proc = psutil.Process(pid)
-                total_memory += proc.memory_info().rss
+                proc_name = proc.info['name'].lower()
+                if (('headless_shell' in proc_name or
+                     'chromium' in proc_name or
+                     'playwright' in proc_name) and
+                    proc.info['create_time'] >= self._start_time):
+                    total_memory += proc.memory_info().rss
+                    
+                    # Include child processes
+                    try:
+                        for child in proc.children(recursive=True):
+                            if child.create_time() >= self._start_time:
+                                total_memory += child.memory_info().rss
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                        
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                # Process no longer exists - remove from list
-                self._executor_processes[executor.task_id].remove(pid)
+                continue
                 
         return total_memory
         
@@ -193,10 +188,7 @@ class ResourceManager:
             
         # Check memory limit if set
         if self.constraints.max_memory:
-            total_memory = 0
-            for task in self.scheduler.tasks.values():
-                if task.executor:
-                    total_memory += self._get_memory_usage(task.executor)
+            total_memory = self._get_total_memory_usage()
             if with_new_executor:
                 # Estimate memory for new executor
                 total_memory += 500 * 1024 * 1024  # Assume 500MB
@@ -228,7 +220,7 @@ class ResourceManager:
                     logger.debug(f"Cannot create executor for task {task_id}: would exceed max_concurrent_browsers ({running_executors + 1} > {self.constraints.max_concurrent_browsers})")
                     return None
                     
-                total_memory = sum(self._get_memory_usage(task.executor) for task in self.scheduler.tasks.values() if task.executor)
+                total_memory = self._get_total_memory_usage()
                 if total_memory + (500 * 1024 * 1024) > self.constraints.max_memory:
                     logger.debug(f"Cannot create executor for task {task_id}: would exceed max_memory ({(total_memory + 500 * 1024 * 1024) / (1024 * 1024):.1f}MB > {self.constraints.max_memory / (1024 * 1024):.1f}MB)")
                     return None
@@ -291,13 +283,11 @@ class ResourceManager:
         # Clean up executor
         await task.executor.cleanup()
         
-        # Clear executor reference and process list
+        # Clear executor reference
         task.executor = None
-        self._executor_processes.pop(task_id, None)
         
     async def _allocate_resources(self):
         """Background task for allocating resources to tasks."""
-        self._start_time = time.time()
         
         while self._running:
             try:
@@ -336,7 +326,6 @@ class ResourceManager:
                                 # Actually reuse the executor
                                 executor = other_task.executor
                                 other_task.executor = None  # Remove reference from old task
-                                self._executor_processes[task.id] = self._executor_processes.pop(other_task.id, [])
                                 
                                 logger.debug(f"Reusing executor from task {other_task.id} for task {task.id}")
                                 
@@ -418,7 +407,7 @@ class ResourceManager:
                         if running_executors > self.constraints.max_concurrent_browsers:
                             logger.debug(f"Resource monitor: exceeded max_concurrent_browsers ({running_executors} > {self.constraints.max_concurrent_browsers})")
                         
-                        total_memory = sum(self._get_memory_usage(task.executor) for task in self.scheduler.tasks.values() if task.executor)
+                        total_memory = self._get_total_memory_usage()
                         if total_memory > self.constraints.max_memory:
                             logger.debug(f"Resource monitor: exceeded max_memory ({total_memory / (1024 * 1024):.1f}MB > {self.constraints.max_memory / (1024 * 1024):.1f}MB)")
                         
@@ -465,4 +454,4 @@ class ResourceManager:
             except Exception as e:
                 logger.error(f"Error in resource monitoring: {e}")
                 
-            await asyncio.sleep(1)  # Check every 5 seconds
+            await asyncio.sleep(5)  # Check every 5 second

@@ -1,0 +1,43 @@
+{
+  "models": {
+    "gpt-4.1": {
+      "input": 2.0,
+      "cachedInput": 0.5,
+      "output": 8.0
+    },
+    "gpt-4.1-mini": {
+      "input": 0.4,
+      "cachedInput": 0.1,
+      "output": 1.6
+    },
+    "gpt-4.1-nano": {
+      "input": 0.1,
+      "cachedInput": 0.025,
+      "output": 0.4
+    },
+    "gpt-4.5-preview": {
+      "input": 75,
+      "cachedInput": 37.5,
+      "output": 150,
+      "batchDiscount": 0.5
+    },
+    "gpt-4o": {
+      "input": 2.5,
+      "cachedInput": 1.25,
+      "output": 10,
+      "batchDiscount": 0.5
+    },
+    "gpt-4-turbo": {
+      "input": 10,
+      "output": 30
+    },
+    "gpt-4": {
+      "input": 30,
+      "output": 60
+    },
+    "gpt-3.5-turbo": {
+      "input": 0.5,
+      "output": 1.5
+    }
+  }
+}

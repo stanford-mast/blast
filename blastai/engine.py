@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import logging
+import threading
 import time
 from typing import Optional, Union, List, Dict, Any, AsyncIterator, Set, TYPE_CHECKING
 from uuid import uuid4
@@ -77,6 +78,19 @@ class Engine:
         if not self._started:
             await self.resource_manager.start()
             self._started = True
+        # Thread for logging metrics (if needed)
+        # self._metrics_thread = threading.Thread(target=self._log_metrics, daemon=True)
+        # self._metrics_thread.start()
+
+    def _log_metrics(self):
+        """Log engine metrics every 5 seconds."""
+        while self._started:
+            try:
+                metrics = asyncio.run(self.get_metrics())
+                logger.debug(f"Engine metrics: {metrics}")
+            except Exception as e:
+                logger.error(f"Error logging metrics: {e}")
+            time.sleep(5)
             
     async def stop(self):
         """Stop the engine and cleanup resources."""
@@ -198,11 +212,8 @@ class Engine:
         completed_tasks = [t for t in tasks.values() if t.is_completed]
         scheduled_tasks = [t for t in tasks.values() if not t.is_completed and not t.executor]
         
-        # Get memory usage from resource manager
-        total_memory = 0
-        for task in tasks.values():
-            if task.executor:
-                total_memory += self.resource_manager._get_memory_usage(task.executor)
+        # Get total memory usage from resource manager
+        total_memory = self.resource_manager._get_total_memory_usage()
         memory_gb = total_memory / (1024 * 1024 * 1024)  # Convert to GB
         
         # Get cost from resource manager
