@@ -30,11 +30,16 @@ export const LoadingLogo = ({ onComplete }: LoadingLogoProps) => {
       }}
       exit={{
         opacity: 0,
-        transition: { duration: 0.5 }
+        transition: { duration: 0.2 }
       }}
       transition={{
-        opacity: { duration: 0.5 },
+        opacity: { duration: 0.2 },
         rotate: { duration: 0.5, ease: "easeInOut" }
+      }}
+      onAnimationComplete={(definition) => {
+        if (definition === "exit" && onComplete) {
+          onComplete();
+        }
       }}
       className="flex items-center justify-center w-6 h-6"
     >

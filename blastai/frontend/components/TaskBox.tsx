@@ -124,7 +124,7 @@ const TaskModal = ({ isOpen, onClose, updates, finalResult }: TaskModalProps) =>
                 <motion.div
                   key={thought.timestamp}
                   onClick={() => setSelectedIndex(index)}
-                  className={`p-4 cursor-pointer border-b border-gray-800 transition-colors duration-[50ms] ${
+                  className={`p-4 cursor-pointer border-b border-gray-800 transition-colors duration-[100ms] ${
                     index === selectedIndex ? 'bg-[#262626]' : 'hover:bg-[#242424]'
                   }`}
                   initial={{ opacity: 0, y: 10 }}

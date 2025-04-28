@@ -299,20 +299,27 @@ export default function Home() {
                         className="space-y-6"
                       >
                         <AnimatePresence mode="wait">
-                          {item.showLoading && (
+                          {item.showLoading ? (
                             <motion.div
                               initial={{ opacity: 0 }}
                               animate={{ opacity: 1 }}
                               exit={{ opacity: 0 }}
-                              transition={{ duration: 0.3 }}
+                              transition={{ duration: 0.2 }}
                               className="ml-2"
                             >
-                              <LoadingLogo />
+                              <LoadingLogo onComplete={() => {
+                                // Update the conversation item to remove loading logo from DOM
+                                setConversation(prev => {
+                                  const newConv = [...prev];
+                                  const lastItem = newConv[newConv.length - 1];
+                                  if (lastItem.type === 'tasks') {
+                                    lastItem.showLoading = false;
+                                  }
+                                  return newConv;
+                                });
+                              }} />
                             </motion.div>
-                          )}
-                        </AnimatePresence>
-                        <AnimatePresence>
-                          {item.hasFirstResponse && (
+                          ) : item.hasFirstResponse && (
                             <motion.div
                               initial={{ opacity: 0 }}
                               animate={{ opacity: 1 }}

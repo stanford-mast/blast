@@ -71,6 +71,7 @@ class ResourceManager:
         self._cost_history: List[Tuple[float, datetime]] = []  # List of (cost, timestamp) tuples
         self._start_time = time.time()  # Track when the resource manager was created
         self._prev_not_allocated = 0  # Track previous not_allocated count
+        self._prev_completed_with_executor = 0
 
         # For debugging output
         self._last_constraint_report = 0.0  # Last time we reported constraint violation
@@ -173,34 +174,34 @@ class ResourceManager:
             
         return current_cost
         
-    def check_constraints_sat(self, with_new_executor: bool = False) -> bool:
-        """Check if resource constraints are satisfied."""
+    def check_constraints_sat(self, with_new_executors: int = 0) -> bool:
+        """Check if resource constraints are satisfied.
+        
+        Args:
+            with_new_executors: Number of new executors to check for
+        """
         # Count running executors
         running_executors = sum(1 for task in self.scheduler.tasks.values()
-                              if task.executor)
-                              
+                               if task.executor)
+                               
         # Check max concurrent browsers
-        if with_new_executor:
-            if running_executors + 1 > self.constraints.max_concurrent_browsers:
-                return False
-        elif running_executors > self.constraints.max_concurrent_browsers:
+        if running_executors + with_new_executors > self.constraints.max_concurrent_browsers:
             return False
             
         # Check memory limit if set
-        if self.constraints.max_memory:
+        if self.constraints.max_memory is not None:
             total_memory = self._get_total_memory_usage()
-            if with_new_executor:
-                # Estimate memory for new executor
-                total_memory += 500 * 1024 * 1024  # Assume 500MB
+            # Estimate memory for new executors (500MB each)
+            total_memory += (500 * 1024 * 1024) * with_new_executors
             if total_memory > self.constraints.max_memory:
                 return False
                 
         # Check cost limits if set
-        if self.constraints.max_cost_per_minute:
+        if self.constraints.max_cost_per_minute is not None:
             cost_last_minute = self._get_cost(timedelta(minutes=1))
             if cost_last_minute > self.constraints.max_cost_per_minute:
                 return False
-        if self.constraints.max_cost_per_hour:
+        if self.constraints.max_cost_per_hour is not None:
             cost_last_hour = self._get_cost(timedelta(hours=1))
             if cost_last_hour > self.constraints.max_cost_per_hour:
                 return False
@@ -209,7 +210,7 @@ class ResourceManager:
         
     async def _request_executor(self, task_id: str) -> Optional[Executor]:
         """Request a new executor if constraints allow."""
-        if not self.check_constraints_sat(with_new_executor=True):
+        if not self.check_constraints_sat(with_new_executors=1):
             # Only log constraint violation once per task
             if task_id not in self._reported_constraint_tasks:
                 self._reported_constraint_tasks.add(task_id)
@@ -329,10 +330,9 @@ class ResourceManager:
                                 
                                 logger.debug(f"Reusing executor from task {other_task.id} for task {task.id}")
                                 
-                                # Update executor's task ID and create new Tools instance
-                                executor.task_id = task.id
+                                # Create new Tools instance and update executor
                                 tools = Tools(scheduler=self.scheduler, task_id=task.id)
-                                executor.controller = tools.controller
+                                executor.set_task_id(task.id, tools.controller)
                                 
                                 # Start execution with reused executor
                                 cached_plan = self.cache_manager.get_plan(
@@ -382,9 +382,16 @@ class ResourceManager:
                         tasks_allocated += 1
                         tasks_not_allocated -= 1
                         
-                if tasks_allocated > 0 or tasks_not_allocated != self._prev_not_allocated:
-                    logger.debug(f"Allocated executors for {tasks_allocated} tasks ({tasks_not_allocated} tasks not allocated)")
+                # Get current executor stats
+                running_executors = sum(1 for task in self.scheduler.tasks.values()
+                                    if task.executor and not task.is_completed)
+                completed_with_executor = sum(1 for task in self.scheduler.tasks.values()
+                                         if task.is_completed)
+
+                if tasks_allocated > 0 or tasks_not_allocated != self._prev_not_allocated or completed_with_executor != (self._prev_completed_with_executor or completed_with_executor):
+                    logger.debug(f"Tasks: {tasks_allocated} allocated, {tasks_not_allocated} pending, {running_executors} running, {completed_with_executor} completed")
                     self._prev_not_allocated = tasks_not_allocated
+                    self._completed_with_executor = completed_with_executor
                         
             except Exception as e:
                 logger.error(f"Error in resource allocation: {e}")
@@ -396,7 +403,10 @@ class ResourceManager:
         while self._running:
             try:
                 # Check if constraints are satisfied
-                if not self.check_constraints_sat():
+                def get_num_unscheduled_tasks():
+                    return sum(1 for task in self.scheduler.tasks.values()
+                                if not task.is_completed and not task.executor)
+                if not self.check_constraints_sat() or not self.check_constraints_sat(with_new_executors=get_num_unscheduled_tasks()):
                     current_time = time.time()
                     # Only log constraint violations every 30 seconds
                     if current_time - self._last_constraint_report >= 30:
@@ -408,48 +418,48 @@ class ResourceManager:
                             logger.debug(f"Resource monitor: exceeded max_concurrent_browsers ({running_executors} > {self.constraints.max_concurrent_browsers})")
                         
                         total_memory = self._get_total_memory_usage()
-                        if total_memory > self.constraints.max_memory:
+                        if self.constraints.max_memory is not None and total_memory > self.constraints.max_memory:
                             logger.debug(f"Resource monitor: exceeded max_memory ({total_memory / (1024 * 1024):.1f}MB > {self.constraints.max_memory / (1024 * 1024):.1f}MB)")
                         
                         cost_last_minute = self._get_cost(timedelta(minutes=1))
-                        if cost_last_minute > self.constraints.max_cost_per_minute:
+                        if self.constraints.max_cost_per_minute is not None and cost_last_minute > self.constraints.max_cost_per_minute:
                             logger.debug(f"Resource monitor: exceeded max_cost_per_minute (${cost_last_minute:.2f} > ${self.constraints.max_cost_per_minute:.2f})")
                         
                         cost_last_hour = self._get_cost(timedelta(hours=1))
-                        if cost_last_hour > self.constraints.max_cost_per_hour:
+                        if self.constraints.max_cost_per_hour is not None and cost_last_hour > self.constraints.max_cost_per_hour:
                             logger.debug(f"Resource monitor: exceeded max_cost_per_hour (${cost_last_hour:.2f} > ${self.constraints.max_cost_per_hour:.2f})")
                     
                     # First try evicting completed executors
                     for task in self.scheduler.tasks.values():
                         if task.is_completed and task.executor:
                             await self._evict_executor(task.id)
-                            if self.check_constraints_sat():
+                            if self.check_constraints_sat(with_new_executors=get_num_unscheduled_tasks()):
                                 break
                                 
-                    # If still unsat, pause lowest priority tasks
-                    if not self.check_constraints_sat():
-                        # Get tasks that have executors and aren't completed
-                        running_tasks = [t.id for t in self.scheduler.tasks.values()
-                                      if not t.is_completed and t.executor]
-                        priority_groups = self.scheduler.priority_sort(running_tasks)
-                        
-                        # Pause tasks in reverse priority order
-                        paused = 0
-                        min_running = 3  # Keep at least 3 running
-                        for group in reversed(priority_groups):
-                            for task_id in group.task_ids:
-                                task = self.scheduler.tasks[task_id]
-                                if task.executor:
-                                    running = sum(1 for t in self.scheduler.tasks.values()
-                                                if t.executor)
-                                    if running > min_running:
-                                        await task.executor.pause()
-                                        logger.debug(f"Paused task {task_id}")
-                                        paused += 1
-                                        if self.check_constraints_sat():
-                                            break
-                            if self.check_constraints_sat():
-                                break
+                # If still unsat, pause lowest priority tasks
+                if not self.check_constraints_sat():
+                    # Get tasks that have executors and aren't completed
+                    running_tasks = [t.id for t in self.scheduler.tasks.values()
+                                    if not t.is_completed and t.executor]
+                    priority_groups = self.scheduler.priority_sort(running_tasks)
+                    
+                    # Pause tasks in reverse priority order
+                    paused = 0
+                    min_running = 3  # Keep at least 3 running
+                    for group in reversed(priority_groups):
+                        for task_id in group.task_ids:
+                            task = self.scheduler.tasks[task_id]
+                            if task.executor:
+                                running = sum(1 for t in self.scheduler.tasks.values()
+                                            if t.executor)
+                                if running > min_running:
+                                    await task.executor.pause()
+                                    logger.debug(f"Paused task {task_id}")
+                                    paused += 1
+                                    if self.check_constraints_sat():
+                                        break
+                        if self.check_constraints_sat():
+                            break
                                 
             except Exception as e:
                 logger.error(f"Error in resource monitoring: {e}")

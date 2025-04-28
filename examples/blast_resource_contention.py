@@ -1,5 +1,17 @@
 """Compare latency between BLAST and direct browser-use for a multi-site task."""
 
+import logging
+from blastai.logging_setup import setup_logging
+from blastai.config import Settings
+
+# Set up logging with timestamps
+settings = Settings(
+    blastai_log_level="INFO",
+    browser_use_log_level="INFO"
+)
+setup_logging(settings)
+logger = logging.getLogger(__name__)
+
 import os
 import time
 import asyncio
@@ -8,35 +20,40 @@ from typing import List, Tuple
 from pathlib import Path
 import shutil
 from openai import OpenAI
-from browser_use import Agent, BrowserConfig
+from browser_use import Agent, BrowserConfig, Browser
 from langchain_openai import ChatOpenAI
 
 # Task requiring multiple sites
 TASK = "compare what example.com and rust-lang.org and python.org say"
 
 # Number of runs per approach
-NUM_RUNS = 5
+NUM_RUNS = 3
 
 async def run_with_browser_use() -> float:
     """Run task with browser-use directly."""
     # Match BLAST's settings
-    browser_config = BrowserConfig(
+    config = BrowserConfig(
         headless=True  # From default_config.yaml require_headless=true
     )
+    browser = Browser(config=config)
     
     # Create agent with same model and vision settings as BLAST
     agent = Agent(
         task=TASK,
         llm=ChatOpenAI(model="gpt-4.1"),  # From default_config.yaml llm_model
-        use_vision=True,  # From default_config.yaml allow_vision=true
-        browser_config=browser_config
+        use_vision=False,  # Match blast_overhead.py
+        browser=browser  # Pass browser instance directly
     )
     
     start_time = time.time()
-    history = await agent.run()
-    end_time = time.time()
-    
-    return end_time - start_time
+    try:
+        history = await agent.run()
+        end_time = time.time()
+        await browser.close()
+        return end_time - start_time
+    except Exception as e:
+        await browser.close()
+        raise e
 
 def run_with_blast() -> float:
     """Run task with BLAST."""
@@ -55,11 +72,15 @@ def run_with_blast() -> float:
     
     start_time = time.time()
     response = client.responses.create(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",  # Match blast_overhead.py
         input=TASK,
         stream=False
     )
     end_time = time.time()
+    
+    # Extract result from response
+    result = response.output[0].content[0].text
+    print(f"BLAST result: {result}")
     
     return end_time - start_time
 

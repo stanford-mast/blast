@@ -273,6 +273,9 @@ class Scheduler:
             # Return cached result if available
             if task.is_completed:
                 return task.result
+            elif task.result:  # Has result but not marked completed
+                await self.complete_task(task_id, task.result)
+                return task.result
                 
             # Wait for executor result if running
             if task.executor_run_task:
@@ -439,7 +442,7 @@ class Scheduler:
             logger.debug(f"Planned task {task_id} to '{task.description}' with '{plan}'")
             
             # Combine plan and description
-            full_description = f"{plan}\n{task.description}"
+            full_description = f"{task.description}\n{plan}"
             
             # Run with combined description
             logger.debug(f"Running task {task_id} with browser_use")
@@ -470,6 +473,7 @@ class Scheduler:
             
         task.completed = True
         task.time_complete = datetime.now()
+        task.executor_run_task = None  # Clear the run task since it's done
         
         if result:
             task.result = result

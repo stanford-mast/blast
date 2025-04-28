@@ -17,6 +17,13 @@ class Tools:
         """
         self.controller = Controller()
         self.task_id = task_id
+        self.cache_control = ""
+        
+        # Get parent task's cache control if available
+        if scheduler and task_id:
+            task = scheduler.tasks.get(task_id)
+            if task:
+                self.cache_control = task.cache_options
         
         # Register subtask tools if scheduler is provided
         if scheduler:
@@ -44,7 +51,7 @@ class Tools:
             task_id = scheduler.schedule_subtask(
                 description=task,
                 parent_task_id=parent_task_id,
-                cache_control=""  # No special cache control for subtasks
+                cache_control=self.cache_control  # Inherit cache control from parent task
             )
             
             # Set initial URL if provided

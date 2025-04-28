@@ -1,11 +1,11 @@
 settings:
   persist_cache: false
-  browser_use_log_level: "debug"  # Logging level for browser-use module
+  browser_use_log_level: "info"  # Logging level for browser-use module
   blastai_log_level: "debug"  # Logging level for blastai module
 
 constraints:
   max_memory: null  # No default memory limit
-  max_concurrent_browsers: 20
+  max_concurrent_browsers: 10
   max_cost_per_minute: null  # No default cost per minute limit
   max_cost_per_hour: null  # No default cost per hour limit
   allow_parallelism: true

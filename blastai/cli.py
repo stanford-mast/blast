@@ -320,54 +320,52 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
 
     async def display_metrics(client, settings: Settings):
             """Display and update metrics every 5s."""
+            # Constants for metrics display
+            METRICS_LINES = 10  # Including blank line at start
+            BLANK_METRICS = {
+                'tasks': {'scheduled': 0, 'running': 0, 'completed': 0},
+                'concurrent_browsers': 0,
+                'memory_usage_gb': 0.0,
+                'total_cost': 0.00
+            }
+            
+            def print_metrics(metrics=None):
+                """Print metrics in a consistent format."""
+                if metrics is None:
+                    metrics = BLANK_METRICS
+                
+                # Move cursor up if needed (not on first print)
+                if print_metrics.initialized:
+                    print(f"\033[{METRICS_LINES}A", end='')
+                print_metrics.initialized = True
+                
+                # Clear lines and print metrics
+                print("\033[J", end='')  # Clear everything below
+                print()  # Blank line for spacing
+                print("Tasks:")
+                print(f"  Scheduled: {metrics['tasks']['scheduled']}")
+                print(f"  Running:   {metrics['tasks']['running']}")
+                print(f"  Completed: {metrics['tasks']['completed']}")
+                print()
+                print("Resources:")
+                print(f"  Active browsers: {metrics['concurrent_browsers']}")
+                print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
+                print(f"  Total cost:      ${metrics['total_cost']:.4f}", flush=True)
+            
+            # Initialize the print_metrics function state
+            print_metrics.initialized = False
+            
             # Print initial metrics
-            print("Tasks:")
-            print("  Scheduled: 0")
-            print("  Running:   0")
-            print("  Completed: 0")
-            print("")
-            print("Resources:")
-            print("  Active browsers: 0")
-            print("  Memory usage:    0.0 GB")
-            print("  Total cost:      $0.00")
-    
+            print_metrics()
+            
             while True:
                 try:
                     # Get metrics from server
                     response = await client.get("http://127.0.0.1:8000/metrics")
                     metrics = response.json()
-                    
-                    # Move cursor up 10 lines and clear each line
-                    for _ in range(9):
-                        print("\033[1A\033[2K", end='')
-                    
-                    # Print updated metrics
-                    print("Tasks:")
-                    print(f"  Scheduled: {metrics['tasks']['scheduled']}")
-                    print(f"  Running:   {metrics['tasks']['running']}")
-                    print(f"  Completed: {metrics['tasks']['completed']}")
-                    print("")
-                    print("Resources:")
-                    print(f"  Active browsers: {metrics['concurrent_browsers']}")
-                    print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
-                    print(f"  Total cost:      ${metrics['total_cost']:.4f}", flush=True)
-                    
-                except Exception as e:
-                    # Move cursor up 10 lines and clear each line
-                    for _ in range(9):
-                        print("\033[1A\033[2K", end='')
-                    
-                    # Print zeroed metrics
-                    print("Tasks:")
-                    print("  Scheduled: 0")
-                    print("  Running:   0")
-                    print("  Completed: 0")
-                    print("")
-                    print("Resources:")
-                    print("  Active browsers: 0")
-                    print("  Memory usage:    0.0 GB")
-                    print("  Total cost:      $0.00", flush=True)
-                    
+                    print_metrics(metrics)
+                except Exception:
+                    print_metrics()
                 await asyncio.sleep(5)
 
     async def run_server_and_frontend():
@@ -417,7 +415,6 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
             if (not no_metrics_output and
                 (component == 'engine' or component is None) and
                 should_show_metrics(settings)):
-                print()  # Single line for spacing
                 metrics_client = httpx.AsyncClient()
                 metrics_task = asyncio.create_task(display_metrics(metrics_client, settings))
 

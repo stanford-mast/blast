@@ -1,5 +1,17 @@
 """Compare latency between BLAST and direct browser-use for a simple task."""
 
+import logging
+from blastai.logging_setup import setup_logging
+from blastai.config import Settings
+
+# Set up logging with timestamps
+settings = Settings(
+    blastai_log_level="INFO",
+    browser_use_log_level="INFO"
+)
+setup_logging(settings)
+logger = logging.getLogger(__name__)
+
 import os
 import time
 import asyncio
@@ -15,7 +27,7 @@ from langchain_openai import ChatOpenAI
 TASK = "read what example.com says"
 
 # Number of runs per approach
-NUM_RUNS = 5
+NUM_RUNS = 3
 
 async def run_with_browser_use() -> float:
     """Run task with browser-use directly."""
@@ -29,7 +41,7 @@ async def run_with_browser_use() -> float:
     agent = Agent(
         task=TASK,
         llm=ChatOpenAI(model="gpt-4.1"),  # From default_config.yaml llm_model
-        use_vision=True,  # From default_config.yaml allow_vision=true
+        use_vision=False,  # From default_config.yaml allow_vision=true
         browser=browser  # Pass browser instance directly
     )
     
@@ -60,7 +72,7 @@ def run_with_blast() -> float:
     
     start_time = time.time()
     response = client.responses.create(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",
         input=TASK,
         stream=False
     )
@@ -115,3 +127,15 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# BLAST Statistics:
+#   Mean: 15.24s
+#   Std Dev: 0.77s
+#   Min: 14.47s
+#   Max: 16.01s
+
+# browser-use Statistics:
+#   Mean: 15.18s
+#   Std Dev: 3.53s
+#   Min: 11.56s
+#   Max: 18.62s

@@ -237,3 +237,15 @@ class Executor:
     def get_total_cost(self) -> float:
         """Get total LLM cost for this executor."""
         return self._total_cost
+        
+    def set_task_id(self, task_id: str, controller: Controller):
+        """Update task ID and controller for both executor and agent.
+        
+        Args:
+            task_id: New task ID
+            controller: New controller to use
+        """
+        self.task_id = task_id
+        self.controller = controller
+        if self.agent:
+            self.agent.controller = controller
