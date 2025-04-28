@@ -8,7 +8,7 @@ from typing import List, Tuple
 from pathlib import Path
 import shutil
 from openai import OpenAI
-from browser_use import Agent, BrowserConfig
+from browser_use import Agent, Browser, BrowserConfig
 from langchain_openai import ChatOpenAI
 
 # Task to run
@@ -19,24 +19,29 @@ NUM_RUNS = 5
 
 async def run_with_browser_use() -> float:
     """Run task with browser-use directly."""
-    # Match BLAST's settings
-    browser_config = BrowserConfig(
+    # Create browser with settings matching BLAST's
+    config = BrowserConfig(
         headless=True  # From default_config.yaml require_headless=true
     )
+    browser = Browser(config=config)
     
-    # Create agent with same model and vision settings as BLAST
+    # Create agent with same model settings as BLAST
     agent = Agent(
         task=TASK,
         llm=ChatOpenAI(model="gpt-4.1"),  # From default_config.yaml llm_model
         use_vision=True,  # From default_config.yaml allow_vision=true
-        browser_config=browser_config
+        browser=browser  # Pass browser instance directly
     )
     
     start_time = time.time()
-    history = await agent.run()
-    end_time = time.time()
-    
-    return end_time - start_time
+    try:
+        history = await agent.run()
+        end_time = time.time()
+        await browser.close()
+        return end_time - start_time
+    except Exception as e:
+        await browser.close()
+        raise e
 
 def run_with_blast() -> float:
     """Run task with BLAST."""
@@ -50,6 +55,9 @@ def run_with_blast() -> float:
         base_url="http://127.0.0.1:8000"
     )
     
+    # Delete task from cache first
+    client.responses.delete(TASK)
+    
     start_time = time.time()
     response = client.responses.create(
         model="gpt-4.1-mini",
@@ -57,6 +65,10 @@ def run_with_blast() -> float:
         stream=False
     )
     end_time = time.time()
+    
+    # Extract result from response
+    result = response.output[0].content[0].text
+    print(f"BLAST result: {result}")
     
     return end_time - start_time
 

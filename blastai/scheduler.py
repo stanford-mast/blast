@@ -247,14 +247,14 @@ class Scheduler:
         This method will:
         1. Wait for prerequisite task if needed
         2. Return cached result if available
-        3. Wait for executor result if running
-        4. Return None if no result available
+        3. Wait for executor to be assigned and task to complete
+        4. Return result when available
         
         Args:
             task_id: Task ID
             
         Returns:
-            Task result if available
+            Task result when available
         """
         task = self.tasks.get(task_id)
         if not task:
@@ -268,30 +268,32 @@ class Scheduler:
             if not prereq.is_completed:
                 await self.get_task_result(task.prerequisite_task_id)
                 
-        # Return cached result if available
-        if task.is_completed:
-            return task.result
-            
-        # Wait for executor result if running
-        if task.executor_run_task:
-            try:
-                # Wait for task to complete
-                result = await task.executor_run_task
+        # Keep checking until task completes or fails
+        while True:
+            # Return cached result if available
+            if task.is_completed:
+                return task.result
                 
-                # Mark task as complete and cache result
-                await self.complete_task(task_id, result)
-                
-                # Return result
-                return result
-                
-            except Exception as e:
-                logger.error(f"Task {task_id} failed: {e}")
-                # Mark task as complete but failed
-                await self.complete_task(task_id)
-                raise
-                
-        # No result available
-        return None
+            # Wait for executor result if running
+            if task.executor_run_task:
+                try:
+                    # Wait for task to complete
+                    result = await task.executor_run_task
+                    
+                    # Mark task as complete and cache result
+                    await self.complete_task(task_id, result)
+                    
+                    # Return result
+                    return result
+                    
+                except Exception as e:
+                    logger.error(f"Task {task_id} failed: {e}")
+                    # Mark task as complete but failed
+                    await self.complete_task(task_id)
+                    raise
+                    
+            # Wait a bit before checking again
+            await asyncio.sleep(0.1)
         
     async def stream_task_events(self, task_id: str) -> AsyncIterator[Union[AgentReasoning, AgentHistoryListResponse]]:
         """Stream task execution events.

@@ -50,6 +50,9 @@ def run_with_blast() -> float:
         base_url="http://127.0.0.1:8000"
     )
     
+    # Delete task from cache first
+    client.responses.delete(TASK)
+    
     start_time = time.time()
     response = client.responses.create(
         model="gpt-4.1-mini",

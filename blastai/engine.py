@@ -188,11 +188,12 @@ class Engine:
                     raise RuntimeError(f"Task {final_task_id} failed to complete")
                 
                 logger.info(f"Task {final_task_id} completed with result: {final_history.final_result()}")
-                # Convert to response type with task ID as response ID
-                return AgentHistoryListResponse.from_history(
-                    history=final_history.history,
-                    response_id=f"resp_{final_task_id}"
+                # Convert to response type with task ID
+                response = AgentHistoryListResponse.from_history(
+                    history=final_history,
+                    task_id=final_task_id
                 )
+                return response
             
             # For streaming, return scheduler's stream directly
             return self.scheduler.stream_task_events(final_task_id)

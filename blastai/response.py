@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import List, Literal
 
 from pydantic import BaseModel
 
@@ -16,10 +16,7 @@ class AgentHistoryListResponse(AgentHistoryList):
     def from_history(cls, history: AgentHistoryList, task_id: str) -> AgentHistoryListResponse:
         """Convert an AgentHistoryList to AgentHistoryListResponse by adding task_id"""
         # Create new instance with all fields from history plus task_id
-        return cls(
-            history=history.history,
-            task_id=task_id
-        )
+        return cls(history=history.history, task_id=task_id)
 
 
 class AgentReasoning(BaseModel):

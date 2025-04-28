@@ -721,7 +721,12 @@ async def responses(request: ResponseRequest):
             previous_response_id=request.previous_response_id,
             cache_control=request.cache_control
         )
-        task_id = result.response_id.split('_')[1]
+        
+        # Get task ID and final result
+        task_id = result.task_id
+        final_result = result.final_result()
+        
+        # Construct response matching OpenAI format
         response = {
             "id": f"resp_{task_id}",
             "object": "response",
@@ -734,12 +739,12 @@ async def responses(request: ResponseRequest):
             "model": request.model,
             "output": [{
                 "type": "message",
-                "id": f"msg_{task_id}",  # Use task_id directly
+                "id": f"msg_{task_id}",
                 "status": "completed",
                 "role": "assistant",
                 "content": [{
                     "type": "output_text",
-                    "text": result.final_result(),
+                    "text": final_result,
                     "annotations": []
                 }]
             }],
