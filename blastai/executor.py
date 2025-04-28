@@ -4,12 +4,12 @@ import asyncio
 import logging
 import re
 from pathlib import Path
-from typing import List, Optional, Union, AsyncIterator, Dict, Any
+from typing import List, Optional, Union, AsyncIterator, Dict, Any, cast
 from datetime import datetime
 from urllib.parse import urlparse, quote_plus
 
 from browser_use import Agent, Browser, Controller
-from browser_use.agent.views import AgentHistoryList
+from browser_use.agent.views import AgentHistoryList, ActionModel
 from browser_use.browser.context import BrowserContext
 from langchain_openai import ChatOpenAI
 from langchain_community.callbacks import get_openai_callback
@@ -43,6 +43,7 @@ class Executor:
         self._history: Optional[AgentHistoryList] = None
         self._last_state: Optional[Dict[str, Any]] = None
         self._total_cost = 0.0  # Track total LLM cost
+        self._cb = None  # Track current callback
         
     def _get_url_or_search(self, input_str: Optional[str]) -> Optional[str]:
         """Convert input to URL or Google search URL.
@@ -71,6 +72,23 @@ class Executor:
             search_query = quote_plus(input_str)
             return f'https://www.google.com/search?q={search_query}'
         
+    def _update_total_cost(self):
+        """Safely update total cost from current callback."""
+        if self._cb:
+            try:
+                cost = self._cb.total_cost
+                if cost == 0 and self._cb.total_tokens > 0:
+                    cached_tokens = getattr(self._cb, "prompt_tokens_cached", 0)
+                    cost = estimate_llm_cost(
+                        model_name=self.constraints.llm_model,
+                        prompt_tokens=self._cb.prompt_tokens,
+                        completion_tokens=self._cb.completion_tokens,
+                        cached_tokens=cached_tokens,
+                    )
+                self._total_cost += cost
+            except Exception as e:
+                logger.error(f"Error updating partial cost: {e}")
+
     async def run(self, task_or_plan: Union[str, AgentHistoryList], initial_url: Optional[str] = None) -> AgentHistoryList:
         """Run a task or reuse a cached plan.
         
@@ -81,9 +99,8 @@ class Executor:
         Returns:
             AgentHistoryList containing the execution history
         """
+        self._running = True
         try:
-            self._running = True
-            
             if isinstance(task_or_plan, str):
                 self._task = task_or_plan
                 task = task_or_plan
@@ -113,17 +130,12 @@ class Executor:
                 
                 # Run task with cost tracking
                 with get_openai_callback() as cb:
-                    self._history = await self.agent.run()
-                    cost = cb.total_cost
-                    if cost == 0 and cb.total_tokens > 0:
-                        cached_tokens = getattr(cb, "prompt_tokens_cached", 0)
-                        cost = estimate_llm_cost(
-                            model_name=self.constraints.llm_model,
-                            prompt_tokens=cb.prompt_tokens,
-                            completion_tokens=cb.completion_tokens,
-                            cached_tokens=cached_tokens
-                        )
-                    self._total_cost += cost
+                    self._cb = cb  # Store callback
+                    try:
+                        self._history = await self.agent.run()
+                    finally:
+                        self._update_total_cost()
+                        self._cb = None
                 return self._history
                 
             else:
@@ -140,17 +152,12 @@ class Executor:
                 
                 # Run plan with cost tracking
                 with get_openai_callback() as cb:
-                    self._history = await self.agent.rerun_history(task_or_plan)
-                    cost = cb.total_cost
-                    if cost == 0 and cb.total_tokens > 0:
-                        cached_tokens = getattr(cb, "prompt_tokens_cached", 0)
-                        cost = estimate_llm_cost(
-                            model_name=self.constraints.llm_model,
-                            prompt_tokens=cb.prompt_tokens,
-                            completion_tokens=cb.completion_tokens,
-                            cached_tokens=cached_tokens
-                        )
-                    self._total_cost += cost
+                    self._cb = cb  # Store callback
+                    try:
+                        self._history = await self.agent.rerun_history(task_or_plan)
+                    finally:
+                        self._update_total_cost()
+                        self._cb = None
                 return self._history
             
         except Exception as e:

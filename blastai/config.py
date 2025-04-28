@@ -44,9 +44,13 @@ class Constraints(BaseModel):
         description="Maximum cost per hour in USD"
     )
     
-    allow_parallelism: bool = Field(
-        default=True,
-        description="Whether to allow parallel task execution"
+    allow_parallelism: dict = Field(
+        default={
+            "task": False,
+            "data": False,
+            "first_of_n": True
+        },
+        description="Types of parallelism to allow: task (subtasks), data (content extraction), first_of_n (first result)"
     )
     
     max_parallelism_nesting_depth: int = Field(
@@ -74,7 +78,7 @@ class Constraints(BaseModel):
                    max_concurrent_browsers: int = 20,
                    max_cost_per_minute: Optional[float] = None,
                    max_cost_per_hour: Optional[float] = None,
-                   allow_parallelism: bool = True,
+                   allow_parallelism: dict = {"task": False, "data": False, "first_of_n": True},
                    max_parallelism_nesting_depth: int = 1,
                    llm_model: str = "gpt-4.1",
                    allow_vision: bool = True,

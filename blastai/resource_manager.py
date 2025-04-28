@@ -244,8 +244,8 @@ class ResourceManager:
         browser = Browser(config=browser_config)
         browser_context = BrowserContext(browser=browser)
         
-        # Create fresh Tools instance with scheduler and task_id for this executor
-        tools = Tools(scheduler=self.scheduler, task_id=task_id)
+        # Create fresh Tools instance with scheduler, task_id and resource manager for this executor
+        tools = Tools(scheduler=self.scheduler, task_id=task_id, resource_manager=self)
         
         # Create LLM
         llm = ChatOpenAI(model=self.constraints.llm_model)
@@ -264,6 +264,40 @@ class ResourceManager:
             scheduler=self.scheduler
         )
         
+    async def end_task(self, task_id: str):
+        """Force end a task.
+        
+        This method:
+        1. Cancels any running executor task
+        2. Marks task as completed but unsuccessful
+        3. Cleans up executor resources
+        4. Updates cost tracking
+        
+        Args:
+            task_id: Task ID
+        """
+        task = self.scheduler.tasks.get(task_id)
+        if not task:
+            raise ValueError(f"Task {task_id} not found")
+            
+        if task.is_completed:
+            return  # Already completed
+            
+        # Cancel executor run task if running
+        if task.executor_run_task and not task.executor_run_task.done():
+            task.executor_run_task.cancel()
+            try:
+                await task.executor_run_task
+            except asyncio.CancelledError:
+                pass
+                
+        # Clean up executor if present
+        if task.executor:
+            await self._evict_executor(task_id)
+            
+        # Mark task as completed but unsuccessful using scheduler's method
+        await self.scheduler.complete_task(task_id, success=False)
+
     async def _evict_executor(self, task_id: str):
         """Evict an executor and clean up its resources."""
         task = self.scheduler.tasks.get(task_id)
@@ -330,8 +364,8 @@ class ResourceManager:
                                 
                                 logger.debug(f"Reusing executor from task {other_task.id} for task {task.id}")
                                 
-                                # Create new Tools instance and update executor
-                                tools = Tools(scheduler=self.scheduler, task_id=task.id)
+                                # Create new Tools instance with resource manager and update executor
+                                tools = Tools(scheduler=self.scheduler, task_id=task.id, resource_manager=self)
                                 executor.set_task_id(task.id, tools.controller)
                                 
                                 # Start execution with reused executor

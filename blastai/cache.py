@@ -56,7 +56,7 @@ class CacheManager:
         """
         if not self._dummy_agent:
             # Create fresh Tools instance for dummy agent
-            tools = Tools(scheduler=scheduler)
+            tools = Tools(scheduler=scheduler, resource_manager=None)  # No resource manager needed for cache
             
             # Create dummy agent with tools controller
             self._dummy_agent = Agent(

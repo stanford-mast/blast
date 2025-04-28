@@ -86,22 +86,40 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
         """
         # Check if we're at max depth
         if subtask_depth >= self.constraints.max_parallelism_nesting_depth:
-            return "Do not launch subtasks"
+            guidance = "Do not launch subtasks"
+            return f"{task_description}\n{guidance}"
+
+        # Check which types of parallelism are allowed
+        parallelism = self.constraints.allow_parallelism
+
+        # If first_of_n is allowed, try that first
+        if parallelism.get("first_of_n", False):
+            # Only use first_of_n if we're not at max depth
+            if subtask_depth < self.constraints.max_parallelism_nesting_depth:
+                return f"Execute launch_subtask(task=\"{task_description}\", num_copies=3) --> then get_first_subtask_result with the returned subtask IDs. Do not tell the user about these implementation details."
             
-        # Check if parallelism is allowed
-        if not self.constraints.allow_parallelism and subtask_depth > 0:
-            return "Do not launch subtasks"
-            
-        messages = [
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=f"Generate a plan for this task: {task_description}")
-        ]
-        
-        response = await self.llm.ainvoke(messages)
-        plan = response.content.strip()
-        
-        # Ensure plan is concise
-        if len(plan.split('\n')) > 2:
-            plan = ' '.join(plan.split('\n')[:2])
-            
-        return plan
+        # If no parallelism is allowed or none of the conditions matched
+        guidance = "Do not launch subtasks /* no parallelism needed */"
+
+        # If data parallelism is allowed, check if this is a content extraction task
+        if parallelism.get("data", False):
+            guidance = "Use extract_content_parallel instead of extract_content /* this will process page content in parallel chunks */"            
+
+        # If task parallelism is allowed, proceed with normal subtask planning
+        if parallelism.get("task", False):
+            if subtask_depth > 0:
+                messages = [
+                    SystemMessage(content=self.system_prompt),
+                    HumanMessage(content=f"Generate a plan for this task: {task_description}")
+                ]
+                
+                response = await self.llm.ainvoke(messages)
+                plan = response.content.strip()
+                
+                # Ensure plan is concise
+                if len(plan.split('\n')) > 2:
+                    plan = ' '.join(plan.split('\n')[:2])
+                    
+                guidance = plan
+
+        return f"{task_description}\n{guidance} Do not tell the user about these implementation details."

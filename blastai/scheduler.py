@@ -292,7 +292,7 @@ class Scheduler:
                 except Exception as e:
                     logger.error(f"Task {task_id} failed: {e}")
                     # Mark task as complete but failed
-                    await self.complete_task(task_id)
+                    await self.complete_task(task_id, success=False)
                     raise
                     
             # Wait a bit before checking again
@@ -344,7 +344,7 @@ class Scheduler:
                         try:
                             result = await subtask.executor_run_task
                             await self.complete_task(subtask_id, result)
-                            if subtask_id not in yielded_completed_subtasks:
+                            if result and subtask_id not in yielded_completed_subtasks:  # Only yield if there's a valid result
                                 yielded_completed_subtasks.add(subtask_id)
                                 yield AgentHistoryListResponse.from_history(
                                     history=result,
@@ -354,7 +354,7 @@ class Scheduler:
                             logger.error(f"Subtask {subtask_id} failed: {e}")
                 
                 # Handle cached subtask results
-                elif subtask.is_completed and subtask_id not in yielded_completed_subtasks:
+                elif subtask.is_completed and subtask.result and subtask_id not in yielded_completed_subtasks:  # Only yield if there's a valid result
                     yielded_completed_subtasks.add(subtask_id)
                     yield AgentHistoryListResponse.from_history(
                         history=subtask.result,
@@ -389,10 +389,11 @@ class Scheduler:
                     
             # Handle cached main task result
             elif task.is_completed:
-                yield AgentHistoryListResponse.from_history(
-                    history=task.result,
-                    task_id=task_id
-                )
+                if task.result:  # Only yield if there's a valid result
+                    yield AgentHistoryListResponse.from_history(
+                        history=task.result,
+                        task_id=task_id
+                    )
                 break
                     
             await asyncio.sleep(0.1)  # Prevent tight loop
@@ -437,21 +438,18 @@ class Scheduler:
                     break
                 current_id = parent.parent_task_id
                 
-            # Get plan from planner with depth info
+            # Get plan from planner
             plan = await self.planner.plan(task.description, subtask_depth=depth)
             logger.debug(f"Planned task {task_id} to '{task.description}' with '{plan}'")
             
-            # Combine plan and description
-            full_description = f"{task.description}\n{plan}"
-            
-            # Run with combined description
+            # Start execution coroutine
             logger.debug(f"Running task {task_id} with browser_use")
-            coro = executor.run(full_description, task.initial_url)
+            coro = executor.run(plan, task.initial_url)
             
         # Create and store task
         task.executor_run_task = asyncio.create_task(coro)
-        
-    async def complete_task(self, task_id: str, result: Optional[AgentHistoryList] = None):
+
+    async def complete_task(self, task_id: str, result: Optional[AgentHistoryList] = None, success: bool = None):
         """Mark task as completed.
         
         This method:
@@ -463,6 +461,7 @@ class Scheduler:
         Args:
             task_id: Task ID
             result: Optional task result
+            success: Optional success flag (defaults to True if result provided, False if not)
         """
         task = self.tasks.get(task_id)
         if not task:
@@ -475,24 +474,28 @@ class Scheduler:
         task.time_complete = datetime.now()
         task.executor_run_task = None  # Clear the run task since it's done
         
+        # Set success flag based on result or explicit success parameter
+        task.success = success if success is not None else bool(result)
+        
         if result:
             task.result = result
-            task.success = True
-            logger.debug(f"Completed task {task_id}")
+            logger.debug(f"Completed task {task_id} successfully")
             
-            # Cache result
-            self.cache_manager.update_result(
-                task_lineage=self.get_lineage(task_id),
-                result=result,
-                cache_control=task.cache_options
-            )
-            
-            # Cache plan if successful
-            self.cache_manager.update_plan(
-                task_lineage=self.get_lineage(task_id),
-                plan=result,
-                cache_control=task.cache_options
-            )
+            # Cache result and plan only for successful tasks
+            if task.success:
+                self.cache_manager.update_result(
+                    task_lineage=self.get_lineage(task_id),
+                    result=result,
+                    cache_control=task.cache_options
+                )
+                
+                self.cache_manager.update_plan(
+                    task_lineage=self.get_lineage(task_id),
+                    plan=result,
+                    cache_control=task.cache_options
+                )
+        else:
+            logger.debug(f"Completed task {task_id} without result")
             
     def get_lineage(self, task_id: str) -> List[str]:
         """Get list of task descriptions representing the conversation history.
