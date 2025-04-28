@@ -7,6 +7,7 @@ import time
 from typing import Dict, Optional, Any, List
 from browser_use import Controller, ActionResult
 from langchain_core.prompts import PromptTemplate
+from langchain_core.language_models.chat_models import BaseChatModel
 from .scheduler import Scheduler
 
 logger = logging.getLogger(__name__)
@@ -171,7 +172,7 @@ class Tools:
             return await self._get_first_subtask_result(scheduler, task_ids, as_final=False)
 
         @self.controller.action("Extract content in parallel chunks")
-        async def extract_content_parallel(goal: str, should_strip_link_urls: bool = False, browser: Optional[Any] = None, page_extraction_llm: Optional[Any] = None) -> ActionResult:
+        async def extract_content_parallel(goal: str, should_strip_link_urls: bool = False, browser: Optional[Any] = None, page_extraction_llm: Optional[BaseChatModel] = None) -> ActionResult:
             """Extract content by splitting into large chunks and processing in parallel.
             
             Args:
@@ -206,9 +207,9 @@ class Tools:
                         content += f'\n\nIFRAME {iframe.url}:\n'
                         content += markdownify.markdownify(await iframe.content())
 
-                # Split into large chunks (targeting >5s processing time)
-                # Using ~2500 chars per chunk as rough estimate
-                chunk_size = 2500
+                # Calculate chunk size to ensure max 8 chunks while maintaining min 3000 chars per chunk
+                total_length = len(content)
+                chunk_size = max(total_length // 8, 3000)  # At least 3000 chars per chunk
                 chunks = []
                 current_chunk = []
                 current_size = 0
@@ -232,21 +233,23 @@ class Tools:
                 prompt = 'Your task is to extract the content of this chunk of text. You will be given a chunk and a goal and you should extract all relevant information around this goal from the chunk. If the goal is vague, summarize the chunk. Respond in json format. Extraction goal: {goal}, Chunk: {chunk}'
                 template = PromptTemplate(input_variables=['goal', 'chunk'], template=prompt)
 
-                tasks = []
-                for chunk in chunks:
-                    if not page_extraction_llm:
-                        return ActionResult(
-                            success=False,
-                            error="page_extraction_llm is required for content extraction"
-                        )
-                    tasks.append(page_extraction_llm.ainvoke(template.format(goal=goal, chunk=chunk)))
-
-                results = await asyncio.gather(*tasks)
+                # tasks = []
+                # for chunk in chunks:
+                #     if not page_extraction_llm:
+                #         return ActionResult(
+                #             success=False,
+                #             error="page_extraction_llm is required for content extraction"
+                #         )
+                #     tasks.append(page_extraction_llm.ainvoke(template.format(goal=goal, chunk=chunk)))
+                # Process all chunks in one batch
+                results = await page_extraction_llm.abatch([
+                    template.format(goal=goal, chunk=chunk) for chunk in chunks
+                ])
                 
                 end_time = time.time()
                 total_time = end_time - start_time
                 avg_time = total_time / len(chunks)
-                # logger.debug(f"Parallel extraction of {len(chunks)} chunks completed in {total_time:.2f}s (avg {avg_time:.2f}s per chunk)")
+                logger.debug(f"Parallel extraction of {len(chunks)} chunks completed in {total_time:.2f}s (avg {avg_time:.2f}s per chunk), Content length: {total_length}, using chunk size: {chunk_size}")
                 
                 # Combine results
                 combined_result = {}
