@@ -22,10 +22,15 @@ Resource Lifecycle:
    - Clears references and cache
 
 Resource Constraints:
-- Maximum concurrent browsers
+- Maximum concurrent browser contexts
 - Maximum memory usage
 - Cost per minute/hour limits
 - Minimum running executors (3)
+
+Browser Management:
+- Each executor has its own isolated browser context
+- When share_browser_process=true, contexts share a single browser process
+- When share_browser_process=false, each context gets its own process
 
 Module Responsibilities:
 - ResourceManager owns executor lifecycle and resource tracking
@@ -35,19 +40,22 @@ Module Responsibilities:
 
 import asyncio
 import logging
+import os
 import psutil
 import time
 from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from browser_use import Browser, BrowserConfig
+from browser_use import Browser, BrowserConfig, Agent
 from browser_use.browser.context import BrowserContext
 from langchain_openai import ChatOpenAI
 
 from .config import Settings, Constraints
 from .executor import Executor
 from .tools import Tools
+from .secrets import SecretsManager
+from .utils import find_local_browser
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +72,10 @@ class ResourceManager:
         self.engine_hash = engine_hash
         self.cache_manager = cache_manager
         
+        # Shared browser instance when share_browser_process is enabled
+        self._shared_browser = None
+        self._shared_browser_users = 0
+        
         self._allocate_task = None
         self._monitor_task = None
         self._running = False
@@ -72,6 +84,10 @@ class ResourceManager:
         self._start_time = time.time()  # Track when the resource manager was created
         self._prev_not_allocated = 0  # Track previous not_allocated count
         self._prev_completed_with_executor = 0
+        
+        # Initialize secrets manager
+        self._secrets_manager = SecretsManager()
+        self._secrets_manager.load_secrets(self.settings.secrets_file_path)
 
         # For debugging output
         self._last_constraint_report = 0.0  # Last time we reported constraint violation
@@ -100,6 +116,16 @@ class ResourceManager:
                     await self._monitor_task
                 except asyncio.CancelledError:
                     pass
+                    
+            # Cleanup shared browser if it exists
+            if self._shared_browser:
+                try:
+                    await self._shared_browser.close()
+                    self._shared_browser = None
+                    self._shared_browser_users = 0
+                    logger.debug("Cleaned up shared browser instance during stop")
+                except Exception as e:
+                    logger.error(f"Error cleaning up shared browser: {e}")
                     
     def _get_total_memory_usage(self) -> float:
         """Get total memory usage for all browser processes created since engine start.
@@ -241,16 +267,49 @@ class ResourceManager:
         browser_config = BrowserConfig(
             headless=self.constraints.require_headless
         )
-        browser = Browser(config=browser_config)
-        browser_context = BrowserContext(browser=browser)
+
+        # Handle local browser path if not "none"
+        if self.settings.local_browser_path != "none":
+            if self.settings.local_browser_path == "auto":
+                # Auto-detect browser path
+                browser_path = find_local_browser()
+                if browser_path:
+                    browser_config.browser_binary_path = browser_path
+                    logger.debug(f"Using auto-detected browser at: {browser_path}")
+            else:
+                # Use specified path directly
+                browser_path = self.settings.local_browser_path
+                if not os.path.exists(browser_path):
+                    logger.error(f"Specified local browser path does not exist: {browser_path}")
+                    return None
+                browser_config.browser_binary_path = browser_path
+
+        try:
+            if self.constraints.share_browser_process and self._shared_browser is None:
+                # Create shared browser if it doesn't exist
+                self._shared_browser = Browser(config=browser_config)
+                self._shared_browser_users = 0
+
+            if self.constraints.share_browser_process:
+                # Use shared browser with new context
+                browser = self._shared_browser
+                self._shared_browser_users += 1
+            else:
+                # Create new browser instance
+                browser = Browser(config=browser_config)
+            browser_context = BrowserContext(browser=browser)
+        except Exception as e:
+            logger.error(f"Failed to create browser with config: {e}")
+            return None
         
-        # Create fresh Tools instance with scheduler, task_id and resource manager for this executor
-        tools = Tools(scheduler=self.scheduler, task_id=task_id, resource_manager=self)
-        
-        # Create LLM
+        # Create LLMs
         llm = ChatOpenAI(model=self.constraints.llm_model)
+        llm_mini = ChatOpenAI(model=self.constraints.llm_model_mini)
         
-        # Create and return executor
+        # Create fresh Tools instance with scheduler, task_id, resource manager and mini LLM
+        tools = Tools(scheduler=self.scheduler, task_id=task_id, resource_manager=self, llm_model=llm_mini)
+        
+        # Create and return executor with sensitive data
         logger.debug(f"Created new executor for task {task_id}")
         return Executor(
             browser=browser,
@@ -261,7 +320,8 @@ class ResourceManager:
             task_id=task_id,
             settings=self.settings,
             engine_hash=self.engine_hash,
-            scheduler=self.scheduler
+            scheduler=self.scheduler,
+            sensitive_data=self._secrets_manager.get_secrets()
         )
         
     async def end_task(self, task_id: str):
@@ -316,7 +376,20 @@ class ResourceManager:
         self._total_cost_evicted_executors += task.executor.get_total_cost()
         
         # Clean up executor
-        await task.executor.cleanup()
+        if self.constraints.share_browser_process and task.executor.browser == self._shared_browser:
+            # Only cleanup context when using shared browser
+            await task.executor.browser_context.close()
+            self._shared_browser_users -= 1
+            logger.debug(f"Cleaned up shared browser context (remaining users: {self._shared_browser_users})")
+            
+            # Cleanup shared browser if no more users
+            if self._shared_browser_users == 0:
+                await self._shared_browser.close()
+                self._shared_browser = None
+                logger.debug("Cleaned up shared browser instance")
+        else:
+            # Full cleanup for non-shared browsers
+            await task.executor.cleanup()
         
         # Clear executor reference
         task.executor = None

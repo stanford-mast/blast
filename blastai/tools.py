@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Dict, Optional, Any, List
 from browser_use import Controller, ActionResult
+import markdownify
 from langchain_core.prompts import PromptTemplate
 from langchain_core.language_models.chat_models import BaseChatModel
 from .scheduler import Scheduler
@@ -15,15 +16,24 @@ logger = logging.getLogger(__name__)
 class Tools:
     """Manages a Controller instance with registered tools."""
     
-    def __init__(self, scheduler: Optional[Scheduler] = None, task_id: Optional[str] = None, resource_manager = None):
+    def __init__(self, scheduler: Optional[Scheduler] = None, task_id: Optional[str] = None,
+                 resource_manager = None, llm_model: Optional[BaseChatModel] = None):
         """Initialize Tools with optional scheduler and task_id.
         
         Args:
             scheduler: Optional scheduler instance for subtask management
             task_id: Optional task ID for tracking parent-child relationships
             resource_manager: Optional resource manager for task lifecycle management
+            llm_model: Optional LLM model to use for content extraction
         """
-        self.controller = Controller()
+        self.llm_model = llm_model
+        # Determine which actions to exclude based on constraints
+        exclude_actions = []
+        if scheduler and scheduler.constraints.allow_parallelism.get("data", False):
+            # If data parallelism is enabled, exclude regular extract_content
+            exclude_actions.append("extract_content")
+            
+        self.controller = Controller(exclude_actions=exclude_actions)
         self.task_id = task_id
         self.cache_control = ""
         self.resource_manager = resource_manager
@@ -168,37 +178,31 @@ class Tools:
             Returns:
                 First available result from any subtask
             """
-            task_ids = [tid.strip() for tid in comma_separated_list_of_task_ids.split(',')]
-            return await self._get_first_subtask_result(scheduler, task_ids, as_final=False)
-
-        @self.controller.action("Extract content in parallel chunks")
-        async def extract_content_parallel(goal: str, should_strip_link_urls: bool = False, browser: Optional[Any] = None, page_extraction_llm: Optional[BaseChatModel] = None) -> ActionResult:
-            """Extract content by splitting into large chunks and processing in parallel.
-            
-            Args:
-                goal: Extraction goal/query
-                should_strip_link_urls: Whether to strip URLs from links
-                browser: Browser instance
-                
-            Returns:
-                Combined results from all chunks
-            """
-            if not browser:
+            # Filter out current task ID from list
+            task_ids = [tid.strip() for tid in comma_separated_list_of_task_ids.split(',')
+                       if tid.strip() != self.task_id]
+            if not task_ids:
                 return ActionResult(
                     success=False,
-                    error="Browser instance required"
+                    error="No valid task IDs provided (filtered out current task)"
                 )
+            return await self._get_first_subtask_result(scheduler, task_ids, as_final=False)
+
+        @self.controller.action("Extract page content to retrieve specific information from the page, e.g. all company names, a specific description, all information about, links with companies in structured format or simply links")
+        async def extract_content_fast(goal: str, should_strip_link_urls: bool = False, browser: Optional[Any] = None, page_extraction_llm: Optional[BaseChatModel] = None) -> ActionResult:
+            """Extract content by splitting into chunks and processing in parallel."""
+            if not browser:
+                return ActionResult(success=False, error="Browser instance required")
 
             try:
+                # Record overall start time
+                overall_start = time.time()
+
                 # Get raw content
                 page = await browser.get_current_page()
-                import markdownify
-                import json
-
-                strip = []
-                if should_strip_link_urls:
-                    strip = ['a', 'img']
-
+                content_start = time.time()
+                
+                strip = ['a', 'img'] if should_strip_link_urls else []
                 content = markdownify.markdownify(await page.content(), strip=strip)
 
                 # Add iframe content
@@ -206,10 +210,26 @@ class Tools:
                     if iframe.url != page.url and not iframe.url.startswith('data:'):
                         content += f'\n\nIFRAME {iframe.url}:\n'
                         content += markdownify.markdownify(await iframe.content())
+                
+                content_time = time.time() - content_start
+                total_chars = len(content)
 
-                # Calculate chunk size to ensure max 8 chunks while maintaining min 3000 chars per chunk
-                total_length = len(content)
-                chunk_size = max(total_length // 8, 3000)  # At least 3000 chars per chunk
+                # Get LLM instance ID
+                llm_id = id(page_extraction_llm)
+
+                # # First try with whole content (commented out for performance)
+                # prompt = 'Your task is to extract the content of the page. You will be given a page and a goal and you should extract all relevant information around this goal from the page. If the goal is vague, summarize the page. Respond in json format. Extraction goal: {goal}, Page: {page}'
+                # template = PromptTemplate(input_variables=['goal', 'page'], template=prompt)
+                
+                # # Time single LLM call
+                # single_start = time.time()
+                # single_output = await page_extraction_llm.ainvoke(template.format(goal=goal, page=content))
+                # single_time = time.time() - single_start
+
+                # Now try with parallel chunks
+                chunk_start = time.time()
+                chunk_size = max(total_chars // 8, 3000)  # At least 3000 chars per chunk
+                # Split content into chunks
                 chunks = []
                 current_chunk = []
                 current_size = 0
@@ -226,72 +246,94 @@ class Tools:
                         
                 if current_chunk:
                     chunks.append('\n'.join(current_chunk))
-
-                start_time = time.time()
+                chunk_time = time.time() - chunk_start
 
                 # Process chunks in parallel
-                prompt = 'Your task is to extract the content of this chunk of text. You will be given a chunk and a goal and you should extract all relevant information around this goal from the chunk. If the goal is vague, summarize the chunk. Respond in json format. Extraction goal: {goal}, Chunk: {chunk}'
-                template = PromptTemplate(input_variables=['goal', 'chunk'], template=prompt)
+                parallel_start = time.time()
+                chunk_prompt = 'Your task is to extract the content of this chunk of text. You will be given a chunk and a goal and you should extract all relevant information around this goal from the chunk. If the goal is vague, summarize the chunk. Respond in json format. Extraction goal: {goal}, Chunk: {chunk}'
+                chunk_template = PromptTemplate(input_variables=['goal', 'chunk'], template=chunk_prompt)
 
-                # tasks = []
-                # for chunk in chunks:
-                #     if not page_extraction_llm:
-                #         return ActionResult(
-                #             success=False,
-                #             error="page_extraction_llm is required for content extraction"
-                #         )
-                #     tasks.append(page_extraction_llm.ainvoke(template.format(goal=goal, chunk=chunk)))
-                # Process all chunks in one batch
-                results = await page_extraction_llm.abatch([
-                    template.format(goal=goal, chunk=chunk) for chunk in chunks
+                # Use provided model or fallback to page_extraction_llm
+                extraction_model = self.llm_model or page_extraction_llm
+                parallel_results = await extraction_model.abatch([
+                    chunk_template.format(goal=goal, chunk=chunk) for chunk in chunks
                 ])
-                
-                end_time = time.time()
-                total_time = end_time - start_time
-                avg_time = total_time / len(chunks)
-                logger.debug(f"Parallel extraction of {len(chunks)} chunks completed in {total_time:.2f}s (avg {avg_time:.2f}s per chunk), Content length: {total_length}, using chunk size: {chunk_size}")
-                
-                # Combine results
-                combined_result = {}
-                for result in results:
-                    try:
-                        chunk_data = json.loads(result.content)
-                        # Merge dictionaries recursively
-                        def merge_dicts(d1, d2):
-                            for k, v in d2.items():
-                                if k in d1 and isinstance(d1[k], dict) and isinstance(v, dict):
-                                    merge_dicts(d1[k], v)
-                                elif k in d1 and isinstance(d1[k], list) and isinstance(v, list):
-                                    d1[k].extend(v)
-                                else:
-                                    if k in d1:
-                                        if isinstance(d1[k], list):
-                                            if isinstance(v, list):
-                                                d1[k].extend(v)
-                                            else:
-                                                d1[k].append(v)
-                                        else:
-                                            d1[k] = [d1[k], v]
-                                    else:
-                                        d1[k] = v
-                        merge_dicts(combined_result, chunk_data)
-                    except json.JSONDecodeError:
-                        # If not JSON, treat as text
-                        if not combined_result:
-                            combined_result = result.content
-                        else:
-                            combined_result += "\n" + result.content
+                parallel_time = time.time() - parallel_start
 
-                msg = f'📄  Extracted from page (parallel):\n{json.dumps(combined_result, indent=2) if isinstance(combined_result, dict) else combined_result}\n'
-                return ActionResult(
-                    success=True,
-                    extracted_content=msg
-                )
+                # Log timing comparison
+                overall_time = time.time() - overall_start
+                start_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(overall_start))
+                end_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(overall_start + overall_time))
+                
+                # logger.debug(
+                #     f"extract_content_fast [{start_time} -> {end_time}] Content ({total_chars} chars): {content_time:.2f}s, "
+                #     f"Single LLM ({llm_id}): {single_time:.2f}s, Chunking ({len(chunks)} chunks): {chunk_time:.2f}s, "
+                #     f"Parallel LLM: {parallel_time:.2f}s, Total: {overall_time:.2f}s"
+                # )
+
+                # Helper function to merge JSON objects
+                def merge_json(d1: dict, d2: dict) -> dict:
+                    result = d1.copy()
+                    for k, v in d2.items():
+                        if k in result:
+                            if isinstance(result[k], dict) and isinstance(v, dict):
+                                result[k] = merge_json(result[k], v)
+                            elif isinstance(result[k], list) and isinstance(v, list):
+                                result[k].extend(v)
+                            elif isinstance(result[k], list):
+                                result[k].append(v)
+                            elif isinstance(v, list):
+                                result[k] = [result[k]] + v
+                            else:
+                                result[k] = [result[k], v]
+                        else:
+                            result[k] = v
+                    return result
+
+                # Process and merge results
+                merged_json = {}
+                text_results = []
+
+                # # Try to parse single output as JSON
+                # try:
+                #     single_json = json.loads(single_output.content)
+                #     merged_json = single_json
+                # except json.JSONDecodeError:
+                #     text_results.append("Full page analysis:")
+                #     text_results.append(single_output.content)
+
+                # Process and merge parallel results
+                for i, result in enumerate(parallel_results):
+                    try:
+                        chunk_json = json.loads(result.content)
+                        merged_json = merge_json(merged_json, chunk_json)
+                    except json.JSONDecodeError:
+                        text_results.append(result.content)
+
+                # Build final output
+                output_parts = []
+                if merged_json:
+                    output_parts.append("")
+                    output_parts.append(json.dumps(merged_json, indent=2))
+                if text_results:
+                    if output_parts:
+                        output_parts.append("\n")
+                    output_parts.extend(text_results)
+
+                msg = f'📄 Extracted from page:\n{"\n".join(output_parts)}\n'
+                return ActionResult(extracted_content=msg, include_in_memory=True)
                 
             except Exception as e:
+                # Log timing info even on failure
+                error_time = time.time() - overall_start
+                logger.error(
+                    f"Failed after {error_time:.2f}s: {str(e)}\n"
+                    f"Content extraction: {content_time:.2f}s, "
+                    f"LLM ({llm_id}): {single_time if 'single_time' in locals() else 'N/A'}s"
+                )
                 return ActionResult(
                     success=False,
-                    error=f"Failed to extract content in parallel: {str(e)}"
+                    error=f"Failed to extract content: {str(e)}"
                 )
 
         @self.controller.action("Get result(s) of subtask(s)")
@@ -305,8 +347,14 @@ class Tools:
             Returns:
                 Combined results of all subtasks
             """
-            # Parse task IDs
-            task_ids = [tid.strip() for tid in comma_separated_list_of_task_ids.split(',')]
+            # Filter out current task ID from list
+            task_ids = [tid.strip() for tid in comma_separated_list_of_task_ids.split(',')
+                       if tid.strip() != self.task_id]
+            if not task_ids:
+                return ActionResult(
+                    success=False,
+                    error="No valid task IDs provided (filtered out current task)"
+                )
             
             # Create tasks for getting results in parallel
             tasks = [scheduler.get_task_result(task_id) for task_id in task_ids]

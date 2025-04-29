@@ -25,7 +25,8 @@ class Executor:
     
     def __init__(self, browser: Browser, browser_context: BrowserContext, controller: Controller,
                  llm: ChatOpenAI, constraints: Constraints, task_id: str,
-                 settings: Settings = None, engine_hash: str = None, scheduler = None):
+                 settings: Settings = None, engine_hash: str = None, scheduler = None,
+                 sensitive_data: Optional[Dict[str, str]] = None):
         """Initialize executor with browser, controller, LLM and constraints."""
         self.browser = browser
         self.browser_context = browser_context
@@ -36,6 +37,7 @@ class Executor:
         self.settings = settings or Settings()
         self.engine_hash = engine_hash
         self.scheduler = scheduler
+        self.sensitive_data = sensitive_data or {}
         self.agent: Optional[Agent] = None
         self._paused = False
         self._running = False
@@ -120,7 +122,8 @@ class Executor:
                         controller=self.controller,
                         llm=self.llm,
                         use_vision=self.constraints.allow_vision,
-                        initial_actions=initial_actions
+                        initial_actions=initial_actions,
+                        sensitive_data=self.sensitive_data
                     )
                 else:
                     url = self._get_url_or_search(initial_url)
@@ -147,7 +150,8 @@ class Executor:
                         browser_context=self.browser_context,
                         controller=self.controller,
                         llm=self.llm,
-                        use_vision=self.constraints.allow_vision
+                        use_vision=self.constraints.allow_vision,
+                        sensitive_data=self.sensitive_data
                     )
                 
                 # Run plan with cost tracking

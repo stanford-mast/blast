@@ -224,6 +224,9 @@ class Scheduler:
                         cache_control: str = "") -> str:
         """Schedule a subtask of an existing task.
         
+        Subtasks have a parent-child relationship but can run in parallel.
+        They do not have prerequisite relationships with each other.
+        
         Args:
             description: Task description
             parent_task_id: ID of parent task
@@ -235,11 +238,14 @@ class Scheduler:
         if parent_task_id not in self.tasks:
             raise ValueError(f"Parent task {parent_task_id} not found")
             
-        return self.schedule_task(
+        # Schedule task with parent but no prerequisite
+        task_id = self.schedule_task(
             description=description,
             parent_task_id=parent_task_id,
+            prerequisite_task_id=None,  # Explicitly set no prerequisite
             cache_control=cache_control
         )
+        return task_id
         
     async def get_task_result(self, task_id: str) -> Optional[AgentHistoryList]:
         """Get task result, waiting for completion if needed.

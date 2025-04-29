@@ -55,13 +55,16 @@ class CacheManager:
             scheduler: Scheduler instance for tools
         """
         if not self._dummy_agent:
-            # Create fresh Tools instance for dummy agent
-            tools = Tools(scheduler=scheduler, resource_manager=None)  # No resource manager needed for cache
+            # Create LLM for dummy agent
+            llm = ChatOpenAI(model=self.constraints.llm_model_mini or "gpt-4.1-mini")  # Use mini model for cache
+            
+            # Create fresh Tools instance for dummy agent with LLM
+            tools = Tools(scheduler=scheduler, resource_manager=None, llm_model=llm)  # No resource manager needed for cache
             
             # Create dummy agent with tools controller
             self._dummy_agent = Agent(
                 task="dummy",
-                llm=ChatOpenAI(model=self.constraints.llm_model or "gpt-4.1"),  # Use same model as default_config.yaml
+                llm=llm,
                 controller=tools.controller
             )
             

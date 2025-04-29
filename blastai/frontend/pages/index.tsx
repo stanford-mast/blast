@@ -335,6 +335,7 @@ export default function Home() {
                                         taskId={task.taskId}
                                         updates={task.updates}
                                         finalResult={task.finalResult}
+                                        mainTaskFinalResult={item.finalResult}
                                       />
                                     ))}
                                 </div>
@@ -343,7 +344,7 @@ export default function Home() {
                                 <motion.div
                                   initial={{ opacity: 0 }}
                                   animate={{ opacity: 1 }}
-                                  className="text-gray-300 mt-4"
+                                  className="text-gray-300 mt-4 whitespace-pre-wrap"
                                   transition={{ duration: 0.1 }}
                                 >
                                   {item.finalResult}

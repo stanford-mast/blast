@@ -1,18 +1,22 @@
 settings:
+  local_browser_path: "none"  # Path to Chrome/Chromium binary: "none" (default), "auto" for auto-detect, or specific path
   persist_cache: false
   browser_use_log_level: "info"  # Logging level for browser-use module
   blastai_log_level: "debug"  # Logging level for blastai module
+  secrets_file_path: "secrets.env"  # Path to secrets file containing sensitive data
 
 constraints:
   max_memory: null  # No default memory limit
-  max_concurrent_browsers: 10
+  max_concurrent_browsers: 20  # Maximum number of concurrent browser contexts
   max_cost_per_minute: null  # No default cost per minute limit
   max_cost_per_hour: null  # No default cost per hour limit
   allow_parallelism:
-    task: false
-    data: true
-    first_of_n: false
+    task: true  # Enable task-level parallelism for subtasks
+    data: true  # Enable data-level parallelism for content extraction
+    first_of_n: false  # Default disable first-result parallelism
   max_parallelism_nesting_depth: 1
   llm_model: "gpt-4.1"
+  llm_model_mini: "gpt-4.1-mini"
   allow_vision: false
   require_headless: true
+  share_browser_process: true  # Whether to share browser process between contexts

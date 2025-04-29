@@ -1,6 +1,49 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { XCircleIcon, ArrowsPointingOutIcon } from '@heroicons/react/24/solid';
 import { motion, AnimatePresence } from 'framer-motion';
+
+const formatTime = (ms: number) => {
+  const seconds = Math.floor(ms / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+  }
+  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+};
+
+const Timer = ({ startTime, endTime }: { startTime: number; endTime?: number }) => {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (endTime) {
+      // If we have an end time, show final duration
+      setElapsed(endTime - startTime);
+      return;
+    }
+
+    // Only start interval if we don't have an end time
+    const interval = setInterval(() => {
+      setElapsed(Date.now() - startTime);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [startTime, endTime]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute bottom-1.5 left-2 px-2 py-0.5 rounded-full bg-black/30 backdrop-blur-sm text-white text-xs font-mono"
+      style={{ minWidth: '4rem', textAlign: 'center' }}
+    >
+      {formatTime(elapsed)}
+    </motion.div>
+  );
+};
 
 interface TaskUpdate {
   content: string;
@@ -12,6 +55,7 @@ interface TaskBoxProps {
   taskId: string;
   updates: TaskUpdate[];
   finalResult?: string;
+  mainTaskFinalResult?: string;
   onClick?: () => void;
 }
 
@@ -20,7 +64,23 @@ interface TaskModalProps {
   onClose: () => void;
   updates: TaskUpdate[];
   finalResult?: string;
+  mainTaskFinalResult?: string;
+  taskId: string;
 }
+
+const getTaskTiming = (updates: TaskUpdate[], finalResult?: string) => {
+  if (updates.length === 0) return null;
+
+  const startTime = updates[0].timestamp;
+  let endTime: number | undefined;
+
+  // If we have a final result, find the last update's timestamp
+  if (finalResult) {
+    endTime = updates[updates.length - 1].timestamp;
+  }
+
+  return { startTime, endTime };
+};
 
 const findMatchingScreenshot = (thought: TaskUpdate, screenshots: TaskUpdate[], isLastThought: boolean): TaskUpdate | null => {
   // For the last thought, always show the most recent screenshot
@@ -54,7 +114,7 @@ const findMatchingScreenshot = (thought: TaskUpdate, screenshots: TaskUpdate[], 
   return null;
 };
 
-const TaskModal = ({ isOpen, onClose, updates, finalResult }: TaskModalProps) => {
+const TaskModal = ({ isOpen, onClose, updates, finalResult, taskId }: TaskModalProps) => {
   // Get all thoughts
   const thoughts = updates.filter(u => u.type === 'thought');
   const screenshots = updates.filter(u => u.type === 'screenshot');
@@ -78,6 +138,8 @@ const TaskModal = ({ isOpen, onClose, updates, finalResult }: TaskModalProps) =>
         selectedIndex === thoughts.length - 1
       )
     : null;
+
+  const timing = getTaskTiming(updates, finalResult);
 
   return (
     <AnimatePresence>
@@ -107,9 +169,9 @@ const TaskModal = ({ isOpen, onClose, updates, finalResult }: TaskModalProps) =>
             
             <div className="w-1/2">
               {currentScreenshot ? (
-                <img 
+                <img
                   src={`data:image/png;base64,${currentScreenshot.content}`}
-                  alt="Task Screenshot" 
+                  alt="Task Screenshot"
                   className="w-full h-full object-contain rounded-lg"
                 />
               ) : (
@@ -145,7 +207,7 @@ const TaskModal = ({ isOpen, onClose, updates, finalResult }: TaskModalProps) =>
   );
 };
 
-export const TaskBox = ({ taskId, updates, finalResult, onClick }: TaskBoxProps) => {
+export const TaskBox = ({ taskId, updates, finalResult, mainTaskFinalResult, onClick }: TaskBoxProps) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   
@@ -175,9 +237,9 @@ export const TaskBox = ({ taskId, updates, finalResult, onClick }: TaskBoxProps)
         >
           {latestScreenshot ? (
             <>
-              <img 
+              <img
                 src={`data:image/png;base64,${latestScreenshot}`}
-                alt="Task Screenshot" 
+                alt="Task Screenshot"
                 className="w-full h-full object-cover"
               />
               <AnimatePresence>
@@ -192,6 +254,19 @@ export const TaskBox = ({ taskId, updates, finalResult, onClick }: TaskBoxProps)
                   </motion.div>
                 )}
               </AnimatePresence>
+              {updates.length > 0 && (
+                <Timer
+                  startTime={updates[0].timestamp}
+                  endTime={
+                    // Stop timer when either:
+                    // 1. This task has a final result OR
+                    // 2. The main task has completed (indicated by mainTaskFinalResult)
+                    (finalResult || mainTaskFinalResult)
+                      ? updates[updates.length - 1].timestamp
+                      : undefined
+                  }
+                />
+              )}
             </>
           ) : (
             <div className="w-full h-full flex items-center justify-center">
@@ -207,6 +282,8 @@ export const TaskBox = ({ taskId, updates, finalResult, onClick }: TaskBoxProps)
         onClose={() => setIsModalOpen(false)}
         updates={updates}
         finalResult={finalResult}
+        mainTaskFinalResult={mainTaskFinalResult}
+        taskId={taskId}
       />
     </>
   );

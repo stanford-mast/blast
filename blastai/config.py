@@ -6,6 +6,11 @@ from pydantic import BaseModel, Field
 class Settings(BaseModel):
     """Settings for BLAST configuration."""
     
+    local_browser_path: str = Field(
+        default="none",
+        description="Path to local Chrome/Chromium browser binary. Set to 'auto' to auto-detect, 'none' to use default, or provide specific path"
+    )
+    
     persist_cache: bool = Field(
         default=False,
         description="Whether to persist cache between runs"
@@ -20,6 +25,11 @@ class Settings(BaseModel):
         default="error",
         description="Logging level for blastai module"
     )
+    
+    secrets_file_path: Optional[str] = Field(
+        default="secrets.env",
+        description="Path to secrets file containing sensitive data"
+    )
 
 class Constraints(BaseModel):
     """Constraints for BLAST execution."""
@@ -31,7 +41,7 @@ class Constraints(BaseModel):
     
     max_concurrent_browsers: int = Field(
         default=20,
-        description="Maximum number of concurrent browser instances"
+        description="Maximum number of concurrent browser contexts"
     )
     
     max_cost_per_minute: Optional[float] = Field(
@@ -46,9 +56,9 @@ class Constraints(BaseModel):
     
     allow_parallelism: dict = Field(
         default={
-            "task": False,
-            "data": False,
-            "first_of_n": True
+            "task": True,  # Enable task-level parallelism for subtasks
+            "data": True,  # Enable data-level parallelism for content extraction
+            "first_of_n": False  # Default disable first-result parallelism
         },
         description="Types of parallelism to allow: task (subtasks), data (content extraction), first_of_n (first result)"
     )
@@ -60,7 +70,12 @@ class Constraints(BaseModel):
     
     llm_model: str = Field(
         default="gpt-4.1",
-        description="LLM model to use"
+        description="Primary LLM model to use"
+    )
+
+    llm_model_mini: str = Field(
+        default="gpt-4.1-mini",
+        description="Smaller LLM model to use for parallel processing"
     )
     
     allow_vision: bool = Field(
@@ -73,28 +88,37 @@ class Constraints(BaseModel):
         description="Whether to require headless browser mode"
     )
     
+    share_browser_process: bool = Field(
+        default=True,
+        description="Whether to share browser process between requests"
+    )
+    
     @classmethod
     def create(cls, max_memory: Optional[str] = None,
                    max_concurrent_browsers: int = 20,
                    max_cost_per_minute: Optional[float] = None,
                    max_cost_per_hour: Optional[float] = None,
-                   allow_parallelism: dict = {"task": False, "data": False, "first_of_n": True},
+                   allow_parallelism: dict = {"task": True, "data": False, "first_of_n": False},
                    max_parallelism_nesting_depth: int = 1,
                    llm_model: str = "gpt-4.1",
+                   llm_model_mini: str = "gpt-4.1-mini",
                    allow_vision: bool = True,
-                   require_headless: bool = True) -> "Constraints":
+                   require_headless: bool = True,
+                   share_browser_process: bool = True) -> "Constraints":
         """Create Constraints from string values.
         
         Args:
             max_memory: Maximum memory as string (e.g. "4GB")
-            max_concurrent_browsers: Maximum concurrent browsers
+            max_concurrent_browsers: Maximum concurrent browser contexts
             max_cost_per_minute: Maximum cost per minute in USD
             max_cost_per_hour: Maximum cost per hour in USD
             allow_parallelism: Whether to allow parallel execution
             max_parallelism_nesting_depth: Maximum depth of nested parallel tasks
-            llm_model: LLM model identifier
+            llm_model: Primary LLM model identifier
+            llm_model_mini: Smaller LLM model for parallel processing
             allow_vision: Whether to allow vision capabilities
             require_headless: Whether to require headless mode
+            share_browser_process: Whether to share browser process between contexts
             
         Returns:
             Constraints instance
@@ -131,6 +155,8 @@ class Constraints(BaseModel):
             allow_parallelism=allow_parallelism,
             max_parallelism_nesting_depth=max_parallelism_nesting_depth,
             llm_model=llm_model,
+            llm_model_mini=llm_model_mini,
             allow_vision=allow_vision,
-            require_headless=require_headless
+            require_headless=require_headless,
+            share_browser_process=share_browser_process
         )

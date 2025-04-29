@@ -76,7 +76,8 @@ def load_config(config_path: Optional[str] = None) -> tuple[Settings, Constraint
         allow_parallelism=config['constraints']['allow_parallelism'],
         llm_model=config['constraints']['llm_model'],
         allow_vision=config['constraints']['allow_vision'],
-        require_headless=config['constraints']['require_headless']
+        require_headless=config['constraints']['require_headless'],
+        share_browser_process=config['constraints']['share_browser_process']
     )
     
     return settings, constraints

@@ -25,6 +25,7 @@ venv/
 env/
 ENV/
 .env
+secrets.env
 
 # IDE
 .idea/

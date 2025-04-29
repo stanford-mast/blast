@@ -89,37 +89,38 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
             guidance = "Do not launch subtasks"
             return f"{task_description}\n{guidance}"
 
-        # Check which types of parallelism are allowed
+        # Build guidance based on allowed parallelism types
         parallelism = self.constraints.allow_parallelism
+        guidance_parts = []
 
-        # If first_of_n is allowed, try that first
-        if parallelism.get("first_of_n", False):
-            # Only use first_of_n if we're not at max depth
-            if subtask_depth < self.constraints.max_parallelism_nesting_depth:
-                return f"Execute launch_subtask(task=\"{task_description}\", num_copies=3) --> then get_first_subtask_result with the returned subtask IDs. Do not tell the user about these implementation details."
-            
-        # If no parallelism is allowed or none of the conditions matched
-        guidance = "Do not launch subtasks /* no parallelism needed */"
+        # First check first_of_n
+        if parallelism.get("first_of_n", False) and subtask_depth < self.constraints.max_parallelism_nesting_depth:
+            guidance_parts.append(
+                f"Execute launch_subtask(task=\"{task_description}\", num_copies=3) --> then get_first_subtask_result with the returned subtask IDs"
+            )
 
-        # If data parallelism is allowed, check if this is a content extraction task
-        if parallelism.get("data", False):
-            guidance = "Use extract_content_parallel instead of extract_content /* this will process page content in parallel chunks */"            
-
-        # If task parallelism is allowed, proceed with normal subtask planning
+        # Add task parallelism if allowed
         if parallelism.get("task", False):
-            if subtask_depth > 0:
-                messages = [
-                    SystemMessage(content=self.system_prompt),
-                    HumanMessage(content=f"Generate a plan for this task: {task_description}")
-                ]
-                
-                response = await self.llm.ainvoke(messages)
-                plan = response.content.strip()
-                
-                # Ensure plan is concise
-                if len(plan.split('\n')) > 2:
-                    plan = ' '.join(plan.split('\n')[:2])
-                    
-                guidance = plan
+            messages = [
+                SystemMessage(content=self.system_prompt),
+                HumanMessage(content=f"Generate a plan for this task: {task_description}")
+            ]
+            response = await self.llm.ainvoke(messages)
+            plan = response.content.replace('Plan:', '').strip()
+            if len(plan.split('\n')) > 2:
+                plan = ' '.join(plan.split('\n')[:2])
+            guidance_parts.append('Execute: ' + plan)
 
-        return f"{task_description}\n{guidance} Do not tell the user about these implementation details."
+        # Add data parallelism if allowed
+        if parallelism.get("data", False):
+            guidance_parts.append(
+                "Use extract_content_fast instead of extract_content."
+            )
+
+        # Combine guidance or use default
+        if guidance_parts:
+            guidance = "\n\n".join(guidance_parts)
+        else:
+            guidance = "Do not launch subtasks."
+
+        return f"{task_description}\n\n{guidance} Do not tell the user about these implementation details."
