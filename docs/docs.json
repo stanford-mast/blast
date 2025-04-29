@@ -1,6 +1,9 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "name": "BLAST",
+  "description": "Browser-LLM Auto-Scaling Technology",
+  "logo": "assets/blast_icon_only.svg",
+  "favicon": "assets/blast_icon_only.svg",
   "colors": {
     "primary": "#ffe067"
   },
@@ -11,7 +14,6 @@
     "tabs": [],
     "dropdowns": [],
     "anchors": [],
-    "groups": [],
     "pages": ["index.mdx"]
   }
 }
