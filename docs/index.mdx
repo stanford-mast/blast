@@ -1,0 +1,51 @@
+# BLAST Documentation
+
+Welcome to the BLAST documentation! BLAST is a high-performance framework for building AI applications with browser automation. It provides a simple OpenAI-compatible API with powerful features like streaming, caching, and parallel execution.
+
+## Quick Links
+
+- [Getting Started](/get-started/introduction)
+- [API Reference](/guides/openai-compatible-api)
+- [GitHub Repository](https://github.com/stanford-mast/blast)
+
+## Features
+
+- 🔄 **OpenAI-Compatible API** - Drop-in replacement for OpenAI's API
+- 🚄 **High Performance** - Built for concurrency and parallel processing
+- 📡 **Streaming Support** - Real-time streaming of AI responses
+- 🔧 **Flexible Engine** - Customizable engine for different AI models
+- 💾 **Smart Caching** - Intelligent caching system for improved performance
+- 📊 **Resource Management** - Efficient handling of compute resources
+
+## Installation
+
+```bash
+pip install blastai
+```
+
+## Quick Start
+
+Start the server:
+```bash
+blastai serve
+```
+
+Use it like the OpenAI API:
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",
+    base_url="http://127.0.0.1:8000"
+)
+
+# Stream real-time browser actions
+stream = client.responses.create(
+    model="not-needed",
+    input="Search for Python documentation",
+    stream=True
+)
+
+for event in stream:
+    if event.type == "response.output_text.delta":
+        print(event.delta, end="", flush=True)

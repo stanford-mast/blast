@@ -1,67 +1,17 @@
 {
-  "$schema": "https://mintlify.com/schema.json",
+  "$schema": "https://mintlify.com/docs.json",
   "name": "BLAST",
-  "logo": {
-    "dark": "/assets/blast_icon_only.svg",
-    "light": "/assets/blast_icon_only.svg",
-    "href": "https://github.com/calebwin/blast"
-  },
-  "favicon": "/assets/blast_icon_only.svg",
   "colors": {
-    "primary": "#FFE067",
-    "light": "#FFFFFF",
-    "dark": "#1F1F1F",
-    "anchors": {
-      "from": "#FFE067",
-      "to": "#FFE067"
-    },
-    "background": {
-      "dark": "#1F1F1F"
-    }
+    "primary": "#ffe067"
   },
-  "feedback": {
-    "thumbsRating": true,
-    "raiseIssue": true,
-    "suggestEdit": true
-  },
-  "topbarLinks": [
-    {
-      "name": "Github",
-      "url": "https://github.com/calebwin/blast"
-    }
-  ],
-  "navigation": [
-    {
-      "group": "Get Started",
-      "pages": [
-        "get-started/introduction",
-        "get-started/quickstart"
-      ]
-    },
-    {
-      "group": "Guides",
-      "pages": [
-        "guides/openai-compatible-api",
-        "guides/engine-api",
-        "guides/concurrency",
-        "guides/streaming",
-        "guides/constraints",
-        "guides/settings",
-        "guides/parallelism",
-        "guides/caching"
-      ]
-    },
-    {
-      "group": "Development",
-      "pages": [
-        "development/roadmap",
-        "development/internals",
-        "development/setup",
-        "development/contributing"
-      ]
-    }
-  ],
-  "footerSocials": {
-    "github": "https://github.com/calebwin/blast"
+  "theme": "mint",
+  "navigation": {
+    "languages": [],
+    "versions": [],
+    "tabs": [],
+    "dropdowns": [],
+    "anchors": [],
+    "groups": [],
+    "pages": ["index.mdx"]
   }
 }

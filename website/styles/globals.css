@@ -3,15 +3,135 @@
 @tailwind utilities;
 
 :root {
-  --blast-yellow: #FFE067;
-  --dark: #1F1F1F;
+  --blast-yellow: #ffe067;
+  --blast-dark: #1f1f1f;
+  --blast-input: #262626;
+  --blast-input-hover: #282828;
+  --blast-input-focus: #2a2a2a;
 }
 
 body {
-  background-color: var(--dark);
-  color: white;
+  @apply bg-[#1f1f1f] text-white;
 }
 
+.fade-in {
+  animation: fadeIn 0.5s ease-in forwards;
+}
+
+.fade-out {
+  animation: fadeOut 0.5s ease-in forwards;
+}
+
+.fade-in-slow {
+  animation: fadeIn 1s ease-in forwards;
+}
+
+.fade-out-slow {
+  animation: fadeOut 1s ease-in forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.05);
+  }
+}
+
+.task-box {
+  @apply bg-[#262626] rounded-lg p-4 transition-all duration-100;
+}
+
+.task-box:hover {
+  @apply bg-[#282828];
+}
+
+.chat-input {
+  @apply text-white transition-colors duration-150;
+}
+
+.chat-input:hover {
+  background-color: var(--blast-input-hover);
+}
+
+.chat-input:focus {
+  background-color: var(--blast-input-focus);
+}
+
+.chat-input[contenteditable]:empty:before {
+  content: attr(placeholder);
+  @apply text-gray-400;
+}
+
+.submit-button {
+  @apply rounded-full transition-all duration-150 disabled:opacity-40;
+}
+
+.submit-button:not(:disabled):hover {
+  @apply opacity-80;
+}
+
+.modal-overlay {
+  @apply fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-100;
+}
+
+.modal-content {
+  @apply fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 
+         bg-[#262626] rounded-lg p-6 max-w-4xl w-full max-h-[90vh] overflow-hidden 
+         transition-all duration-100 shadow-xl;
+}
+
+/* Remove default outline styles */
+:focus {
+  outline: none !important;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-700/30 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-600/30;
+}
+
+/* Hide scrollbar when not hovering */
+.chat-input:not(:hover)::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+/* Text cursor color */
+.chat-input {
+  caret-color: white;
+}
+
+/* Code blocks */
 pre code {
   @apply block whitespace-pre overflow-x-auto;
 }

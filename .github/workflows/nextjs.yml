@@ -31,8 +31,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Install dependencies
-        run: npm install
+      - name: Clean install dependencies
+        run: npm ci || npm install  # Try clean install, fall back to regular install
       - name: Build with Next.js
         run: npm run build
       - name: Upload artifact
