@@ -49,8 +49,19 @@ blastai/frontend/out/
 blastai/frontend/.next-env.d.ts
 blastai/frontend/*.tsbuildinfo
 
+# Website
+website/node_modules/
+website/.next/
+website/out/
+website/.next-env.d.ts
+website/*.tsbuildinfo
+
 # npm
 blastai/frontend/package-lock.json
 blastai/frontend/.npm
 blastai/frontend/.env*.local
 blastai/frontend/.vercel
+website/package-lock.json
+website/.npm
+website/.env*.local
+website/.vercel

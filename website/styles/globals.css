@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --blast-yellow: #FFE067;
+  --dark: #1F1F1F;
+}
+
+body {
+  background-color: var(--dark);
+  color: white;
+}
+
+pre code {
+  @apply block whitespace-pre overflow-x-auto;
+}
