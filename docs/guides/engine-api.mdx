@@ -1,0 +1,187 @@
+# Engine API
+
+The BLAST Engine API provides direct access to BLAST's core functionality. This is an advanced interface - for most users, we recommend using `blastai serve` with a configuration file.
+
+<Note>
+**Recommended Approach**
+
+Instead of using the Engine API directly, prefer using `blastai serve` with a YAML config file:
+
+```bash
+# Create a config file
+cat > config.yaml << EOL
+settings:
+  persist_cache: true
+  blastai_log_level: "INFO"
+constraints:
+  max_memory: "4GB"
+  max_concurrent_browsers: 4
+  allow_parallelism:
+    task: true
+    data: true
+EOL
+
+# Start BLAST with your config
+blastai serve --config config.yaml
+```
+
+Continue reading only if you need programmatic control over BLAST's internals.
+</Note>
+
+## Creating an Engine
+
+Create a BLAST engine instance with optional settings and constraints:
+
+```python
+from blastai import Engine, Settings, Constraints
+
+# Create with default settings
+engine = await Engine.create()
+
+# Create with custom settings
+settings = Settings(
+    persist_cache=True,  # Persist cache between sessions
+    blastai_log_level="INFO"  # Set logging level
+)
+
+constraints = Constraints(
+    max_memory=8,  # Max memory in GB
+    max_concurrent_browsers=4,  # Max concurrent browser instances
+    allow_parallelism=True  # Enable parallel task execution
+)
+
+engine = await Engine.create(
+    settings=settings,
+    constraints=constraints
+)
+```
+
+## Running Tasks
+
+The Engine API supports both single and sequential tasks:
+
+```python
+# Run a single task
+result = await engine.run(
+    "Search for Python documentation",
+    stream=False  # Get final result only
+)
+print(result.final_result())
+
+# Run with streaming updates
+async for update in engine.run(
+    "Search for Python documentation",
+    stream=True  # Get real-time updates
+):
+    if isinstance(update, AgentReasoning):
+        print(update.content)  # Print thoughts/actions
+    elif isinstance(update, AgentHistoryListResponse):
+        print("Final result:", update.final_result())
+
+# Run sequential tasks
+results = await engine.run([
+    "Go to python.org",
+    "Click on Documentation",
+    "Search for 'asyncio'"
+])
+```
+
+## Cache Control
+
+Control caching behavior for tasks:
+
+```python
+# Skip cache lookup and storage
+result = await engine.run(
+    "Search for Python documentation",
+    cache_control="no-cache,no-store"
+)
+
+# Skip plan cache but store result
+result = await engine.run(
+    "Search for Python documentation",
+    cache_control="no-cache-plan"
+)
+```
+
+## Resource Management
+
+The engine automatically manages system resources:
+
+- Monitors memory usage
+- Limits concurrent browser instances
+- Tracks execution costs
+- Handles browser cleanup
+
+Get current resource metrics:
+
+```python
+metrics = await engine.get_metrics()
+print(f"Active browsers: {metrics['concurrent_browsers']}")
+print(f"Memory usage: {metrics['memory_usage_gb']} GB")
+print(f"Total cost: ${metrics['total_cost']}")
+print(f"Tasks:", metrics['tasks'])
+```
+
+## Using as Context Manager
+
+The Engine can be used as an async context manager for automatic cleanup:
+
+```python
+async with Engine() as engine:
+    result = await engine.run("Search for Python documentation")
+    print(result.final_result())
+# Engine automatically stops and cleans up
+```
+
+## Components
+
+The Engine manages several key components:
+
+- **Scheduler**: Handles task scheduling and execution
+- **ResourceManager**: Manages system resources and browser instances
+- **CacheManager**: Handles result caching and persistence
+- **Planner**: Plans task execution strategies
+
+## Task States
+
+Tasks can be in different states:
+
+- **Scheduled**: Task is queued for execution
+- **Running**: Task is currently executing
+- **Completed**: Task has finished execution
+
+Monitor task states through metrics:
+
+```python
+metrics = await engine.get_metrics()
+task_states = metrics['tasks']
+print(f"Scheduled: {task_states['scheduled']}")
+print(f"Running: {task_states['running']}")
+print(f"Completed: {task_states['completed']}")
+```
+
+## Cleanup
+
+Always stop the engine when done to clean up resources:
+
+```python
+await engine.stop()  # Clean up resources
+```
+
+## When to Use the Engine API
+
+Consider using the Engine API directly when you need to:
+
+1. Programmatically control BLAST's behavior
+2. Integrate BLAST into a larger application
+3. Implement custom resource management
+4. Build advanced automation workflows
+
+For simpler use cases, prefer using `blastai serve` with a configuration file.
+
+## Next Steps
+
+- Learn about [Concurrency](/guides/concurrency) features
+- Explore [Parallelism](/guides/parallelism) capabilities
+- Configure [Settings](/guides/settings) and [Constraints](/guides/constraints)

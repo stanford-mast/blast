@@ -1,0 +1,172 @@
+# Concurrency in BLAST
+
+<Note>
+**Quick Guide to Controlling Concurrency**
+
+For most users, you only need to know about two settings:
+
+```python
+from blastai import Engine, Constraints
+
+engine = await Engine.create(
+    constraints=Constraints(
+        allow_parallelism=True,     # Enable/disable parallel execution
+        max_concurrent_browsers=4    # Maximum number of parallel browsers
+    )
+)
+```
+
+If you're interested in how BLAST's concurrency works under the hood or need more advanced features, continue reading this guide.
+</Note>
+
+## Task Lifecycle
+
+Every task in BLAST goes through several stages:
+
+1. **Creation**: Task is scheduled and assigned a unique ID
+2. **Resource Allocation**: Browser and other resources are assigned
+3. **Execution**: Task runs and streams progress updates
+4. **Completion**: Results are stored and resources are freed
+
+## Task Relationships
+
+BLAST supports several types of task relationships:
+
+### Prerequisites
+
+Tasks can depend on other tasks completing first:
+
+```python
+from blastai import Engine
+
+async with Engine() as engine:
+    # Task B won't start until Task A completes
+    task_a = await engine.run("Go to python.org")
+    task_b = await engine.run(
+        "Click on Documentation",
+        previous_response_id=task_a.id  # Set prerequisite
+    )
+```
+
+### Parent/Child Tasks
+
+Tasks can spawn subtasks that run concurrently:
+
+```python
+# Parent task can create multiple subtasks
+results = await engine.run([
+    "Go to python.org",  # Parent task
+    "Click on Documentation",  # Subtask 1
+    "Search for 'asyncio'"  # Subtask 2
+])
+```
+
+### Task Priorities
+
+BLAST prioritizes tasks in this order:
+
+1. Tasks with cached results
+2. Tasks with cached execution plans
+3. Subtasks of running tasks
+4. Tasks with paused executors
+5. Remaining tasks (FIFO order)
+
+## Parallel Execution
+
+BLAST can execute multiple tasks in parallel when resources allow:
+
+```python
+async with Engine(
+    constraints=Constraints(
+        max_concurrent_browsers=4,  # Allow 4 parallel browsers
+        allow_parallelism=True  # Enable parallel execution
+    )
+) as engine:
+    # These tasks will run in parallel
+    task1 = engine.run("Search Python docs", stream=True)
+    task2 = engine.run("Search JavaScript docs", stream=True)
+    task3 = engine.run("Search Rust docs", stream=True)
+    
+    # Process streams concurrently
+    async def process_stream(stream):
+        async for update in stream:
+            if isinstance(update, AgentReasoning):
+                print(update.content)
+    
+    await asyncio.gather(
+        process_stream(task1),
+        process_stream(task2),
+        process_stream(task3)
+    )
+```
+
+## Resource Management
+
+BLAST automatically manages resources for concurrent tasks:
+
+- Limits concurrent browser instances
+- Reuses browsers when possible
+- Manages memory usage
+- Handles cleanup on task completion
+
+Monitor resource usage:
+
+```python
+metrics = await engine.get_metrics()
+print(f"Running tasks: {metrics['tasks']['running']}")
+print(f"Active browsers: {metrics['concurrent_browsers']}")
+print(f"Memory usage: {metrics['memory_usage_gb']} GB")
+```
+
+## Task State Management
+
+Track task states through the API:
+
+```python
+metrics = await engine.get_metrics()
+task_states = metrics['tasks']
+
+print(f"Scheduled: {task_states['scheduled']}")  # Waiting to start
+print(f"Running: {task_states['running']}")      # Currently executing
+print(f"Completed: {task_states['completed']}")  # Finished tasks
+```
+
+## Best Practices
+
+1. **Use Prerequisites** when tasks must run in sequence:
+   ```python
+   task1 = await engine.run("Go to website")
+   task2 = await engine.run("Click login", previous_response_id=task1.id)
+   ```
+
+2. **Use Subtasks** for parallel operations:
+   ```python
+   results = await engine.run([
+       "Open main page",
+       "Check notifications",  # Runs in parallel
+       "Check messages"       # Runs in parallel
+   ])
+   ```
+
+3. **Monitor Resources** to avoid overload:
+   ```python
+   metrics = await engine.get_metrics()
+   if metrics['memory_usage_gb'] > 7.0:  # High memory usage
+       # Wait before scheduling more tasks
+       await asyncio.sleep(5)
+   ```
+
+4. **Handle Task Failures** gracefully:
+   ```python
+   try:
+       result = await engine.run("Complex task")
+   except Exception as e:
+       print(f"Task failed: {e}")
+       # Implement retry logic or fallback
+   ```
+
+## Next Steps
+
+- Learn about [Parallelism](/guides/parallelism) for advanced concurrent execution
+- Explore [Caching](/guides/caching) to optimize task execution
+- Configure [Settings](/guides/settings) and [Constraints](/guides/constraints)

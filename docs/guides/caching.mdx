@@ -1,0 +1,207 @@
+# Caching in BLAST
+
+BLAST provides a sophisticated caching system that stores both task results and execution plans. This guide explains how to use and control BLAST's caching features.
+
+## Cache Control Options
+
+BLAST supports several cache control directives that can be combined:
+
+### Basic Directives
+
+```python
+cache_options = {
+    "": "Cache everything (default)",
+    "no-cache": "Skip results cache lookup",
+    "no-store": "Don't store results in cache",
+    "no-cache-plan": "Skip plan cache lookup",
+    "no-store-plan": "Don't store plan in cache"
+}
+```
+
+### Combining Directives
+
+Directives can be combined with commas:
+
+```python
+# Skip all caching
+cache_control = "no-cache,no-store"
+
+# Skip plan cache but use result cache
+cache_control = "no-cache-plan,no-store-plan"
+
+# Skip storing but check cache
+cache_control = "no-store,no-store-plan"
+```
+
+## Using Cache Control
+
+### 1. OpenAI-Compatible API
+
+Using `/chat/completions`:
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",
+    base_url="http://127.0.0.1:8000"
+)
+
+# With cache control
+response = client.chat.completions.create(
+    model="not-needed",
+    messages=[{
+        "role": "user",
+        "content": "Search Python docs",
+        "cache_control": "no-cache,no-store"  # Skip all caching
+    }]
+)
+
+# Default caching
+response = client.chat.completions.create(
+    model="not-needed",
+    messages=[{
+        "role": "user",
+        "content": "Search Python docs"
+    }]
+)
+```
+
+### 2. BLAST Responses API
+
+Using `/responses`:
+```python
+# With cache control
+response = client.responses.create(
+    model="not-needed",
+    input="Search Python docs",
+    cache_control="no-cache-plan"  # Skip plan cache
+)
+
+# Clear specific response cache
+client.responses.delete("resp_<task_id>")
+
+# Clear by task description
+client.responses.delete("Search Python docs")
+```
+
+### 3. Engine API
+
+Direct engine access:
+```python
+from blastai import Engine
+
+async with Engine() as engine:
+    # With cache control
+    result = await engine.run(
+        "Search Python docs",
+        cache_control="no-cache,no-store"
+    )
+
+    # Multiple tasks with different cache settings
+    results = await engine.run([
+        "Go to python.org",  # Uses default caching
+        "Click Documentation"  # Uses default caching
+    ], cache_control=["no-cache", ""])  # Different settings per task
+```
+
+## Cache Persistence
+
+### Configuration
+
+Enable cache persistence in settings:
+```yaml
+# config.yaml
+settings:
+  persist_cache: true  # Keep cache between engine sessions
+```
+
+### Cache Storage
+
+When persistence is enabled:
+- Results are stored in `<appdata>/cache/results/`
+- Plans are stored in `<appdata>/cache/plans/`
+- Cache survives between engine restarts
+- Memory cache is backed by disk storage
+
+### Cache Keys
+
+BLAST uses task lineage for cache keys:
+```python
+# These share a cache (same task)
+response1 = client.responses.create(input="Search Python docs")
+response2 = client.responses.create(input="Search Python docs")
+
+# These have different caches (different tasks)
+response3 = client.responses.create(input="Search Python docs")
+response4 = client.responses.create(input="Search JavaScript docs")
+```
+
+## Clearing Cache
+
+### 1. Through API
+
+Clear specific caches:
+```python
+# Clear by response ID
+client.responses.delete("resp_<task_id>")
+client.responses.delete("chatcmpl-<task_id>")
+
+# Clear by task description
+client.responses.delete("Search Python docs")
+```
+
+### 2. Through Engine
+
+Clear all caches:
+```python
+engine = await Engine.create()
+await engine.cache_manager.clear()
+```
+
+### 3. Manually
+
+Remove cache directories:
+```bash
+# Remove all cache
+rm -rf ~/.local/share/blast/cache/*
+
+# Remove specific caches
+rm -rf ~/.local/share/blast/cache/results/*  # Clear results
+rm -rf ~/.local/share/blast/cache/plans/*    # Clear plans
+```
+
+## Best Practices
+
+1. **Use Persistence** for long-running applications:
+   ```yaml
+   settings:
+     persist_cache: true
+   ```
+
+2. **Skip Cache** for real-time data:
+   ```python
+   response = client.responses.create(
+       input="Check weather",
+       cache_control="no-cache"
+   )
+   ```
+
+3. **Cache Plans** for similar tasks:
+   ```python
+   # Cache plan for similar tasks
+   response = client.responses.create(
+       input="Search docs",
+       cache_control="no-cache"  # Skip result cache but keep plan
+   )
+   ```
+
+4. **Clear Regularly**:
+   - Remove old caches periodically
+   - Clear before version updates
+   - Monitor cache size growth
+
+## Next Steps
+
+- Configure [Settings](/guides/settings) for optimal caching
+- Learn about [Parallelism](/guides/parallelism) with caching
+- Understand [Constraints](/guides/constraints) for resource management

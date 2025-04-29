@@ -1,0 +1,180 @@
+# Development Setup
+
+This guide explains how to set up BLAST for development.
+
+## Prerequisites
+
+1. **Python Environment**
+   ```bash
+   # Create virtual environment
+   python -m venv blast-venv
+   source blast-venv/bin/activate  # Linux/macOS
+   # or
+   blast-venv\Scripts\activate     # Windows
+   ```
+
+2. **Node.js and npm** (for web UI)
+   - Install from [nodejs.org](https://nodejs.org)
+   - Required for web frontend development
+
+3. **Browser Requirements**
+   ```bash
+   # Install browser dependencies
+   python -m playwright install chromium
+   ```
+
+## Installation
+
+1. **Clone Repository**
+   ```bash
+   git clone https://github.com/calebwin/blast.git
+   cd blast
+   ```
+
+2. **Install Dependencies**
+   ```bash
+   # Install Python dependencies
+   pip install -e ".[dev]"
+
+   # Install frontend dependencies
+   cd blastai/frontend
+   npm install
+   ```
+
+## Development Server
+
+1. **Start Backend**
+   ```bash
+   # Run with debug logging
+   blastai serve engine --config dev_config.yaml
+   ```
+
+2. **Start Frontend**
+   ```bash
+   # In blastai/frontend directory
+   npm run dev
+   ```
+
+3. **Run CLI Interface**
+   ```bash
+   blastai serve cli
+   ```
+
+## Configuration
+
+Create a development config file:
+
+```yaml
+# dev_config.yaml
+settings:
+  persist_cache: false  # Disable cache persistence
+  blastai_log_level: "debug"
+  browser_use_log_level: "debug"
+
+constraints:
+  max_concurrent_browsers: 2
+  allow_parallelism:
+    task: true
+    data: true
+```
+
+## Testing
+
+Run tests with pytest:
+
+```bash
+# Run all tests
+pytest
+
+# Run specific test file
+pytest tests/test_engine.py
+
+# Run with coverage
+pytest --cov=blastai
+```
+
+## Code Style
+
+We use:
+- Black for Python formatting
+- isort for import sorting
+- flake8 for linting
+- mypy for type checking
+
+```bash
+# Format code
+black blastai/
+isort blastai/
+
+# Check style
+flake8 blastai/
+mypy blastai/
+```
+
+## Debugging
+
+1. **Backend Debugging**
+   ```python
+   import logging
+   logging.getLogger('blastai').setLevel(logging.DEBUG)
+   ```
+
+2. **Frontend Debugging**
+   - Use browser dev tools
+   - Check browser console
+   - Monitor network requests
+
+3. **Browser Debugging**
+   ```python
+   # Enable browser debugging
+   constraints = Constraints(require_headless=False)
+   ```
+
+## Common Issues
+
+1. **Browser Installation**
+   ```bash
+   # Reinstall browsers
+   python -m playwright install --force chromium
+   ```
+
+2. **Cache Issues**
+   ```bash
+   # Clear cache
+   rm -rf ~/.local/share/blast/cache/*
+   ```
+
+3. **Frontend Dependencies**
+   ```bash
+   # Rebuild node modules
+   cd blastai/frontend
+   rm -rf node_modules
+   npm install
+   ```
+
+## Development Workflow
+
+1. Create feature branch
+2. Make changes
+3. Run tests
+4. Format code
+5. Submit PR
+
+## Documentation
+
+Build documentation locally:
+
+```bash
+# Install Mintlify
+npm install -g mintlify
+
+# Preview docs
+cd docs
+mintlify dev
+```
+
+## Next Steps
+
+- Read [Internals](/development/internals)
+- Check [Contributing Guide](/development/contributing)
+- Review [Roadmap](/development/roadmap)

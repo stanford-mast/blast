@@ -1,0 +1,182 @@
+# Streaming in BLAST
+
+BLAST provides real-time streaming of task execution, allowing you to monitor thoughts, actions, and results as they happen. This guide explains how to work with BLAST's streaming features.
+
+<Note>
+**Quick Start**
+
+1. First, start the BLAST server:
+```bash
+blastai serve
+```
+
+2. Then use streaming in your code:
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",
+    base_url="http://127.0.0.1:8000"
+)
+
+stream = client.responses.create(
+    model="not-needed",
+    input="Search for Python documentation",
+    stream=True
+)
+
+for event in stream:
+    if event.type == "response.output_text.delta":
+        # Skip screenshots (no spaces in screenshot data)
+        if ' ' in event.delta:
+            print(event.delta, end="", flush=True)
+```
+</Note>
+
+## Stream Types
+
+BLAST emits different types of events during task execution:
+
+### 1. Thoughts and Actions
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",
+    base_url="http://127.0.0.1:8000"
+)
+
+stream = client.responses.create(
+    model="not-needed",
+    input="Search for Python documentation",
+    stream=True
+)
+
+for event in stream:
+    if event.type == "response.output_text.delta":
+        # Real-time thoughts and actions (contains spaces)
+        if ' ' in event.delta:
+            print(event.delta, end="", flush=True)
+    elif event.type == "response.completed":
+        # Final result
+        print("\nTask completed:", event.response.output[0].content[0].text)
+```
+
+### 2. Screenshots
+```python
+for event in stream:
+    if event.type == "response.output_text.delta":
+        # Screenshot data (no spaces)
+        if ' ' not in event.delta:
+            print("Screenshot data received:", event.delta)
+```
+
+### 3. Task Progress
+```python
+for event in stream:
+    match event.type:
+        case "response.created":
+            print("Task created")
+        case "response.in_progress":
+            print("Task started")
+        case "response.output_text.delta":
+            # Process updates
+            pass
+        case "response.output_text.done":
+            print("Text segment completed")
+        case "response.completed":
+            print("Task finished")
+```
+
+## Event Types
+
+BLAST emits these event types during streaming:
+
+- `response.created` - Initial response creation with response ID
+- `response.in_progress` - Task processing started
+- `response.output_text.delta` - Real-time text updates (thoughts or screenshots)
+- `response.output_text.done` - Text segment completed
+- `response.completed` - Full response completed with final result
+
+## Streaming Multiple Tasks
+
+Stream updates from multiple concurrent tasks:
+
+```python
+async def process_stream(stream):
+    async for event in stream:
+        if event.type == "response.output_text.delta":
+            # Skip screenshots
+            if ' ' in event.delta:
+                print(f"Task {event.item_id}: {event.delta}")
+
+# Start multiple tasks
+stream1 = client.responses.create(
+    input="Search Python docs",
+    stream=True
+)
+stream2 = client.responses.create(
+    input="Search JavaScript docs",
+    stream=True
+)
+
+# Process streams concurrently
+await asyncio.gather(
+    process_stream(stream1),
+    process_stream(stream2)
+)
+```
+
+## Handling Errors
+
+Handle stream interruptions gracefully:
+
+```python
+try:
+    for event in stream:
+        if event.type == "response.output_text.delta":
+            if ' ' in event.delta:  # Skip screenshots
+                print(event.delta, end="", flush=True)
+except Exception as e:
+    print(f"Stream interrupted: {e}")
+```
+
+## Best Practices
+
+1. **Handle Screenshots**: Always check for spaces to distinguish screenshots:
+   ```python
+   if event.type == "response.output_text.delta":
+       is_screenshot = ' ' not in event.delta
+       if is_screenshot:
+           process_screenshot(event.delta)
+       else:
+           print(event.delta, end="", flush=True)
+   ```
+
+2. **Track Task IDs**: Use `item_id` to track multiple tasks:
+   ```python
+   task_id = event.item_id.split('_')[1]  # Format: "msg_<task_id>"
+   print(f"Update from task {task_id}")
+   ```
+
+3. **Process Final Results**: Get final results from completed events:
+   ```python
+   if event.type == "response.completed":
+       final_result = event.response.output[0].content[0].text
+       print("Final result:", final_result)
+   ```
+
+4. **Resource Management**: Close streams when done:
+   ```python
+   try:
+       for event in stream:
+           process_event(event)
+   finally:
+       await stream.aclose()
+   ```
+
+## Next Steps
+
+- Learn about [Concurrency](/guides/concurrency) for handling multiple streams
+- Explore [Caching](/guides/caching) to optimize task execution
+- Configure [Settings](/guides/settings) and [Constraints](/guides/constraints)

@@ -20,29 +20,8 @@ from .server import app, init_app_state
 from .logging_setup import should_show_metrics, setup_logging
 from .config import Settings
 
-"""CLI interface for BLAST."""
-
-# Import other modules after server to ensure proper logging setup
-import click
-import httpx
-import uvicorn
-import asyncio
-import threading
-import subprocess
-import shutil
-from pathlib import Path
-from typing import Optional
-from openai import OpenAI
-
 def find_executable(*names: str) -> Optional[str]:
-    """Find the first available executable from the given names.
-    
-    Args:
-        *names: Executable names to search for (e.g., 'node', 'node.exe')
-        
-    Returns:
-        Path to executable if found, None otherwise
-    """
+    """Find the first available executable from the given names."""
     for name in names:
         path = shutil.which(name)
         if path:
@@ -50,11 +29,7 @@ def find_executable(*names: str) -> Optional[str]:
     return None
 
 def check_node_installation() -> Optional[str]:
-    """Check if Node.js is installed and available.
-    
-    Returns:
-        Path to node executable if found, None otherwise
-    """
+    """Check if Node.js is installed and available."""
     node_cmd = find_executable('node', 'node.exe')
     if not node_cmd:
         print("\nNode.js not found. The web frontend requires Node.js.")
@@ -68,11 +43,7 @@ def check_node_installation() -> Optional[str]:
     return node_cmd
 
 def check_npm_installation() -> Optional[str]:
-    """Check if npm is installed and available.
-    
-    Returns:
-        Path to npm executable if found, None otherwise
-    """
+    """Check if npm is installed and available."""
     npm_cmd = find_executable('npm', 'npm.cmd')
     if not npm_cmd:
         print("\nError: npm not found. The web frontend requires Node.js/npm.")
@@ -136,7 +107,7 @@ async def run_cli_frontend():
                 break
                 
             stream = client.responses.create(
-                model="gpt-4.1-mini",
+                model="not-needed",
                 input=task,
                 stream=True,
                 previous_response_id=previous_response_id
@@ -182,23 +153,14 @@ def cli():
 @click.option('--no-metrics-output', is_flag=True, help='Disable metrics output')
 @click.argument('component', type=click.Choice(['web', 'cli', 'engine']), required=False)
 def serve(config: Optional[str], no_metrics_output: bool, component: Optional[str] = None):
-    """Start BLAST components.
-    
-    Args:
-        config: Optional path to config file
-        no_metrics_output: Whether to disable metrics display
-        component: Which component to run:
-            - None: Run both backend and web frontend
-            - 'web': Run only web frontend
-            - 'cli': Run only CLI frontend
-            - 'engine': Run only backend server
-    """
+    """Start BLAST components."""
     # Initialize app state with config (this loads default_config.yaml)
     init_app_state(config)
     
     async def run_web_frontend():
         """Run just the web frontend."""
         frontend_dir = Path(__file__).parent / 'frontend'
+        print(f"Frontend directory: {frontend_dir}")
         
         # Check Node.js and npm installation
         if not check_node_installation():
@@ -231,13 +193,13 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
             return
 
         # Monitor frontend output
-        output_thread = None
         def print_output():
             try:
                 for line in process.stdout:
-                    pass  # Just consume output
-            except (ValueError, IOError):
-                pass
+                    # Show frontend output for debugging
+                    print(f"Frontend: {line.strip()}")
+            except (ValueError, IOError) as e:
+                print(f"Error reading frontend output: {e}")
         
         output_thread = threading.Thread(target=print_output, daemon=True)
         output_thread.start()
@@ -252,10 +214,8 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
         finally:
             process.terminate()
             try:
-                # Wait for process to terminate with timeout
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                # Force kill if graceful shutdown fails
                 process.kill()
                 process.wait()
 
@@ -277,7 +237,7 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                 stream = None
                 try:
                     stream = client.responses.create(
-                        model="gpt-4.1-mini",
+                        model="not-needed",
                         input=task,
                         stream=True,
                         previous_response_id=previous_response_id
@@ -319,54 +279,54 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                 continue
 
     async def display_metrics(client, settings: Settings):
-            """Display and update metrics every 5s."""
-            # Constants for metrics display
-            METRICS_LINES = 10  # Including blank line at start
-            BLANK_METRICS = {
-                'tasks': {'scheduled': 0, 'running': 0, 'completed': 0},
-                'concurrent_browsers': 0,
-                'memory_usage_gb': 0.0,
-                'total_cost': 0.00
-            }
+        """Display and update metrics every 5s."""
+        # Constants for metrics display
+        METRICS_LINES = 10  # Including blank line at start
+        BLANK_METRICS = {
+            'tasks': {'scheduled': 0, 'running': 0, 'completed': 0},
+            'concurrent_browsers': 0,
+            'memory_usage_gb': 0.0,
+            'total_cost': 0.00
+        }
+        
+        def print_metrics(metrics=None):
+            """Print metrics in a consistent format."""
+            if metrics is None:
+                metrics = BLANK_METRICS
             
-            def print_metrics(metrics=None):
-                """Print metrics in a consistent format."""
-                if metrics is None:
-                    metrics = BLANK_METRICS
-                
-                # Move cursor up if needed (not on first print)
-                if print_metrics.initialized:
-                    print(f"\033[{METRICS_LINES}A", end='')
-                print_metrics.initialized = True
-                
-                # Clear lines and print metrics
-                print("\033[J", end='')  # Clear everything below
-                print()  # Blank line for spacing
-                print("Tasks:")
-                print(f"  Scheduled: {metrics['tasks']['scheduled']}")
-                print(f"  Running:   {metrics['tasks']['running']}")
-                print(f"  Completed: {metrics['tasks']['completed']}")
-                print()
-                print("Resources:")
-                print(f"  Active browsers: {metrics['concurrent_browsers']}")
-                print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
-                print(f"  Total cost:      ${metrics['total_cost']:.4f}", flush=True)
+            # Move cursor up if needed (not on first print)
+            if print_metrics.initialized:
+                print(f"\033[{METRICS_LINES}A", end='')
+            print_metrics.initialized = True
             
-            # Initialize the print_metrics function state
-            print_metrics.initialized = False
-            
-            # Print initial metrics
-            print_metrics()
-            
-            while True:
-                try:
-                    # Get metrics from server
-                    response = await client.get("http://127.0.0.1:8000/metrics")
-                    metrics = response.json()
-                    print_metrics(metrics)
-                except Exception:
-                    print_metrics()
-                await asyncio.sleep(5)
+            # Clear lines and print metrics
+            print("\033[J", end='')  # Clear everything below
+            print()  # Blank line for spacing
+            print("Tasks:")
+            print(f"  Scheduled: {metrics['tasks']['scheduled']}")
+            print(f"  Running:   {metrics['tasks']['running']}")
+            print(f"  Completed: {metrics['tasks']['completed']}")
+            print()
+            print("Resources:")
+            print(f"  Active browsers: {metrics['concurrent_browsers']}")
+            print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
+            print(f"  Total cost:      ${metrics['total_cost']:.4f}", flush=True)
+        
+        # Initialize the print_metrics function state
+        print_metrics.initialized = False
+        
+        # Print initial metrics
+        print_metrics()
+        
+        while True:
+            try:
+                # Get metrics from server
+                response = await client.get("http://127.0.0.1:8000/metrics")
+                metrics = response.json()
+                print_metrics(metrics)
+            except Exception:
+                print_metrics()
+            await asyncio.sleep(5)
 
     async def run_server_and_frontend():
         """Run server and frontend concurrently."""
@@ -421,6 +381,7 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
             if component is None:
                 # Default behavior: run both backend and web frontend
                 frontend_dir = Path(__file__).parent / 'frontend'
+                print(f"Frontend directory: {frontend_dir}")
                 
                 # Check Node.js and npm installation
                 if not check_node_installation():
@@ -457,8 +418,12 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
 
                 # Monitor frontend output
                 def print_output():
-                    for line in process.stdout:
-                        pass  # Just consume output
+                    try:
+                        for line in process.stdout:
+                            # Show frontend output for debugging
+                            print(f"Frontend: {line.strip()}")
+                    except (ValueError, IOError) as e:
+                        print(f"Error reading frontend output: {e}")
                 threading.Thread(target=print_output, daemon=True).start()
 
                 # Run server until interrupted

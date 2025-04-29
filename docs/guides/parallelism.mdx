@@ -1,0 +1,182 @@
+# Parallelism in BLAST
+
+BLAST supports multiple types of parallelism to optimize task execution. This guide explains the different parallelism features and how to use them effectively.
+
+<Note>
+**Quick Setup**
+
+Enable parallelism in your config:
+```yaml
+# config.yaml
+constraints:
+  allow_parallelism:
+    task: true    # Enable parallel subtasks
+    data: true    # Enable parallel data extraction
+    first_of_n: false  # First-result parallelism
+  max_parallelism_nesting_depth: 1  # Maximum nesting depth
+```
+</Note>
+
+## Types of Parallelism
+
+BLAST supports three types of parallelism:
+
+### 1. Task Parallelism
+
+Run multiple subtasks in parallel:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",
+    base_url="http://127.0.0.1:8000"
+)
+
+# These tasks will run in parallel
+response = await client.responses.create(
+    model="not-needed",
+    input=[
+        "Search Python docs",    # Parent task
+        "Check notifications",   # Subtask 1 (parallel)
+        "Check messages"        # Subtask 2 (parallel)
+    ],
+    stream=True
+)
+```
+
+### 2. Data Parallelism
+
+Extract data from multiple sources concurrently:
+
+```yaml
+constraints:
+  allow_parallelism:
+    data: true  # Enable data parallelism
+  max_concurrent_browsers: 4  # Limit concurrent browsers
+```
+
+This allows BLAST to:
+- Process multiple pages simultaneously
+- Extract data from multiple sources
+- Run parallel data operations
+
+### 3. First-Result Parallelism
+
+Try multiple approaches and use the first successful result:
+
+```yaml
+constraints:
+  allow_parallelism:
+    first_of_n: true  # Enable first-result parallelism
+```
+
+This is useful for:
+- Trying different search strategies
+- Testing multiple solutions
+- Racing between approaches
+
+## Nesting Depth
+
+Control how deep parallel tasks can nest:
+
+```yaml
+constraints:
+  max_parallelism_nesting_depth: 2  # Allow nested parallel tasks
+```
+
+Example nesting structure:
+```
+Parent Task
+├── Subtask 1 (parallel)
+│   ├── Sub-subtask 1.1 (parallel)
+│   └── Sub-subtask 1.2 (parallel)
+└── Subtask 2 (parallel)
+    ├── Sub-subtask 2.1 (parallel)
+    └── Sub-subtask 2.2 (parallel)
+```
+
+## Resource Management
+
+BLAST automatically manages resources for parallel execution:
+
+```yaml
+constraints:
+  max_concurrent_browsers: 4  # Limit parallel browsers
+  max_memory: "4GB"          # Limit total memory usage
+```
+
+The scheduler prioritizes tasks in this order:
+1. Tasks with cached results
+2. Tasks with cached execution plans
+3. Subtasks of running tasks
+4. Tasks with paused executors
+5. Remaining tasks (FIFO order)
+
+## Monitoring Parallel Execution
+
+Track parallel task execution through metrics:
+
+```python
+metrics = await engine.get_metrics()
+print(f"Running tasks: {metrics['tasks']['running']}")
+print(f"Active browsers: {metrics['concurrent_browsers']}")
+print(f"Memory usage: {metrics['memory_usage_gb']} GB")
+```
+
+## Best Practices
+
+1. **Start Conservative**: Begin with basic parallelism:
+   ```yaml
+   constraints:
+     allow_parallelism:
+       task: true
+       data: false
+       first_of_n: false
+     max_concurrent_browsers: 2
+   ```
+
+2. **Monitor Resources**: Watch resource usage when scaling:
+   ```yaml
+   constraints:
+     max_memory: "4GB"
+     max_cost_per_hour: 5.00  # $5/hour limit
+   ```
+
+3. **Optimize Caching**: Use caching with parallelism:
+   ```yaml
+   settings:
+     persist_cache: true  # Keep cache between runs
+   ```
+
+4. **Handle Failures**: Implement retries for parallel tasks:
+   ```python
+   max_retries = 3
+   for attempt in range(max_retries):
+       try:
+           result = await client.responses.create(...)
+           break
+       except Exception as e:
+           print(f"Retry {attempt + 1}/{max_retries}")
+   ```
+
+## Model Selection
+
+BLAST uses different models for parallel processing:
+
+```yaml
+constraints:
+  llm_model: "gpt-4.1"          # Primary model
+  llm_model_mini: "gpt-4.1-mini"  # Model for parallel tasks
+```
+
+The mini model is used for:
+- Parallel data extraction
+- Quick decision making
+- Resource-efficient processing
+
+## Next Steps
+
+- Configure [Settings](/guides/settings) for optimal performance
+- Learn about [Caching](/guides/caching) with parallel execution
+- Understand [Constraints](/guides/constraints) for resource management

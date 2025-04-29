@@ -1,0 +1,162 @@
+# Settings
+
+BLAST provides various settings to customize its behavior. This guide explains all available settings and how to configure them.
+
+<Note>
+**Quick Setup**
+
+Create a config file with your settings:
+
+```yaml
+# config.yaml
+settings:
+  persist_cache: true
+  blastai_log_level: "info"
+  browser_use_log_level: "info"
+
+# Start BLAST with your config
+blastai serve --config config.yaml
+```
+</Note>
+
+## Available Settings
+
+### Browser Configuration
+
+```yaml
+settings:
+  local_browser_path: "none"  # Path to Chrome/Chromium binary
+```
+
+The `local_browser_path` setting accepts these values:
+- `"none"` (default) - Use system-installed browser
+- `"auto"` - Auto-detect browser location
+- `"/path/to/browser"` - Specific browser binary path
+
+### Caching
+
+```yaml
+settings:
+  persist_cache: false  # Whether to persist cache between sessions
+```
+
+When `persist_cache` is enabled:
+- Task results are saved between sessions
+- Execution plans are cached
+- Faster response times for repeated tasks
+
+### Logging
+
+Control log verbosity for different components:
+
+```yaml
+settings:
+  blastai_log_level: "debug"    # Logging level for BLAST
+  browser_use_log_level: "info" # Logging level for browser operations
+```
+
+Available log levels (from most to least verbose):
+- `"debug"` - Detailed debugging information
+- `"info"` - General information
+- `"warning"` - Warning messages
+- `"error"` - Error messages only
+- `"critical"` - Critical errors only
+
+### Secrets Management
+
+```yaml
+settings:
+  secrets_file_path: "secrets.env"  # Path to secrets file
+```
+
+The secrets file can contain sensitive data like API keys:
+```env
+# secrets.env
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-...
+```
+
+## Complete Configuration
+
+Here's a complete settings configuration:
+
+```yaml
+# config.yaml
+settings:
+  # Browser settings
+  local_browser_path: "auto"  # Auto-detect browser
+  
+  # Caching
+  persist_cache: true  # Keep cache between runs
+  
+  # Logging
+  blastai_log_level: "info"      # General logging level
+  browser_use_log_level: "info"  # Browser logging level
+  
+  # Secrets
+  secrets_file_path: "secrets.env"  # Path to secrets file
+```
+
+## Best Practices
+
+1. **Start Simple**: Begin with default settings:
+   ```yaml
+   settings:
+     blastai_log_level: "info"
+     browser_use_log_level: "info"
+   ```
+
+2. **Enable Caching** for repeated tasks:
+   ```yaml
+   settings:
+     persist_cache: true
+   ```
+
+3. **Debug Issues** with increased logging:
+   ```yaml
+   settings:
+     blastai_log_level: "debug"
+     browser_use_log_level: "debug"
+   ```
+
+4. **Secure Secrets**: Keep sensitive data in a separate file:
+   ```yaml
+   settings:
+     secrets_file_path: ".env.local"  # Outside version control
+   ```
+
+## Environment Variables
+
+Settings can also be configured through environment variables:
+
+```bash
+# Set logging levels
+export BLASTAI_LOG_LEVEL=debug
+export BROWSER_USE_LOG_LEVEL=info
+
+# Enable cache persistence
+export PERSIST_CACHE=true
+
+# Start BLAST
+blastai serve
+```
+
+## Viewing Current Settings
+
+To view your current settings configuration:
+
+```bash
+# Start with metrics display
+blastai serve --no-metrics-output=false
+```
+
+This will show:
+- Current logging levels
+- Cache status
+- Browser configuration
+
+## Next Steps
+
+- Configure [Constraints](/guides/constraints) for resource management
+- Learn about [Parallelism](/guides/parallelism) features
+- Explore [Caching](/guides/caching) capabilities

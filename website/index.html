@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BLAST - Browser Language Agent System for Tasks</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/blast_icon_only.svg">
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bg-dark text-white">
+    <header>
+        <nav>
+            <div class="container">
+                <a href="/" class="logo">
+                    <img src="/assets/blast_icon_only.svg" alt="BLAST" width="40" height="40">
+                    <span>BLAST</span>
+                </a>
+                <div class="nav-links">
+                    <a href="https://docs.blastproject.org">Docs</a>
+                    <a href="https://github.com/calebwin/blast">GitHub</a>
+                    <a href="https://x.com/realcalebwin">Twitter</a>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div class="container">
+                <img src="/assets/blast_icon_only.svg" alt="BLAST" width="200" height="200" class="hero-logo">
+                <h1>BLAST</h1>
+                <p class="subtitle">Browser Language Agent System for Tasks</p>
+                <div class="hero-buttons">
+                    <a href="https://docs.blastproject.org/get-started/quickstart" class="button primary">Get Started</a>
+                    <a href="https://vimeo.com/1079613095/7e90cc78f7?ts=0&share=copy" class="button secondary">Watch Demo</a>
+                </div>
+            </div>
+        </section>
+
+        <section class="features">
+            <div class="container">
+                <h2>Features</h2>
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <h3>OpenAI-Compatible API</h3>
+                        <p>Drop-in replacement for OpenAI's API</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>High Performance</h3>
+                        <p>Built for concurrency and parallel processing</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>Streaming Support</h3>
+                        <p>Real-time streaming of AI responses</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>Smart Caching</h3>
+                        <p>Intelligent caching system for improved performance</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="code-example">
+            <div class="container">
+                <h2>Quick Start</h2>
+                <div class="code-blocks">
+                    <div class="code-block">
+                        <p>Install BLAST:</p>
+                        <pre><code>pip install blastai</code></pre>
+                    </div>
+                    <div class="code-block">
+                        <p>Start the server:</p>
+                        <pre><code>blastai serve</code></pre>
+                    </div>
+                    <div class="code-block">
+                        <p>Use it like the OpenAI API:</p>
+                        <pre><code>from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",
+    base_url="http://127.0.0.1:8000"
+)
+
+stream = client.responses.create(
+    model="not-needed",
+    input="Search for Python docs",
+    stream=True
+)
+
+for event in stream:
+    if event.type == "response.output_text.delta":
+        print(event.delta, end="", flush=True)</code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-links">
+                    <a href="https://docs.blastproject.org">Documentation</a>
+                    <a href="https://github.com/calebwin/blast">GitHub</a>
+                    <a href="https://x.com/realcalebwin">Twitter</a>
+                </div>
+                <p class="copyright">© 2024 BLAST Project. MIT License.</p>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

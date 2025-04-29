@@ -1,0 +1,149 @@
+# OpenAI-Compatible API
+
+BLAST provides an OpenAI-compatible API that allows you to use existing OpenAI client libraries to interact with BLAST. This makes it easy to integrate BLAST into applications that already use OpenAI's API.
+
+## Starting the Server
+
+To start the BLAST server, run:
+
+```bash
+# Run everything (recommended)
+blastai serve
+
+# Run only the API server
+blastai serve engine
+
+# Run only the web UI
+blastai serve web
+
+# Run the CLI interface
+blastai serve cli
+```
+
+## API Endpoints
+
+Once the server is running, BLAST provides two main API endpoints:
+
+### Chat Completions
+
+The `/chat/completions` endpoint follows OpenAI's chat completions format:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",  # BLAST doesn't require an API key
+    base_url="http://127.0.0.1:8000"
+)
+
+# Create a chat completion
+response = client.chat.completions.create(
+    model="not-needed",  # Model name doesn't matter, BLAST uses its own engine
+    messages=[
+        {"role": "user", "content": "Search for Python documentation"}
+    ],
+    stream=True  # Enable streaming for real-time updates
+)
+
+# Process streaming response
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+### BLAST Responses
+
+The `/responses` endpoint provides BLAST-specific features:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",
+    base_url="http://127.0.0.1:8000"
+)
+
+# Create a streaming response
+stream = client.responses.create(
+    model="not-needed",
+    input="Search for Python documentation",
+    stream=True,
+    store=True,  # Store response for future reference
+    previous_response_id=None,  # Optional: ID of previous response for context
+    instructions=None,  # Optional: System message for conversation
+    cache_control=""  # Optional: Cache control settings
+)
+
+# Process the stream
+for event in stream:
+    if event.type == "response.output_text.delta":
+        # Print real-time thoughts/actions
+        if ' ' in event.delta:  # Skip screenshots
+            print(event.delta, end="", flush=True)
+```
+
+## Event Types
+
+When using streaming responses, BLAST emits different event types:
+
+- `response.created` - Initial response creation
+- `response.in_progress` - Response processing started
+- `response.output_text.delta` - Real-time text updates
+- `response.output_text.done` - Text segment completed
+- `response.completed` - Full response completed
+
+## Cache Control
+
+BLAST supports cache control options to optimize performance:
+
+- `no-cache` - Skip cache lookup
+- `no-store` - Don't store in cache
+- `no-cache-plan` - Skip plan cache lookup
+- `no-store-plan` - Don't store plan in cache
+
+Example with cache control:
+
+```python
+response = client.responses.create(
+    model="not-needed",
+    input="Search for Python documentation",
+    cache_control="no-cache,no-store"  # Skip cache and don't store
+)
+```
+
+## Response Storage
+
+By default, BLAST stores responses for future reference. You can disable this with `store=False`:
+
+```python
+response = client.responses.create(
+    model="not-needed",
+    input="Search for Python documentation",
+    store=False  # Don't store this response
+)
+```
+
+## Stateful Conversations
+
+BLAST supports stateful conversations by passing previous response IDs:
+
+```python
+# First response
+response1 = client.responses.create(
+    model="not-needed",
+    input="Go to python.org"
+)
+
+# Follow-up using previous response ID
+response2 = client.responses.create(
+    model="not-needed",
+    input="Click on the Documentation link",
+    previous_response_id=response1.id
+)
+```
+
+## Next Steps
+
+- Learn about the [Engine API](/guides/engine-api) for direct access
+- Understand [Concurrency](/guides/concurrency) and [Parallelism](/guides/parallelism)
+- Configure [Settings](/guides/settings) and [Constraints](/guides/constraints)

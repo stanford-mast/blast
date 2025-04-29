@@ -1,0 +1,154 @@
+# BLAST Internals
+
+This guide explains the internal architecture and components of BLAST.
+
+## Core Components
+
+### Engine
+
+The Engine is the central component that:
+- Manages task execution
+- Coordinates resources
+- Handles caching
+- Controls parallelism
+
+```python
+from blastai import Engine
+
+engine = await Engine.create(
+    settings=settings,
+    constraints=constraints
+)
+```
+
+### Scheduler
+
+The Scheduler manages task execution:
+- Tracks task states
+- Handles task dependencies
+- Manages execution order
+- Coordinates parallel tasks
+
+Task priorities:
+1. Tasks with cached results
+2. Tasks with cached plans
+3. Subtasks of running tasks
+4. Tasks with paused executors
+5. Remaining tasks (FIFO)
+
+### Resource Manager
+
+Handles system resources:
+- Browser instances
+- Memory usage
+- Cost tracking
+- Resource cleanup
+
+### Cache Manager
+
+Manages two types of caches:
+- Results cache (task outputs)
+- Plans cache (execution plans)
+
+Features:
+- In-memory caching
+- Disk persistence
+- Cache invalidation
+- Cache control
+
+### Planner
+
+Plans task execution:
+- Analyzes task descriptions
+- Creates execution plans
+- Optimizes task sequences
+- Handles subtasks
+
+## Data Flow
+
+1. **Task Creation**
+   ```python
+   task_id = scheduler.schedule_task(
+       description="Search Python docs",
+       cache_control=""
+   )
+   ```
+
+2. **Cache Check**
+   - Check results cache
+   - Check plans cache
+   - Return cached result if available
+
+3. **Resource Allocation**
+   - Wait for prerequisites
+   - Allocate browser if needed
+   - Assign executor
+
+4. **Execution**
+   - Run task via executor
+   - Stream progress updates
+   - Cache results
+
+5. **Cleanup**
+   - Release resources
+   - Update cache
+   - Handle errors
+
+## Code Structure
+
+```
+blastai/
+├── __init__.py      # Package initialization
+├── engine.py        # Main engine implementation
+├── scheduler.py     # Task scheduling
+├── cache.py         # Caching system
+├── config.py        # Configuration
+├── planner.py       # Task planning
+├── executor.py      # Task execution
+└── utils.py         # Utilities
+```
+
+## Configuration
+
+Settings and constraints control behavior:
+
+```yaml
+settings:
+  persist_cache: true
+  blastai_log_level: "info"
+
+constraints:
+  max_memory: "4GB"
+  max_concurrent_browsers: 4
+  allow_parallelism:
+    task: true
+    data: true
+```
+
+## Error Handling
+
+BLAST handles various error types:
+- Browser errors
+- Resource limits
+- Task failures
+- Cache issues
+
+Error recovery:
+1. Log error details
+2. Clean up resources
+3. Retry if possible
+4. Report to user
+
+## Extending BLAST
+
+You can extend BLAST by:
+1. Adding new tools
+2. Creating custom executors
+3. Implementing cache backends
+4. Adding resource managers
+
+## Next Steps
+
+- Read the [Setup Guide](/development/setup)
+- Learn how to [Contribute](/development/contributing)
+- Check the [Roadmap](/development/roadmap)

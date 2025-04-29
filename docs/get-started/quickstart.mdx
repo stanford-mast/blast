@@ -1,0 +1,72 @@
+# Quickstart Guide
+
+Get started with BLAST in minutes. This guide will walk you through installation, running the server, and making your first request.
+
+## Installation
+
+Install BLAST using pip:
+
+```bash
+pip install blastai
+```
+
+## Starting the Server
+
+BLAST provides both a web UI and an OpenAI-compatible API server. Start both with a single command:
+
+```bash
+blastai serve
+```
+
+This will start:
+- API server at `http://127.0.0.1:8000`
+- Web UI at `http://localhost:3000`
+
+You can also run specific components:
+- `blastai serve engine` - Run only the API server
+- `blastai serve web` - Run only the web UI
+- `blastai serve cli` - Run the CLI interface
+
+## Using the API
+
+BLAST provides an OpenAI-compatible API. Here's a simple example using the Python OpenAI client:
+
+```python
+from openai import OpenAI
+
+# Initialize client pointing to local BLAST server
+client = OpenAI(
+    api_key="not-needed",  # BLAST doesn't require an API key
+    base_url="http://127.0.0.1:8000"
+)
+
+# Create a streaming response
+stream = client.responses.create(
+    model="not-needed",  # Model name doesn't matter, BLAST uses its own engine
+    input="Search for Python documentation and click on the first result",
+    stream=True  # Enable streaming for real-time updates
+)
+
+# Process the stream
+for event in stream:
+    if event.type == "response.output_text.delta":
+        # Print real-time thoughts/actions
+        if ' ' in event.delta:  # Skip screenshots
+            print(event.delta, end='', flush=True)
+```
+
+## Using the Web UI
+
+Once you start the server with `blastai serve`, open `http://localhost:3000` in your browser to access the web interface. The UI provides:
+
+- Interactive chat interface
+- Real-time streaming of responses
+- Visual feedback for browser actions
+- Task history and management
+
+## Next Steps
+
+- Learn about the [OpenAI-Compatible API](/guides/openai-compatible-api)
+- Explore [Engine API](/guides/engine-api) for direct access
+- Understand [Concurrency](/guides/concurrency) and [Parallelism](/guides/parallelism)
+- Configure [Settings](/guides/settings) and [Constraints](/guides/constraints)

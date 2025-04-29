@@ -1,0 +1,165 @@
+# Contributing to BLAST
+
+Thank you for your interest in contributing to BLAST! This guide will help you get started.
+
+## Code of Conduct
+
+We expect all contributors to:
+- Be respectful and inclusive
+- Follow our coding standards
+- Write clear commit messages
+- Document their changes
+
+## Getting Started
+
+1. **Fork the Repository**
+   - Visit [BLAST on GitHub](https://github.com/calebwin/blast)
+   - Click "Fork" button
+   - Clone your fork locally
+
+2. **Set Up Development Environment**
+   - Follow our [Setup Guide](/development/setup)
+   - Install all development dependencies
+   - Configure your editor
+
+## Making Changes
+
+1. **Create a Branch**
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+
+2. **Write Code**
+   - Follow our coding standards
+   - Add tests for new features
+   - Update documentation
+   - Keep changes focused
+
+3. **Test Your Changes**
+   ```bash
+   # Run test suite
+   pytest
+
+   # Check code style
+   black blastai/
+   isort blastai/
+   flake8 blastai/
+   mypy blastai/
+   ```
+
+4. **Update Documentation**
+   - Add/update docstrings
+   - Update guides if needed
+   - Add examples for new features
+
+## Submitting Changes
+
+1. **Create Pull Request**
+   - Push changes to your fork
+   - Open PR against main branch
+   - Fill out PR template
+   - Link related issues
+
+2. **PR Description**
+   - Explain your changes
+   - List breaking changes
+   - Add test results
+   - Include screenshots if relevant
+
+3. **Review Process**
+   - Address review comments
+   - Keep PR updated
+   - Be responsive to feedback
+
+## Development Guidelines
+
+### Code Style
+
+Follow these standards:
+- Use Black for formatting
+- Sort imports with isort
+- Follow PEP 8
+- Add type hints
+
+### Testing
+
+Write tests for:
+- New features
+- Bug fixes
+- Edge cases
+- Error conditions
+
+### Documentation
+
+Update docs for:
+- API changes
+- New features
+- Configuration changes
+- Breaking changes
+
+### Commit Messages
+
+Format:
+```
+type(scope): description
+
+[optional body]
+[optional footer]
+```
+
+Types:
+- feat: New feature
+- fix: Bug fix
+- docs: Documentation
+- style: Formatting
+- refactor: Code restructuring
+- test: Adding tests
+- chore: Maintenance
+
+## Project Structure
+
+```
+blastai/
+├── docs/          # Documentation
+├── blastai/       # Main package
+├── tests/         # Test suite
+└── examples/      # Example code
+```
+
+## Common Tasks
+
+### Adding Features
+
+1. Discuss in issues first
+2. Write implementation
+3. Add tests
+4. Update docs
+5. Submit PR
+
+### Fixing Bugs
+
+1. Create regression test
+2. Fix the bug
+3. Add test case
+4. Document fix
+5. Submit PR
+
+### Improving Docs
+
+1. Find documentation gap
+2. Write clear content
+3. Add examples
+4. Submit PR
+
+## Getting Help
+
+- Open an issue
+- Join discussions
+- Ask questions
+- Read [Internals](/development/internals)
+
+## Next Steps
+
+- Review [Roadmap](/development/roadmap)
+- Read [Internals](/development/internals)
+- Set up [Development Environment](/development/setup)
