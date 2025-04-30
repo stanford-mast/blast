@@ -1,8 +1,8 @@
 settings:
   local_browser_path: "none"  # Path to Chrome/Chromium binary: "none" (default), "auto" for auto-detect, or specific path
   persist_cache: false
-  browser_use_log_level: "info"  # Logging level for browser-use module
-  blastai_log_level: "debug"  # Logging level for blastai module
+  browser_use_log_level: "error"  # Logging level for browser-use module
+  blastai_log_level: "error"  # Logging level for blastai module
   secrets_file_path: "secrets.env"  # Path to secrets file containing sensitive data
 
 constraints:

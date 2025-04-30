@@ -1,5 +1,7 @@
 # Set anonymized telemetry to false before any imports
 import os
+
+from dotenv import load_dotenv
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
 
 """CLI interface for BLAST."""
@@ -160,7 +162,6 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
     async def run_web_frontend():
         """Run just the web frontend."""
         frontend_dir = Path(__file__).parent / 'frontend'
-        print(f"Frontend directory: {frontend_dir}")
         
         # Check Node.js and npm installation
         if not check_node_installation():
@@ -197,7 +198,7 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
             try:
                 for line in process.stdout:
                     # Show frontend output for debugging
-                    print(f"Frontend: {line.strip()}")
+                    print(f"Web: {line.strip()}")
             except (ValueError, IOError) as e:
                 print(f"Error reading frontend output: {e}")
         
@@ -417,14 +418,27 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                     return
 
                 # Monitor frontend output
+                frontend_ready = threading.Event()
                 def print_output():
                     try:
                         for line in process.stdout:
-                            # Show frontend output for debugging
-                            print(f"Frontend: {line.strip()}")
+                            line = line.strip()
+                            # Only show errors and important info
+                            if any(x in line.lower() for x in ['error:', 'warn:', '✓ ready']):
+                                print(f"Frontend: {line}")
+                            # Set ready event when frontend is loaded
+                            if '✓ ready' in line:
+                                frontend_ready.set()
                     except (ValueError, IOError) as e:
                         print(f"Error reading frontend output: {e}")
-                threading.Thread(target=print_output, daemon=True).start()
+                output_thread = threading.Thread(target=print_output, daemon=True)
+                output_thread.start()
+
+                # Wait for frontend to be ready before showing metrics
+                try:
+                    frontend_ready.wait(timeout=10)
+                except TimeoutError:
+                    print("Warning: Frontend startup took longer than expected")
 
                 # Run server until interrupted
                 try:
@@ -599,9 +613,65 @@ def install_browsers(quiet: bool = False):
         print(f"Error installing browsers: {e}")
         print("Please run 'python -m playwright install chromium' manually")
 
+def check_openai_api_key():
+    """Check if OpenAI API key is available and prompt if not found."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if api_key:
+        return True
+        
+    # Check .env file in current directory
+    env_path = Path(".env")
+    if env_path.exists():
+        load_dotenv(env_path)
+        api_key = os.getenv("OPENAI_API_KEY")
+        if api_key:
+            return True
+    
+    print("\nOpenAI API key not found. This is required for BLAST to run.")
+    print("You can get an API key from https://platform.openai.com/api-keys")
+    
+    while True:
+        api_key = input("\nPlease enter your OpenAI API key: ").strip()
+        if api_key.startswith("sk-") and len(api_key) > 40:
+            try:
+                # Save to .env file
+                if not env_path.exists():
+                    env_path.write_text(f"OPENAI_API_KEY={api_key}\n")
+                else:
+                    content = env_path.read_text()
+                    if "OPENAI_API_KEY=" in content:
+                        lines = content.splitlines()
+                        new_lines = []
+                        for line in lines:
+                            if line.startswith("OPENAI_API_KEY="):
+                                new_lines.append(f"OPENAI_API_KEY={api_key}")
+                            else:
+                                new_lines.append(line)
+                        env_path.write_text("\n".join(new_lines) + "\n")
+                    else:
+                        with env_path.open("a") as f:
+                            f.write(f"\nOPENAI_API_KEY={api_key}\n")
+                
+                os.environ["OPENAI_API_KEY"] = api_key
+                print("\nAPI key saved successfully!")
+                return True
+            except Exception as e:
+                print(f"\nError saving API key: {e}")
+                print("Please try again.")
+        else:
+            print("\nInvalid API key format. API keys should start with 'sk-' and be at least 40 characters long.")
+            retry = input("Would you like to try again? (y/n): ").lower()
+            if retry != 'y':
+                return False
+
 def main():
     """Main entry point for CLI."""
-    # Check if already installed first
+    # Check for OpenAI API key first
+    if not check_openai_api_key():
+        print("\nOpenAI API key is required to run BLAST. Exiting.")
+        sys.exit(1)
+    
+    # Check if already installed
     already_installed = check_installation_state()
     
     # Install browsers and dependencies if needed

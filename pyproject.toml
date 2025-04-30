@@ -49,11 +49,49 @@ dev = [
 blastai = "blastai.cli:main"
 
 [tool.setuptools]
-packages = ["blastai"]
 include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["blastai*"]
+exclude = ["tests*", "docs*"]
 
 [tool.setuptools.package-data]
 blastai = [
-    "frontend/**/*",
+    # Core frontend files needed for npm install and dev server
+    "frontend/package.json",
+    "frontend/next.config.js",
+    "frontend/postcss.config.js",
+    "frontend/tailwind.config.js",
+    "frontend/tsconfig.json",
+    # Source files
+    "frontend/components/**/*.tsx",
+    "frontend/pages/**/*.tsx",
+    "frontend/styles/**/*.css",
+    # Public assets needed at runtime
+    "frontend/public/assets/*",
+    # Config file
     "default_config.yaml"
+]
+
+[tool.setuptools.exclude-package-data]
+blastai = [
+    "frontend/node_modules/*",
+    "frontend/.next/*",
+    "frontend/out/*",
+    "frontend/build/*",
+    "frontend/.vercel/*",
+    "frontend/.env*",
+    "frontend/*.log",
+    "frontend/*.tsbuildinfo",
+    "frontend/package-lock.json",
+    "__pycache__",
+    "*.pyc",
+    "*$py.class",
+    ".git*",
+    ".idea",
+    ".vscode",
+    "tests",
+    "test",
+    "docs"
 ]
