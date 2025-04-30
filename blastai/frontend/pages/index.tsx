@@ -8,8 +8,11 @@ import { TaskBox } from '../components/TaskBox';
 import { LoadingLogo } from '../components/LoadingLogo';
 
 // Initialize OpenAI client with custom base URL
+// Get server port from environment variable or use default
+const serverPort = process.env.NEXT_PUBLIC_SERVER_PORT || '8000';
+
 const openai = new OpenAI({
-  baseURL: 'http://localhost:8000',
+  baseURL: `http://localhost:${serverPort}`,
   apiKey: 'not-needed',
   dangerouslyAllowBrowser: true,
 });

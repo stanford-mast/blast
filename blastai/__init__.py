@@ -1,4 +1,4 @@
-"""BLAST - Browser Language Agent System for Tasks."""
+"""BLAST - Browser-LLM Auto-Scaling Technology"""
 
 # Configure logging before any imports
 import warnings

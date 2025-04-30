@@ -93,11 +93,11 @@ def check_npm_installation() -> Optional[str]:
         
     return npm_cmd
 
-async def run_cli_frontend():
+async def run_cli_frontend(server_port: int):
     """Run CLI frontend for interacting with BLAST."""
     client = OpenAI(
         api_key="not-needed",
-        base_url="http://127.0.0.1:8000"
+        base_url=f"http://127.0.0.1:{server_port}"
     )
     
     previous_response_id = None
@@ -137,11 +137,11 @@ async def run_cli_frontend():
             print(f"Error: {e}")
             continue
 
-async def run_cli_server(server):
+async def run_cli_server(server, port: int):
     """Run server with CLI frontend."""
     server.should_exit = lambda: False
     server.startup_complete = lambda: (
-        asyncio.get_event_loop().create_task(run_cli_frontend())
+        asyncio.get_event_loop().create_task(run_cli_frontend(port))
     )
     await server.serve()
 
@@ -150,11 +150,25 @@ def cli():
     """BLAST CLI tool for browser automation."""
     pass
 
+def find_available_port(start_port: int, max_attempts: int = 10) -> Optional[int]:
+    """Find an available port starting from start_port."""
+    import socket
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('127.0.0.1', port))
+                return port
+        except OSError:
+            continue
+    return None
+
 @cli.command()
 @click.option('--config', type=str, help='Path to config YAML file')
 @click.option('--no-metrics-output', is_flag=True, help='Disable metrics output')
+@click.option('--server-port', type=int, default=8000, help='Port for the backend server')
+@click.option('--web-port', type=int, default=3000, help='Port for the web frontend')
 @click.argument('component', type=click.Choice(['web', 'cli', 'engine']), required=False)
-def serve(config: Optional[str], no_metrics_output: bool, component: Optional[str] = None):
+def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_port: int, component: Optional[str] = None):
     """Start BLAST components."""
     # Initialize app state with config (this loads default_config.yaml)
     init_app_state(config)
@@ -220,11 +234,11 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                 process.kill()
                 process.wait()
 
-    async def run_standalone_cli():
+    async def run_standalone_cli(actual_server_port):
         """Run just the CLI frontend."""
         client = OpenAI(
             api_key="not-needed",
-            base_url="http://127.0.0.1:8000"
+            base_url=f"http://127.0.0.1:{actual_server_port}"
         )
         
         previous_response_id = None
@@ -279,7 +293,7 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                 print(f"Error: Backend server not running. Start it with 'blastai serve engine'")
                 continue
 
-    async def display_metrics(client, settings: Settings):
+    async def display_metrics(client, settings: Settings, server_port: int):
         """Display and update metrics every 5s."""
         # Constants for metrics display
         METRICS_LINES = 10  # Including blank line at start
@@ -322,7 +336,7 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
         while True:
             try:
                 # Get metrics from server
-                response = await client.get("http://127.0.0.1:8000/metrics")
+                response = await client.get(f"http://127.0.0.1:{server_port}/metrics")
                 metrics = response.json()
                 print_metrics(metrics)
             except Exception:
@@ -340,11 +354,22 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
             raise RuntimeError("Settings not initialized properly")
         settings = _settings
 
+        # Find available ports if the requested ones are in use
+        actual_server_port = find_available_port(server_port)
+        if not actual_server_port:
+            print(f"\nError: Could not find available port for server (tried ports {server_port}-{server_port+9})")
+            return
+        
+        actual_web_port = find_available_port(web_port)
+        if not actual_web_port:
+            print(f"\nError: Could not find available port for web frontend (tried ports {web_port}-{web_port+9})")
+            return
+
         # Create server with proper logging level
         server_config = uvicorn.Config(
             "blastai.server:app",
             host="127.0.0.1",
-            port=8000,
+            port=actual_server_port,
             log_level=settings.blastai_log_level.lower(),
             reload=False,
             workers=1,
@@ -358,12 +383,12 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
 
         # Print server endpoint
         if component == 'engine':
-            print("Server: http://127.0.0.1:8000")
+            print(f"Server: http://127.0.0.1:{actual_server_port}")
         elif component == 'web':
-            print("Web: http://localhost:3000")
+            print(f"Web: http://localhost:{actual_web_port}")
         elif component is None:
-            print("Server: http://127.0.0.1:8000")
-            print("Web: http://localhost:3000")
+            print(f"Server: http://127.0.0.1:{actual_server_port}")
+            print(f"Web: http://localhost:{actual_web_port}")
 
         # Create metrics task if needed
         metrics_task = None
@@ -377,21 +402,20 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                 (component == 'engine' or component is None) and
                 should_show_metrics(settings)):
                 metrics_client = httpx.AsyncClient()
-                metrics_task = asyncio.create_task(display_metrics(metrics_client, settings))
+                metrics_task = asyncio.create_task(display_metrics(metrics_client, settings, actual_server_port))
 
             if component is None:
                 # Default behavior: run both backend and web frontend
                 frontend_dir = Path(__file__).parent / 'frontend'
-                print(f"Frontend directory: {frontend_dir}")
                 
                 # Check Node.js and npm installation
                 if not check_node_installation():
-                    await run_cli_server(server)
+                    await run_cli_server(server, actual_server_port)
                     return
                     
                 npm_cmd = check_npm_installation()
                 if not npm_cmd:
-                    await run_cli_server(server)
+                    await run_cli_server(server, actual_server_port)
                     return
                     
                 # Install dependencies if needed
@@ -400,17 +424,23 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                         subprocess.run([npm_cmd, 'install'], cwd=frontend_dir, check=True, text=True)
                     except subprocess.CalledProcessError as e:
                         print(f"Error installing frontend dependencies: {e}")
-                        await run_cli_server(server)
+                        await run_cli_server(server, actual_server_port)
                         return
 
                 # Start frontend process
                 try:
+                    # Set environment variables for the frontend process
+                    frontend_env = os.environ.copy()
+                    frontend_env['NEXT_PUBLIC_SERVER_PORT'] = str(actual_server_port)
+                    frontend_env['PORT'] = str(actual_web_port)
+                    
                     process = subprocess.Popen(
-                        [npm_cmd, 'run', 'dev'],
+                        [npm_cmd, 'run', 'dev', f'--port={actual_web_port}'],
                         cwd=frontend_dir,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
-                        text=True
+                        text=True,
+                        env=frontend_env
                     )
                 except subprocess.CalledProcessError as e:
                     print(f"Error starting frontend: {e}")
@@ -424,8 +454,8 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
                         for line in process.stdout:
                             line = line.strip()
                             # Only show errors and important info
-                            if any(x in line.lower() for x in ['error:', 'warn:', '✓ ready']):
-                                print(f"Frontend: {line}")
+                            if any(x in line.lower() for x in ['error:', 'warn:', '✓ ready', 'invalid']):
+                                print(f"Web: {line}")
                             # Set ready event when frontend is loaded
                             if '✓ ready' in line:
                                 frontend_ready.set()
@@ -458,7 +488,7 @@ def serve(config: Optional[str], no_metrics_output: bool, component: Optional[st
             elif component == 'web':
                 await run_web_frontend()
             elif component == 'cli':
-                await run_standalone_cli()
+                await run_standalone_cli(actual_server_port)
             elif component == 'engine':
                 # Only run the backend server
                 await server.serve()

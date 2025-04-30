@@ -6,7 +6,7 @@ const Home: React.FC = () => {
   return (
     <div className="bg-dark text-white h-screen flex flex-col overflow-hidden">
       <Head>
-        <title>BLAST - Browser Language Agent System for Tasks</title>
+        <title>BLAST - Browser-LLM Auto-Scaling Technology</title>
         <link rel="icon" href="/blast_icon_only.svg" type="image/svg+xml" />
       </Head>
 
