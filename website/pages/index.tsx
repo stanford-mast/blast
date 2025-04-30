@@ -7,7 +7,7 @@ const Home: React.FC = () => {
     <div className="bg-dark text-white h-screen flex flex-col overflow-hidden">
       <Head>
         <title>BLAST - Browser-LLM Auto-Scaling Technology</title>
-        <link rel="icon" href="/blast_icon_only.svg" type="image/svg+xml" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
       </Head>
 
       <main className="flex-1 flex items-center justify-center">
