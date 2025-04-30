@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/blast_icon_only.svg" width="200" height="200" alt="BLAST Logo">
+  <img src="docs/assets/blast_icon_only.png" width="200" height="200" alt="BLAST Logo">
 </div>
 
 <p align="center" style="font-size: 24px">A high-performance serving engine for web browsing AI.</p>
