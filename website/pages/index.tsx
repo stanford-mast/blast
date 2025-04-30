@@ -4,127 +4,56 @@ import Image from 'next/image'
 
 const Home: React.FC = () => {
   return (
-    <div className="bg-dark text-white min-h-screen">
+    <div className="bg-dark text-white h-screen flex flex-col overflow-hidden">
       <Head>
         <title>BLAST - Browser Language Agent System for Tasks</title>
         <link rel="icon" href="/assets/blast_icon_only.svg" type="image/svg+xml" />
       </Head>
 
-      <header>
-        <nav className="py-4">
-          <div className="container mx-auto px-6">
-            <div className="flex items-center justify-between">
-              <a href="/" className="flex items-center space-x-2">
-                <Image src="/assets/blast_icon_only.svg" alt="BLAST" width={40} height={40} />
-                <span className="text-xl font-bold">BLAST</span>
-              </a>
-              <div className="space-x-6">
-                <a href="https://docs.blastproject.org" className="hover:text-blast-yellow">Docs</a>
-                <a href="https://github.com/stanford-mast/blast" className="hover:text-blast-yellow">GitHub</a>
-                <a href="https://x.com/realcalebwin" className="hover:text-blast-yellow">Twitter</a>
-              </div>
-            </div>
+      <main className="flex-1 flex items-center justify-center">
+        <div className="max-w-6xl w-full mx-auto px-6 text-center">
+          <div className="relative w-4/5 mx-auto aspect-video">
+            <Image
+              src="/assets/blast_ui_gif.gif"
+              alt="BLAST Demo"
+              fill
+              className="rounded-lg shadow-2xl"
+              style={{ objectFit: 'contain' }}
+              priority
+            />
           </div>
-        </nav>
-      </header>
-
-      <main>
-        <section className="py-20 text-center">
-          <div className="container mx-auto px-6">
-            <Image src="/assets/blast_icon_only.svg" alt="BLAST" width={200} height={200} className="mx-auto mb-8" />
-            <h1 className="text-6xl font-bold mb-4">BLAST</h1>
-            <p className="text-2xl mb-8 text-gray-300">Browser Language Agent System for Tasks</p>
-            <div className="space-x-4">
-              <a href="https://docs.blastproject.org/get-started/quickstart" 
-                 className="bg-blast-yellow text-black px-8 py-3 rounded-lg font-medium hover:opacity-90">
-                Get Started
-              </a>
-              <a href="https://vimeo.com/1079613095/7e90cc78f7?ts=0&share=copy"
-                 className="border border-blast-yellow text-blast-yellow px-8 py-3 rounded-lg font-medium hover:bg-blast-yellow hover:text-black">
-                Watch Demo
-              </a>
-            </div>
-          </div>
-        </section>
-
-        <section className="py-20 bg-black bg-opacity-30">
-          <div className="container mx-auto px-6">
-            <h2 className="text-4xl font-bold mb-12 text-center">Features</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-              <div className="p-6 rounded-lg bg-black bg-opacity-50">
-                <h3 className="text-xl font-bold mb-2 text-blast-yellow">OpenAI-Compatible API</h3>
-                <p>Drop-in replacement for OpenAI&apos;s API</p>
-              </div>
-              <div className="p-6 rounded-lg bg-black bg-opacity-50">
-                <h3 className="text-xl font-bold mb-2 text-blast-yellow">High Performance</h3>
-                <p>Built for concurrency and parallel processing</p>
-              </div>
-              <div className="p-6 rounded-lg bg-black bg-opacity-50">
-                <h3 className="text-xl font-bold mb-2 text-blast-yellow">Streaming Support</h3>
-                <p>Real-time streaming of AI responses</p>
-              </div>
-              <div className="p-6 rounded-lg bg-black bg-opacity-50">
-                <h3 className="text-xl font-bold mb-2 text-blast-yellow">Smart Caching</h3>
-                <p>Intelligent caching system for improved performance</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="py-20">
-          <div className="container mx-auto px-6">
-            <h2 className="text-4xl font-bold mb-12 text-center">Quick Start</h2>
-            <div className="max-w-3xl mx-auto space-y-8">
-              <div>
-                <p className="mb-2">Install BLAST:</p>
-                <pre className="bg-black bg-opacity-50 p-4 rounded-lg">
-                  <code>pip install blastai</code>
-                </pre>
-              </div>
-              <div>
-                <p className="mb-2">Start the server:</p>
-                <pre className="bg-black bg-opacity-50 p-4 rounded-lg">
-                  <code>blastai serve</code>
-                </pre>
-              </div>
-              <div>
-                <p className="mb-2">Use it like the OpenAI API:</p>
-                <pre className="bg-black bg-opacity-50 p-4 rounded-lg overflow-x-auto">
-                  <code>{`from openai import OpenAI
-
-client = OpenAI(
-    api_key="not-needed",
-    base_url="http://127.0.0.1:8000"
-)
-
-stream = client.responses.create(
-    model="not-needed",
-    input="Search for Python docs",
-    stream=True
-)
-
-for event in stream:
-    if event.type == "response.output_text.delta":
-        print(event.delta, end="", flush=True)`}</code>
-                </pre>
-              </div>
-            </div>
-          </div>
-        </section>
-      </main>
-
-      <footer className="py-8 border-t border-gray-800">
-        <div className="container mx-auto px-6">
-          <div className="flex flex-col items-center space-y-4">
-            <div className="space-x-6">
-              <a href="https://docs.blastproject.org" className="hover:text-blast-yellow">Documentation</a>
-              <a href="https://github.com/stanford-mast/blast" className="hover:text-blast-yellow">GitHub</a>
-              <a href="https://x.com/realcalebwin" className="hover:text-blast-yellow">Twitter</a>
-            </div>
-            <p className="text-gray-500">© 2024 BLAST Project. MIT License.</p>
+          <h1 className="text-3xl md:text-2xl font-bold my-12 max-w-3xl mx-auto">
+            A high-performance serving engine for web browsing AI.
+          </h1>
+          <div className="flex flex-wrap justify-center gap-4">
+            <a href="https://docs.blastproject.org"
+               className="bg-blast-yellow text-black px-6 py-3 rounded-lg font-medium hover:opacity-90 flex items-center gap-2">
+              Docs
+            </a>
+            <a href="https://discord.gg/AUMAYTAS"
+               className="bg-blast-yellow text-black px-6 py-3 rounded-lg font-medium hover:opacity-90 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M20.317 4.492c-1.53-.69-3.17-1.2-4.885-1.49a.075.075 0 0 0-.079.036c-.21.369-.444.85-.608 1.23a18.566 18.566 0 0 0-5.487 0 12.36 12.36 0 0 0-.617-1.23A.077.077 0 0 0 8.562 3c-1.714.29-3.354.8-4.885 1.491a.07.07 0 0 0-.032.027C.533 9.093-.32 13.555.099 17.961a.08.08 0 0 0 .031.055 20.03 20.03 0 0 0 5.993 2.98.078.078 0 0 0 .084-.026 13.83 13.83 0 0 0 1.226-1.963.074.074 0 0 0-.041-.104 13.175 13.175 0 0 1-1.872-.878.075.075 0 0 1-.008-.125c.126-.093.252-.19.372-.287a.075.075 0 0 1 .078-.01c3.927 1.764 8.18 1.764 12.061 0a.075.075 0 0 1 .079.009c.12.098.245.195.372.288a.075.075 0 0 1-.006.125c-.598.344-1.22.635-1.873.877a.075.075 0 0 0-.041.105c.36.687.772 1.341 1.225 1.962a.077.077 0 0 0 .084.028 19.963 19.963 0 0 0 6.002-2.981.076.076 0 0 0 .032-.054c.5-5.094-.838-9.52-3.549-13.442a.06.06 0 0 0-.031-.028zM8.02 15.278c-1.182 0-2.157-1.069-2.157-2.38 0-1.312.956-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.956 2.38-2.157 2.38zm7.975 0c-1.183 0-2.157-1.069-2.157-2.38 0-1.312.955-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.946 2.38-2.157 2.38z"/>
+              </svg>
+              Discord
+            </a>
+            <a href="https://x.com/realcalebwin"
+               className="bg-blast-yellow text-black px-6 py-3 rounded-lg font-medium hover:opacity-90 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+              </svg>
+              realcalebwin
+            </a>
+            <a href="https://github.com/calebwin/blast"
+               className="bg-blast-yellow text-black px-6 py-3 rounded-lg font-medium hover:opacity-90 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+              </svg>
+              GitHub
+            </a>
           </div>
         </div>
-      </footer>
+      </main>
     </div>
   )
 }
