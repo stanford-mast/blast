@@ -320,7 +320,7 @@ class Tools:
                         output_parts.append("\n")
                     output_parts.extend(text_results)
 
-                msg = f'📄 Extracted from page:\n{"\n".join(output_parts)}\n'
+                msg = "📄 Extracted from page:\n" + "\n".join(output_parts) + "\n"
                 return ActionResult(extracted_content=msg, include_in_memory=True)
                 
             except Exception as e:
