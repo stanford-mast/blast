@@ -46,17 +46,19 @@ class CacheManager:
         self._dummy_agent: Optional[Agent] = None
         self.constraints = constraints or Constraints()
         
-    def load(self, scheduler: Scheduler):
+    def load(self, scheduler: Scheduler, use_grok_model: bool = False):
         """Initialize the dummy agent for loading history.
         
         This should be called after scheduler is fully set up.
         
         Args:
             scheduler: Scheduler instance for tools
+            use_grok_model: Whether to use X AI's Grok-3-beta model
         """
         if not self._dummy_agent:
             # Create LLM for dummy agent
-            llm = ChatOpenAI(model=self.constraints.llm_model_mini or "gpt-4.1-mini")  # Use mini model for cache
+            model_name = "grok-3-beta" if use_grok_model else self.constraints.llm_model_mini or "gpt-4.1-mini"
+            llm = ChatOpenAI(model=model_name)  # Use selected model for cache
             
             # Create fresh Tools instance for dummy agent with LLM
             tools = Tools(scheduler=scheduler, resource_manager=None, llm_model=llm)  # No resource manager needed for cache

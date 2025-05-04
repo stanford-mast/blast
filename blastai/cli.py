@@ -712,6 +712,20 @@ def main():
                 install_browsers(quiet=already_installed)
     except Exception:
         install_browsers(quiet=already_installed)
+    
+    # Prompt user to select model
+    model_choice = None
+    while model_choice not in ['1', '2']:
+        print("\nSelect the model to use:")
+        print("1. Open AI's model")
+        print("2. X AI's Grok-3-beta model")
+        model_choice = input("Enter 1 or 2: ").strip()
+    
+    if model_choice == '1':
+        os.environ["SELECTED_MODEL"] = "openai"
+    else:
+        os.environ["SELECTED_MODEL"] = "grok-3-beta"
+    
     cli()
 
 if __name__ == '__main__':

@@ -19,7 +19,8 @@ class Planner:
             constraints: Optional constraints for LLM model selection
         """
         self.constraints = constraints or Constraints()
-        self.llm = ChatOpenAI(model=self.constraints.llm_model)
+        model_name = self.constraints.grok_model if os.getenv("SELECTED_MODEL") == "grok-3-beta" else self.constraints.llm_model
+        self.llm = ChatOpenAI(model=model_name)
         
         # System prompt for planning
         self.system_prompt = """You are a task planner that generates concise 1–2 sentence plans for web browser tasks.  
