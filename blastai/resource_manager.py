@@ -303,7 +303,8 @@ class ResourceManager:
             return None
         
         # Create LLMs
-        llm = ChatOpenAI(model=self.constraints.llm_model)
+        model_name = self.constraints.grok_model if os.getenv("SELECTED_MODEL") == "grok-3-beta" else self.constraints.llm_model
+        llm = ChatOpenAI(model=model_name)
         llm_mini = ChatOpenAI(model=self.constraints.llm_model_mini)
         
         # Create fresh Tools instance with scheduler, task_id, resource manager and mini LLM

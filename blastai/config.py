@@ -93,6 +93,11 @@ class Constraints(BaseModel):
         description="Whether to share browser process between requests"
     )
     
+    grok_model: str = Field(
+        default="grok-3-beta",
+        description="X AI's Grok-3-beta model"
+    )
+    
     @classmethod
     def create(cls, max_memory: Optional[str] = None,
                    max_concurrent_browsers: int = 20,
@@ -104,7 +109,8 @@ class Constraints(BaseModel):
                    llm_model_mini: str = "gpt-4.1-mini",
                    allow_vision: bool = True,
                    require_headless: bool = True,
-                   share_browser_process: bool = True) -> "Constraints":
+                   share_browser_process: bool = True,
+                   grok_model: str = "grok-3-beta") -> "Constraints":
         """Create Constraints from string values.
         
         Args:
@@ -119,6 +125,7 @@ class Constraints(BaseModel):
             allow_vision: Whether to allow vision capabilities
             require_headless: Whether to require headless mode
             share_browser_process: Whether to share browser process between contexts
+            grok_model: X AI's Grok-3-beta model
             
         Returns:
             Constraints instance
@@ -158,5 +165,6 @@ class Constraints(BaseModel):
             llm_model_mini=llm_model_mini,
             allow_vision=allow_vision,
             require_headless=require_headless,
-            share_browser_process=share_browser_process
+            share_browser_process=share_browser_process,
+            grok_model=grok_model
         )

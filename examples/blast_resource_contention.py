@@ -22,6 +22,8 @@ import shutil
 from openai import OpenAI
 from browser_use import Agent, BrowserConfig, Browser
 from langchain_openai import ChatOpenAI
+from langchain_xai import ChatXAI
+
 
 # Task requiring multiple sites
 TASK = "compare what example.com and rust-lang.org and python.org say"

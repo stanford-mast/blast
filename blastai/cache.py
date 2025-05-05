@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
 from langchain_openai import ChatOpenAI
+from langchain_xai import ChatXAI
 from browser_use import Agent
 from browser_use.agent.views import AgentHistoryList
 
@@ -56,7 +57,11 @@ class CacheManager:
         """
         if not self._dummy_agent:
             # Create LLM for dummy agent
-            llm = ChatOpenAI(model=self.constraints.llm_model_mini or "gpt-4.1-mini")  # Use mini model for cache
+            
+            if "grok" in (self.constraints.llm_model_mini or "").lower():
+                llm = ChatXAI(model=self.constraints.llm_model_mini or "grok-3-beta")  # Use grok model for cache
+            else:
+                llm = ChatOpenAI(model=self.constraints.llm_model_mini or "gpt-4.1-mini")  # Use gpt model for cache
             
             # Create fresh Tools instance for dummy agent with LLM
             tools = Tools(scheduler=scheduler, resource_manager=None, llm_model=llm)  # No resource manager needed for cache

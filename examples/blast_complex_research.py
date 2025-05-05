@@ -8,6 +8,7 @@ import shutil
 from openai import OpenAI
 from browser_use import Agent, Browser, BrowserConfig
 from langchain_openai import ChatOpenAI
+from langchain_xai import ChatXAI
 from langchain_community.callbacks import get_openai_callback
 from blastai.utils import estimate_llm_cost
 
