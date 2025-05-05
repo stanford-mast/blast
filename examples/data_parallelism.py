@@ -5,6 +5,7 @@ import os
 import argparse
 from dotenv import load_dotenv
 from faker import Faker
+from langchain_xai import ChatXAI
 
 def parse_args():
     """Parse command line arguments."""
@@ -223,10 +224,27 @@ async def run_tests():
         12000,   # Extra large chunks
     ]
     
-    # Initialize model(s)
-    main_model = ChatOpenAI(model=args.model)
-    baseline_model = ChatOpenAI(model="gpt-4.1") if args.compare else None
-    
+    # Initialize model(s) with constraints if available
+    # Check for 'constraints' attribute in the current context (globals)
+    constraints = globals().get("constraints", None)
+
+    def get_llm(model_name):
+        if constraints:
+            llm_model = getattr(constraints, "llm_model", "")
+            if llm_model == "grok-3-beta":
+                return ChatXAI(api_key=os.getenv("XAI_API_KEY"), model=model_name)
+            else:
+                return ChatOpenAI(api_key=os.getenv("OPENAI_API_KEY"), model=model_name)
+        else:
+            if model_name == "grok-3-beta":
+                return ChatXAI(api_key=os.getenv("XAI_API_KEY"), model=model_name)
+            else:
+                return ChatOpenAI(api_key=os.getenv("OPENAI_API_KEY"), model=model_name)
+
+    main_model = get_llm(args.model)
+    baseline_model = get_llm("gpt-4.1") if args.compare else None
+
+
     model_name = args.model.replace(".", "_")  # For config string
     
     start_time = datetime.now()

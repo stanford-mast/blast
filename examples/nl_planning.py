@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from blastai.planner import Planner
 from blastai.config import Constraints
 from langchain_openai import ChatOpenAI
+from langchain_xai import ChatXAI
 
 # Load environment variables
 load_dotenv()
@@ -20,10 +21,11 @@ async def test_planning():
     
     # Initialize planner with custom LLM using API key
     constraints = Constraints()
-    llm = ChatOpenAI(
-        api_key=api_key,
-        model=constraints.llm_model
-    )
+    if getattr(constraints, "llm_model", "").lower() == "grok-3-beta":
+        llm = ChatXAI(api_key=api_key, model=constraints.llm_model)
+    else:
+        llm = ChatOpenAI(api_key=api_key, model=constraints.llm_model)
+      
     planner = Planner(constraints)
     planner.llm = llm  # Override default LLM with authenticated one
     

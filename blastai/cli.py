@@ -1,7 +1,21 @@
 # Set anonymized telemetry to false before any imports
 import os
-
 from dotenv import load_dotenv
+from pathlib import Path
+
+# Load .env file from the script's directory
+script_dir = Path(__file__).parent
+env_path = script_dir / '.env'
+print(f"Checking for .env file at: {env_path}")
+if env_path.exists():
+    try:
+        load_dotenv(env_path)
+        print(f".env file loaded successfully. OPENAI_API_KEY: {'set' if os.getenv('OPENAI_API_KEY') else 'not set'}, XAI_API_KEY: {'set' if os.getenv('XAI_API_KEY') else 'not set'}")
+    except Exception as e:
+        print(f"Error loading .env file: {e}")
+else:
+    print(f".env file not found at {env_path}")
+
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
 
 """CLI interface for BLAST."""
@@ -14,7 +28,6 @@ import asyncio
 import threading
 import subprocess
 import shutil
-from pathlib import Path
 from typing import Optional
 from openai import OpenAI
 
@@ -514,7 +527,6 @@ def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_
     
     # Create main task
     main_task = None
-    server_task = None
     
     try:
         # Run the main coroutine
@@ -643,23 +655,61 @@ def install_browsers(quiet: bool = False):
         print(f"Error installing browsers: {e}")
         print("Please run 'python -m playwright install chromium' manually")
 
-def check_openai_api_key():
+def check_xai_api_key() -> bool:
+    """Check if X AI API key is available and prompt if not found."""
+    api_key = os.getenv("XAI_API_KEY")
+    if api_key:
+        print("XAI_API_KEY found in environment.")
+        return True
+
+    print("\nX AI API key not found. This is required to use the Grok-3-beta model.")
+    env_path = script_dir / '.env'
+
+    while True:
+        api_key = input("\nPlease enter your X AI API key: ").strip()
+        if len(api_key) > 20:  # Simple validation
+            try:
+                # Save to .env file
+                if not env_path.exists():
+                    env_path.write_text(f"XAI_API_KEY={api_key}\n")
+                else:
+                    content = env_path.read_text()
+                    if "XAI_API_KEY=" in content:
+                        lines = content.splitlines()
+                        new_lines = []
+                        for line in lines:
+                            if line.startswith("XAI_API_KEY="):
+                                new_lines.append(f"XAI_API_KEY={api_key}")
+                            else:
+                                new_lines.append(line)
+                        env_path.write_text("\n".join(new_lines) + "\n")
+                    else:
+                        with env_path.open("a") as f:
+                            f.write(f"\nXAI_API_KEY={api_key}\n")
+
+                os.environ["XAI_API_KEY"] = api_key
+                print("\nAPI key saved successfully!")
+                return True
+            except Exception as e:
+                print(f"\nError saving API key: {e}")
+                print("Please try again.")
+        else:
+            print("\nInvalid API key format. Must be at least 20 characters.")
+            retry = input("Would you like to try again? (y/n): ").lower()
+            if retry != 'y':
+                return False
+
+def check_openai_api_key() -> bool:
     """Check if OpenAI API key is available and prompt if not found."""
     api_key = os.getenv("OPENAI_API_KEY")
     if api_key:
+        print("OPENAI_API_KEY found in environment.")
         return True
-        
-    # Check .env file in current directory
-    env_path = Path(".env")
-    if env_path.exists():
-        load_dotenv(env_path)
-        api_key = os.getenv("OPENAI_API_KEY")
-        if api_key:
-            return True
-    
-    print("\nOpenAI API key not found. This is required for BLAST to run.")
+
+    print("\nOpenAI API key not found. This is required for GPT-based models.")
     print("You can get an API key from https://platform.openai.com/api-keys")
-    
+    env_path = script_dir / '.env'
+
     while True:
         api_key = input("\nPlease enter your OpenAI API key: ").strip()
         if api_key.startswith("sk-") and len(api_key) > 40:
@@ -681,7 +731,7 @@ def check_openai_api_key():
                     else:
                         with env_path.open("a") as f:
                             f.write(f"\nOPENAI_API_KEY={api_key}\n")
-                
+
                 os.environ["OPENAI_API_KEY"] = api_key
                 print("\nAPI key saved successfully!")
                 return True
@@ -689,18 +739,43 @@ def check_openai_api_key():
                 print(f"\nError saving API key: {e}")
                 print("Please try again.")
         else:
-            print("\nInvalid API key format. API keys should start with 'sk-' and be at least 40 characters long.")
+            print("\nInvalid API key format. Must start with 'sk-' and be at least 40 characters.")
             retry = input("Would you like to try again? (y/n): ").lower()
             if retry != 'y':
                 return False
 
+def get_llm_model_from_config(config_path: Optional[str] = None) -> str:
+    """Loads the config and returns the llm_model value."""
+    try:
+        if config_path:
+            settings = Settings.from_yaml(config_path)
+        else:
+            settings = Settings()
+        llm_model = getattr(settings, "llm_model", "")
+        print(f"Loaded llm_model: {llm_model}")
+        return llm_model
+    except Exception as e:
+        print(f"Error loading config: {e}")
+        return "No model found"
+
+def check_required_api_key(config_path: Optional[str] = None) -> bool:
+    """Checks which model is set in the config and ensures the required API key is present."""
+    llm_model = get_llm_model_from_config(config_path)
+    if llm_model == "grok-3-beta":
+        print("Checking XAI_API_KEY for grok-3-beta model.")
+        return check_xai_api_key()
+    elif llm_model.startswith("gpt-") or "gpt" in llm_model.lower():
+        print("Checking OPENAI_API_KEY for GPT-based model.")
+        return check_openai_api_key()
+    else:
+        print(f"Warning: Unknown or unset llm_model '{llm_model}'. Defaulting to OpenAI API key check.")
+        return check_openai_api_key()
+
 def main():
     """Main entry point for CLI."""
-    # Check for OpenAI API key first
-    if not check_openai_api_key():
-        print("\nOpenAI API key is required to run BLAST. Exiting.")
-        sys.exit(1)
-    
+    if not check_required_api_key():
+        raise RuntimeError("Required API key for the selected model has not been set.")
+
     # Check if already installed
     already_installed = check_installation_state()
     
@@ -712,20 +787,6 @@ def main():
                 install_browsers(quiet=already_installed)
     except Exception:
         install_browsers(quiet=already_installed)
-    
-    # Prompt user to select model
-    model_choice = None
-    while model_choice not in ['1', '2']:
-        print("\nSelect the model to use:")
-        print("1. Open AI's model")
-        print("2. X AI's Grok-3-beta model")
-        model_choice = input("Enter 1 or 2: ").strip()
-    
-    if model_choice == '1':
-        os.environ["SELECTED_MODEL"] = "openai"
-    else:
-        os.environ["SELECTED_MODEL"] = "grok-3-beta"
-    
     cli()
 
 if __name__ == '__main__':

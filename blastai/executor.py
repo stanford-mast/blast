@@ -13,6 +13,8 @@ from browser_use.agent.views import AgentHistoryList, ActionModel
 from browser_use.browser.context import BrowserContext
 from langchain_openai import ChatOpenAI
 from langchain_community.callbacks import get_openai_callback
+from langchain_xai import ChatXAI
+
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +26,12 @@ class Executor:
     """Wrapper around browser_use Agent for task execution."""
     
     def __init__(self, browser: Browser, browser_context: BrowserContext, controller: Controller,
-                 llm: ChatOpenAI, constraints: Constraints, task_id: str,
+                 llm: Optional[Union[ChatOpenAI, ChatXAI]], constraints: Constraints, task_id: str,
                  settings: Settings = None, engine_hash: str = None, scheduler = None,
                  sensitive_data: Optional[Dict[str, str]] = None):
         """Initialize executor with browser, controller, LLM and constraints."""
         self.browser = browser
         self.browser_context = browser_context
-        self.llm = llm
-        self.controller = controller
         self.constraints = constraints
         self.task_id = task_id
         self.settings = settings or Settings()
@@ -46,7 +46,13 @@ class Executor:
         self._last_state: Optional[Dict[str, Any]] = None
         self._total_cost = 0.0  # Track total LLM cost
         self._cb = None  # Track current callback
-        
+
+        self.constraints = constraints or Constraints()
+        if getattr(self.constraints, "llm_model", "").lower() == "grok-3-beta":
+            self.llm = ChatXAI(model=self.constraints.llm_model)
+        else:
+            self.llm = ChatOpenAI(model=self.constraints.llm_model)
+
     def _get_url_or_search(self, input_str: Optional[str]) -> Optional[str]:
         """Convert input to URL or Google search URL.
         

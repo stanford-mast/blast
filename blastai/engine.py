@@ -54,7 +54,7 @@ class Engine:
         )
         
         # Load CacheManager with scheduler
-        self.cache_manager.load(self.scheduler, use_grok_model=(self.constraints.llm_model == "grok-3-beta"))
+        self.cache_manager.load(self.scheduler)
         
         # Finally create ResourceManager with all dependencies
         self.resource_manager = ResourceManager(

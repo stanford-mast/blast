@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_xai import ChatXAI
 
 from .config import Constraints
 
@@ -19,9 +20,11 @@ class Planner:
             constraints: Optional constraints for LLM model selection
         """
         self.constraints = constraints or Constraints()
-        model_name = self.constraints.grok_model if os.getenv("SELECTED_MODEL") == "grok-3-beta" else self.constraints.llm_model
-        self.llm = ChatOpenAI(model=model_name)
-        
+        if getattr(self.constraints, "llm_model", "").lower() == "grok-3-beta":
+            self.llm = ChatXAI(model=self.constraints.llm_model)
+        else:
+            self.llm = ChatOpenAI(model=self.constraints.llm_model)
+
         # System prompt for planning
         self.system_prompt = """You are a task planner that generates concise 1–2 sentence plans for web browser tasks.  
 Focus only on whether, how, and when to launch_subtask and get_subtask_results.  
