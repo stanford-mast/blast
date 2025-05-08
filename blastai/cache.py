@@ -5,8 +5,9 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
-from langchain_openai import ChatOpenAI
 from browser_use import Agent
+
+from .utils import init_model
 from browser_use.agent.views import AgentHistoryList
 
 from .utils import get_appdata_dir
@@ -55,8 +56,9 @@ class CacheManager:
             scheduler: Scheduler instance for tools
         """
         if not self._dummy_agent:
-            # Create LLM for dummy agent
-            llm = ChatOpenAI(model=self.constraints.llm_model_mini or "gpt-4.1-mini")  # Use mini model for cache
+            # Create LLM for dummy agent using mini model
+            model = self.constraints.llm_model_mini or self.constraints.llm_model
+            llm = init_model(model)  # Use mini model for cache if available, otherwise main model
             
             # Create fresh Tools instance for dummy agent with LLM
             tools = Tools(scheduler=scheduler, resource_manager=None, llm_model=llm)  # No resource manager needed for cache

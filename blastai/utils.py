@@ -6,7 +6,103 @@ import shutil
 import subprocess
 from pathlib import Path
 import json
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Union, Any
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_core.language_models.chat_models import BaseChatModel
+
+# Load environment variables from .env file
+load_dotenv()
+
+def init_model(model_name: str, env_overrides: Optional[Dict[str, str]] = None, **kwargs: Any) -> BaseChatModel:
+    """Initialize a chat model with proper configuration.
+    
+    Args:
+        model_name: Name of the model to initialize
+        env_overrides: Optional environment variable overrides from --env
+        **kwargs: Additional keyword arguments to pass to init_chat_model
+        
+    Returns:
+        Initialized chat model
+    """
+    # Parse environment overrides
+    env_vars = parse_env_param(env_overrides) if env_overrides else {}
+    
+    # Get base URL if available
+    base_url = get_base_url_for_provider(model_name, env_vars)
+    if base_url:
+        kwargs['base_url'] = base_url
+        kwargs['api_base'] = base_url
+        
+    # Initialize and return model
+    return init_chat_model(model_name, **kwargs)
+
+def get_env_var(key: str, env_overrides: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Get environment variable from multiple sources in priority order:
+    1. env_overrides (from --env CLI param)
+    2. os.environ (includes .env file loaded by dotenv)
+    
+    Args:
+        key: Environment variable key to look up
+        env_overrides: Optional dict of environment overrides from --env CLI param
+        
+    Returns:
+        Value of environment variable if found, None otherwise
+    """
+    if env_overrides and key in env_overrides:
+        return env_overrides[key]
+    return os.getenv(key)
+
+def parse_env_param(env_param: Optional[str]) -> Dict[str, str]:
+    """Parse --env parameter value into a dictionary.
+    
+    Args:
+        env_param: String in format "KEY1=value1,KEY2=value2"
+        
+    Returns:
+        Dictionary of environment variable overrides
+    """
+    if not env_param:
+        return {}
+        
+    env_dict = {}
+    for pair in env_param.split(","):
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        env_dict[key.strip()] = value.strip()
+    return env_dict
+
+def get_base_url_for_provider(provider: str, env_overrides: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Get base URL for a model provider from environment variables.
+    
+    Args:
+        provider: Model provider name (e.g. 'openai', 'deepseek')
+        env_overrides: Optional dict of environment overrides from --env CLI param
+        
+    Returns:
+        Base URL if found in environment, None otherwise
+    """
+    provider = provider.lower()
+    if provider == 'openai':
+        return get_env_var('OPENAI_BASE_URL', env_overrides)
+    elif provider == 'deepseek':
+        # Check both possible env var names
+        return get_env_var('DEEPSEEK_BASE_URL', env_overrides) or get_env_var('DEEPSEEK_API_BASE', env_overrides)
+    return None
+
+def is_openai_model(model_name: str) -> bool:
+    """Check if a model name is from OpenAI.
+    
+    Args:
+        model_name: Name of the model
+        
+    Returns:
+        True if model is from OpenAI, False otherwise
+    """
+    model_name = model_name.lower()
+    return any(prefix in model_name for prefix in ['gpt-3', 'gpt-4', 'o1', 'o1-mini', 'o3', 'o3-mini', 'o4', 'o4-mini', 'openai'])
+
 
 def estimate_llm_cost(
     model_name: str,
@@ -17,18 +113,24 @@ def estimate_llm_cost(
     """Estimate LLM cost based on token counts and model pricing.
     
     Args:
-        model_name: Name of the LLM model
+        model_name: Name of the LLM model (with optional provider prefix)
         prompt_tokens: Number of input tokens
         completion_tokens: Number of output tokens
         cached_tokens: Number of cached input tokens (default: 0)
         
     Returns:
-        Estimated cost in USD
+        Estimated cost in USD (0.0 for non-OpenAI models)
     """
     # Load pricing config
     pricing_path = os.path.join(os.path.dirname(__file__), 'pricing_openai_api.json')
     with open(pricing_path) as f:
         pricing_config = json.load(f)
+        
+    # Strip provider prefix if present (e.g., "openai:gpt-4" -> "gpt-4")
+    if ":" in model_name:
+        provider, model_name = model_name.split(":", 1)
+        if provider != "openai":
+            return 0.0  # Only track costs for OpenAI models
         
     if model_name not in pricing_config["models"]:
         return 0.0

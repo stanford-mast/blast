@@ -48,7 +48,7 @@ import threading
 import subprocess
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 from openai import OpenAI
 
 from .server import app, init_app_state
@@ -231,7 +231,8 @@ def find_available_port(start_port: int, max_attempts: int = 10) -> Optional[int
 @click.option('--config', type=str, metavar='PATH', help='Path to config file containing constraints and settings')
 @click.option('--server-port', type=int, default=8000, metavar='PORT', help='Server port')
 @click.option('--web-port', type=int, default=3000, metavar='PORT', help='Web UI port')
-def serve(config: Optional[str], server_port: int, web_port: int, mode: Optional[str] = None):
+@click.option('--env', type=str, metavar='KEY=VALUE,...', help='Environment variables to set (e.g. OPENAI_API_KEY=xxx)')
+def serve(config: Optional[str], server_port: int, web_port: int, env: Optional[str], mode: Optional[str] = None):
     """Start BLAST (default: serves engine and web UI)"""
     # Print BLAST logo and version
     logo = """              ...........              
@@ -272,9 +273,27 @@ def serve(config: Optional[str], server_port: int, web_port: int, mode: Optional
     if settings.blastai_log_level.upper() not in ['DEBUG']:
         pass  # Warning filters now handled in __init__.py
     
-    async def run_web_frontend():
-        """Run just the web frontend."""
+    async def run_web_frontend(*,
+        server_port: int,
+        web_port: int,
+        output_event: Optional[asyncio.Event] = None,
+        web_logger: Optional[logging.Logger] = None,
+        using_logs: bool = False,
+        frontend_ready: Optional[threading.Event] = None
+    ):
+        """Run just the web frontend.
+        
+        Args:
+            server_port: Port number for the BLAST server
+            web_port: Port number for the web UI
+            output_event: Event to signal when output occurs (for metrics)
+            web_logger: Logger for web UI output when using file logging
+            using_logs: Whether to use file logging
+            frontend_ready: Event to signal when frontend is ready
+        """
         frontend_dir = Path(__file__).parent / 'frontend'
+        if frontend_ready is None:
+            frontend_ready = threading.Event()
         
         # Check Node.js and npm installation
         if not check_node_installation():
@@ -295,12 +314,18 @@ def serve(config: Optional[str], server_port: int, web_port: int, mode: Optional
 
         # Start frontend process
         try:
+            # Set environment variables for the frontend process
+            frontend_env = os.environ.copy()
+            frontend_env['NEXT_PUBLIC_SERVER_PORT'] = str(server_port)
+            frontend_env['PORT'] = str(web_port)
+            
             process = subprocess.Popen(
-                [npm_cmd, 'run', 'dev'],
+                [npm_cmd, 'run', 'dev', f'--port={web_port}'],
                 cwd=frontend_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True
+                text=True,
+                env=frontend_env
             )
         except subprocess.CalledProcessError as e:
             print(f"Error starting frontend: {e}")
@@ -315,7 +340,9 @@ def serve(config: Optional[str], server_port: int, web_port: int, mode: Optional
                         # Signal output if metrics are being shown
                         if output_event:
                             output_event.set()
-                            asyncio.get_event_loop().call_later(5, output_event.clear)
+                            timer = threading.Timer(5.0, output_event.clear)
+                            timer.daemon = True
+                            timer.start()
 
                         # Only log important info
                         if any(x in line.lower() for x in ['error:', 'warn:', '✓ ready', 'invalid']):
@@ -326,6 +353,10 @@ def serve(config: Optional[str], server_port: int, web_port: int, mode: Optional
                             # Print to terminal if not using logs
                             if not using_logs:
                                 print(f"Web: {line}")
+
+                        # Set ready event when frontend is loaded
+                        if '✓ ready' in line:
+                            frontend_ready.set()
 
             except (ValueError, IOError) as e:
                 error = f"Error reading frontend output: {e}"
@@ -671,14 +702,34 @@ def serve(config: Optional[str], server_port: int, web_port: int, mode: Optional
                     try:
                         for line in process.stdout:
                             line = line.strip()
-                            # Only show errors and important info
-                            if any(x in line.lower() for x in ['error:', 'warn:', '✓ ready', 'invalid']):
-                                print(f"Web: {line}")
-                            # Set ready event when frontend is loaded
-                            if '✓ ready' in line:
-                                frontend_ready.set()
+                            if line:
+                                # Signal output if metrics are being shown
+                                if output_event:
+                                    output_event.set()
+                                    timer = threading.Timer(5.0, output_event.clear)
+                                    timer.daemon = True
+                                    timer.start()
+
+                                # Only log important info
+                                if any(x in line.lower() for x in ['error:', 'warn:', '✓ ready', 'invalid']):
+                                    # Log to file if using logs
+                                    if web_logger:
+                                        web_logger.info(f"Web: {line}")
+                                    
+                                    # Print to terminal if not using logs
+                                    if not using_logs:
+                                        print(f"Web: {line}")
+
+                                # Set ready event when frontend is loaded
+                                if '✓ ready' in line:
+                                    frontend_ready.set()
+
                     except (ValueError, IOError) as e:
-                        print(f"Error reading frontend output: {e}")
+                        error = f"Error reading frontend output: {e}"
+                        if web_logger:
+                            web_logger.error(error)
+                        if not using_logs:
+                            print(error)
                 output_thread = threading.Thread(target=print_output, daemon=True)
                 output_thread.start()
 
@@ -878,62 +929,92 @@ def install_browsers(quiet: bool = False):
         print(f"Error installing browsers: {e}")
         print("Please run 'python -m playwright install chromium' manually")
 
-def check_openai_api_key():
-    """Check if OpenAI API key is available and prompt if not found."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    if api_key:
-        return True
+def check_model_api_key(model_name: str, env_overrides: Optional[Dict[str, str]] = None) -> bool:
+    """Check if required API key is available for the given model.
+    
+    Args:
+        model_name: Name of the model to check API key for
+        env_overrides: Optional environment variable overrides from --env
         
-    # Check .env file in current directory
-    env_path = Path(".env")
-    if env_path.exists():
-        load_dotenv(env_path)
-        api_key = os.getenv("OPENAI_API_KEY")
+    Returns:
+        True if API key is available, False otherwise
+    """
+    from .utils import get_env_var, parse_env_param, is_openai_model
+    
+    # Parse environment overrides if provided
+    env_vars = parse_env_param(env_overrides) if env_overrides else {}
+    
+    # Check if model requires OpenAI API key
+    if is_openai_model(model_name):
+        api_key = get_env_var("OPENAI_API_KEY", env_vars)
         if api_key:
             return True
-    
-    print("\nOpenAI API key not found. This is required for BLAST to run.")
-    print("You can get an API key from https://platform.openai.com/api-keys")
-    
-    while True:
-        api_key = input("\nPlease enter your OpenAI API key: ").strip()
-        if api_key.startswith("sk-") and len(api_key) > 40:
-            try:
-                # Save to .env file
-                if not env_path.exists():
-                    env_path.write_text(f"OPENAI_API_KEY={api_key}\n")
-                else:
-                    content = env_path.read_text()
-                    if "OPENAI_API_KEY=" in content:
-                        lines = content.splitlines()
-                        new_lines = []
-                        for line in lines:
-                            if line.startswith("OPENAI_API_KEY="):
-                                new_lines.append(f"OPENAI_API_KEY={api_key}")
-                            else:
-                                new_lines.append(line)
-                        env_path.write_text("\n".join(new_lines) + "\n")
-                    else:
-                        with env_path.open("a") as f:
-                            f.write(f"\nOPENAI_API_KEY={api_key}\n")
-                
-                os.environ["OPENAI_API_KEY"] = api_key
-                print("\nAPI key saved successfully!")
+            
+        # Check .env file in current directory
+        env_path = Path(".env")
+        if env_path.exists():
+            load_dotenv(env_path)
+            api_key = get_env_var("OPENAI_API_KEY", env_vars)
+            if api_key:
                 return True
-            except Exception as e:
-                print(f"\nError saving API key: {e}")
-                print("Please try again.")
-        else:
-            print("\nInvalid API key format. API keys should start with 'sk-' and be at least 40 characters long.")
-            retry = input("Would you like to try again? (y/n): ").lower()
-            if retry != 'y':
-                return False
+        
+        print(f"OpenAI API key required for {model_name}.")
+        print("Get an API key from https://platform.openai.com/api-keys")
+        
+        while True:
+            api_key = input("\nAdd your OpenAI API key: ").strip()
+            if api_key.startswith("sk-") and len(api_key) > 40:
+                try:
+                    # Save to .env file
+                    if not env_path.exists():
+                        env_path.write_text(f"OPENAI_API_KEY={api_key}\n")
+                    else:
+                        content = env_path.read_text()
+                        if "OPENAI_API_KEY=" in content:
+                            lines = content.splitlines()
+                            new_lines = []
+                            for line in lines:
+                                if line.startswith("OPENAI_API_KEY="):
+                                    new_lines.append(f"OPENAI_API_KEY={api_key}")
+                                else:
+                                    new_lines.append(line)
+                            env_path.write_text("\n".join(new_lines) + "\n")
+                        else:
+                            with env_path.open("a") as f:
+                                f.write(f"\nOPENAI_API_KEY={api_key}\n")
+                    
+                    os.environ["OPENAI_API_KEY"] = api_key
+                    print("\nAPI key saved successfully!")
+                    return True
+                except Exception as e:
+                    print(f"\nError saving API key: {e}")
+                    print("Please try again.")
+            else:
+                print("\nInvalid API key format. API keys should start with 'sk-' and be at least 40 characters long.")
+                retry = input("Would you like to try again? (y/n): ").lower()
+                if retry != 'y':
+                    return False
+    
+    # For other models, no API key check needed yet
+    return True
 
 def main():
     """Main entry point for CLI."""
-    # Check for OpenAI API key first
-    if not check_openai_api_key():
-        print("\nOpenAI API key is required to run BLAST. Exiting.")
+    # Initialize app state to get settings and constraints
+    init_app_state(None)
+    from .server import _settings, _constraints
+    if _settings is None or _constraints is None:
+        raise RuntimeError("Settings or constraints not initialized properly")
+    settings = _settings
+    constraints = _constraints
+    
+    # Check for required API keys based on model
+    if not check_model_api_key(constraints.llm_model):
+        print("\nRequired API key not found. Exiting.")
+        sys.exit(1)
+        
+    if constraints.llm_model_mini and not check_model_api_key(constraints.llm_model_mini):
+        print("\nRequired API key not found for mini model. Exiting.")
         sys.exit(1)
     
     # Check if already installed

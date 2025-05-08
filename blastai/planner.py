@@ -2,10 +2,10 @@
 
 import logging
 from typing import Optional
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .config import Constraints
+from .utils import init_model
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class Planner:
             constraints: Optional constraints for LLM model selection
         """
         self.constraints = constraints or Constraints()
-        self.llm = ChatOpenAI(model=self.constraints.llm_model)
+        self.llm = init_model(self.constraints.llm_model)
         
         # System prompt for planning
         self.system_prompt = """You are a task planner that generates concise 1–2 sentence plans for web browser tasks.  

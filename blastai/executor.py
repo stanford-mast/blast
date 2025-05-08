@@ -11,20 +11,21 @@ from urllib.parse import urlparse, quote_plus
 from browser_use import Agent, Browser, Controller
 from browser_use.agent.views import AgentHistoryList, ActionModel
 from browser_use.browser.context import BrowserContext
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain.chat_models import init_chat_model
 from langchain_community.callbacks import get_openai_callback
 
 logger = logging.getLogger(__name__)
 
 from .config import Settings, Constraints
 from .response import AgentReasoning, AgentHistoryListResponse
-from .utils import estimate_llm_cost
+from .utils import estimate_llm_cost, get_base_url_for_provider, get_env_var, is_openai_model
 
 class Executor:
     """Wrapper around browser_use Agent for task execution."""
     
     def __init__(self, browser: Browser, browser_context: BrowserContext, controller: Controller,
-                 llm: ChatOpenAI, constraints: Constraints, task_id: str,
+                 llm: BaseChatModel, constraints: Constraints, task_id: str,
                  settings: Settings = None, engine_hash: str = None, scheduler = None,
                  sensitive_data: Optional[Dict[str, str]] = None):
         """Initialize executor with browser, controller, LLM and constraints."""
@@ -131,14 +132,17 @@ class Executor:
                         await self.agent.multi_act([{'open_tab': {'url': url}}])
                     self.agent.add_new_task(task)
                 
-                # Run task with cost tracking
-                with get_openai_callback() as cb:
-                    self._cb = cb  # Store callback
-                    try:
-                        self._history = await self.agent.run()
-                    finally:
-                        self._update_total_cost()
-                        self._cb = None
+                # Run task with cost tracking if using OpenAI
+                if is_openai_model(self.constraints.llm_model):
+                    with get_openai_callback() as cb:
+                        self._cb = cb  # Store callback
+                        try:
+                            self._history = await self.agent.run()
+                        finally:
+                            self._update_total_cost()
+                            self._cb = None
+                else:
+                    self._history = await self.agent.run()
                 return self._history
                 
             else:
@@ -154,14 +158,17 @@ class Executor:
                         sensitive_data=self.sensitive_data
                     )
                 
-                # Run plan with cost tracking
-                with get_openai_callback() as cb:
-                    self._cb = cb  # Store callback
-                    try:
-                        self._history = await self.agent.rerun_history(task_or_plan)
-                    finally:
-                        self._update_total_cost()
-                        self._cb = None
+                # Run plan with cost tracking if using OpenAI
+                if is_openai_model(self.constraints.llm_model):
+                    with get_openai_callback() as cb:
+                        self._cb = cb  # Store callback
+                        try:
+                            self._history = await self.agent.rerun_history(task_or_plan)
+                        finally:
+                            self._update_total_cost()
+                            self._cb = None
+                else:
+                    self._history = await self.agent.rerun_history(task_or_plan)
                 return self._history
             
         except Exception as e:

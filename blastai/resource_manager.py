@@ -49,13 +49,12 @@ from datetime import datetime, timedelta
 
 from browser_use import Browser, BrowserConfig, Agent
 from browser_use.browser.context import BrowserContext
-from langchain_openai import ChatOpenAI
 
 from .config import Settings, Constraints
 from .executor import Executor
 from .tools import Tools
 from .secrets import SecretsManager
-from .utils import find_local_browser
+from .utils import find_local_browser, init_model
 
 logger = logging.getLogger(__name__)
 
@@ -331,8 +330,8 @@ class ResourceManager:
             return None
         
         # Create LLMs
-        llm = ChatOpenAI(model=self.constraints.llm_model)
-        llm_mini = ChatOpenAI(model=self.constraints.llm_model_mini)
+        llm = init_model(self.constraints.llm_model)
+        llm_mini = init_model(self.constraints.llm_model_mini) if self.constraints.llm_model_mini else llm
         
         # Create fresh Tools instance with scheduler, task_id, resource manager and mini LLM
         tools = Tools(scheduler=self.scheduler, task_id=task_id, resource_manager=self, llm_model=llm_mini)
