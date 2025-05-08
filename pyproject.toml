@@ -22,10 +22,11 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.0",
-    "browser-use>=0.1.41",
+    "browser-use>=0.1.45",
     "fastapi>=0.68.0",
     "uvicorn>=0.15.0",
     "click>=8.0.0",
+    "rich-click>=1.7.0",
     "httpx>=0.24.0",
     "PyYAML>=6.0",
     "langchain_community>=0.3.20",

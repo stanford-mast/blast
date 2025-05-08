@@ -1,13 +1,46 @@
-# Set anonymized telemetry to false before any imports
+# Set environment variables before any imports
+import hashlib
 import os
-
+import warnings
+import logging
 from dotenv import load_dotenv
+
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
+
+# Disable all warnings for this process and subprocesses
+os.environ["PYTHONWARNINGS"] = "ignore"
+warnings.filterwarnings("ignore")
+
+# Patch warning display
+def _null_warn(*args, **kwargs):
+    pass
+warnings.warn = _null_warn
+warnings.showwarning = _null_warn
 
 """CLI interface for BLAST."""
 
 import sys
-import click
+import rich_click as click
+from rich.console import Console
+from rich.text import Text
+from rich.panel import Panel
+
+# Configure rich-click
+click.rich_click.USE_RICH_MARKUP = True
+click.rich_click.USE_MARKDOWN = True
+click.rich_click.SHOW_ARGUMENTS = True
+click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
+
+# Style configuration
+click.rich_click.STYLE_COMMANDS = "blue"  # Command names in blue
+click.rich_click.STYLE_OPTIONS = "white"  # Option values in white
+click.rich_click.STYLE_SWITCH = "white"   # Option switches in white
+click.rich_click.STYLE_HEADER = "green"   # Section headers in green
+click.rich_click.STYLE_HELPTEXT = "white" # Help text in white
+click.rich_click.STYLE_USAGE = "green"    # Usage header in pastel yellow
+click.rich_click.STYLE_USAGE_COMMAND = "rgb(255,223,128)" # Command in usage in blue
+
+console = Console()
 import httpx
 import uvicorn
 import asyncio
@@ -145,10 +178,41 @@ async def run_cli_server(server, port: int):
     )
     await server.serve()
 
-@click.group()
-def cli():
-    """BLAST CLI tool for browser automation."""
-    pass
+@click.group(invoke_without_command=True)
+@click.version_option('0.1.0', '-V', '--version', prog_name='BLAST')
+@click.pass_context
+def cli(ctx):
+    """🚀  Browser-LLM Auto-Scaling Technology"""
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help(), end="")
+        links_panel = Panel(
+            "\n".join([
+                "🌐  [link=https://blastproject.org]Website[/]",
+                "📚  [link=https://docs.blastproject.org]Docs[/]",
+                "💬  [link=https://discord.gg/NqrkJwYYh4]Discord[/]",
+                "⭐  [link=https://github.com/stanford-mast/blast]github.com/Stanford-MAST/BLAST[/]"
+            ]),
+            border_style="bright_black",
+            title="Support",
+            title_align="left",
+            # padding=(0, 2)
+        )
+        console.print(links_panel)
+        print()
+
+@cli.command()
+@click.argument('command', required=False)
+def help(command):
+    """Show help for a command."""
+    ctx = click.get_current_context()
+    if command:
+        cmd = cli.get_command(ctx, command)
+        if cmd:
+            console.print(cmd.get_help(ctx))
+        else:
+            console.print(f"[red]Error:[/] No such command '[blue]{command}[/]'")
+    else:
+        console.print(cli.get_help(ctx))
 
 def find_available_port(start_port: int, max_attempts: int = 10) -> Optional[int]:
     """Find an available port starting from start_port."""
@@ -162,16 +226,51 @@ def find_available_port(start_port: int, max_attempts: int = 10) -> Optional[int
             continue
     return None
 
-@cli.command()
-@click.option('--config', type=str, help='Path to config YAML file')
-@click.option('--no-metrics-output', is_flag=True, help='Disable metrics output')
-@click.option('--server-port', type=int, default=8000, help='Port for the backend server')
-@click.option('--web-port', type=int, default=3000, help='Port for the web frontend')
-@click.argument('component', type=click.Choice(['web', 'cli', 'engine']), required=False)
-def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_port: int, component: Optional[str] = None):
-    """Start BLAST components."""
+@cli.command('serve')
+@click.argument('mode', type=click.Choice(['web', 'cli', 'engine']), required=False)
+@click.option('--config', type=str, metavar='PATH', help='Path to config file containing constraints and settings')
+@click.option('--server-port', type=int, default=8000, metavar='PORT', help='Server port')
+@click.option('--web-port', type=int, default=3000, metavar='PORT', help='Web UI port')
+def serve(config: Optional[str], server_port: int, web_port: int, mode: Optional[str] = None):
+    """Start BLAST (default: serves engine and web UI)"""
+    # Print BLAST logo and version
+    logo = """              ...........              
+          ..........--.......          
+       ......--+##########++-...       
+     ......-########+------+##-...     
+    .....-#######+...........-##-..    
+   .....-#######-..............+#+..   
+  .....-#######-................+#+..  
+ .....-########.................-##-.. 
+ .....-#######+..................##+.. 
+ .....+########.................-##+.. 
+......+########+................###+...
+ .....-#########+-............-####-.. 
+ ......+###########--......-+#####+... 
+ .......##########################.... 
+  .......+######################+....  
+   .......-+##################+-....   
+    .........-+############+--.....    
+     ...........----------.......      
+       .........................       
+          ...................          
+              ...........              """
+    # console.print(logo)
+    # console.print(f"BLAST: Browser-LLM Auto-Scaling Technology v0.1.1")
+
     # Initialize app state with config (this loads default_config.yaml)
+    ctx = click.get_current_context()
     init_app_state(config)
+    
+    # Get settings that were loaded by init_app_state
+    from .server import _settings
+    if _settings is None:
+        raise RuntimeError("Settings not initialized properly")
+    settings = _settings
+    
+    # Check log level
+    if settings.blastai_log_level.upper() not in ['DEBUG']:
+        pass  # Warning filters now handled in __init__.py
     
     async def run_web_frontend():
         """Run just the web frontend."""
@@ -211,10 +310,29 @@ def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_
         def print_output():
             try:
                 for line in process.stdout:
-                    # Show frontend output for debugging
-                    print(f"Web: {line.strip()}")
+                    line = line.strip()
+                    if line:
+                        # Signal output if metrics are being shown
+                        if output_event:
+                            output_event.set()
+                            asyncio.get_event_loop().call_later(5, output_event.clear)
+
+                        # Only log important info
+                        if any(x in line.lower() for x in ['error:', 'warn:', '✓ ready', 'invalid']):
+                            # Log to file if using logs
+                            if web_logger:
+                                web_logger.info(f"Web: {line}")
+                            
+                            # Print to terminal if not using logs
+                            if not using_logs:
+                                print(f"Web: {line}")
+
             except (ValueError, IOError) as e:
-                print(f"Error reading frontend output: {e}")
+                error = f"Error reading frontend output: {e}"
+                if web_logger:
+                    web_logger.error(error)
+                if not using_logs:
+                    print(error)
         
         output_thread = threading.Thread(target=print_output, daemon=True)
         output_thread.start()
@@ -224,7 +342,6 @@ def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_
             while True:
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
-            print("\nShutting down web frontend...")
             raise
         finally:
             process.terminate()
@@ -293,7 +410,7 @@ def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_
                 print(f"Error: Backend server not running. Start it with 'blastai serve engine'")
                 continue
 
-    async def display_metrics(client, settings: Settings, server_port: int):
+    async def display_metrics(client, settings: Settings, server_port: int, output_event: asyncio.Event):
         """Display and update metrics every 5s."""
         # Constants for metrics display
         METRICS_LINES = 10  # Including blank line at start
@@ -309,29 +426,30 @@ def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_
             if metrics is None:
                 metrics = BLANK_METRICS
             
-            # Move cursor up if needed (not on first print)
-            if print_metrics.initialized:
-                print(f"\033[{METRICS_LINES}A", end='')
-            print_metrics.initialized = True
-            
-            # Clear lines and print metrics
-            print("\033[J", end='')  # Clear everything below
-            print()  # Blank line for spacing
-            print("Tasks:")
-            print(f"  Scheduled: {metrics['tasks']['scheduled']}")
-            print(f"  Running:   {metrics['tasks']['running']}")
-            print(f"  Completed: {metrics['tasks']['completed']}")
-            print()
-            print("Resources:")
-            print(f"  Active browsers: {metrics['concurrent_browsers']}")
-            print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
-            print(f"  Total cost:      ${metrics['total_cost']:.4f}", flush=True)
+            # Only move cursor and reprint if no recent output
+            if not output_event.is_set():
+                if print_metrics.initialized:
+                    print(f"\033[{METRICS_LINES}A", end='')
+                print_metrics.initialized = True
+                
+                # Clear lines and print metrics
+                print("\033[J", end='')  # Clear everything below
+                print()  # Blank line for spacing
+                print("Tasks:")
+                print(f"  Scheduled: {metrics['tasks']['scheduled']}")
+                print(f"  Running:   {metrics['tasks']['running']}")
+                print(f"  Completed: {metrics['tasks']['completed']}")
+                print()
+                print("Resources:")
+                print(f"  Active browsers: {metrics['concurrent_browsers']}")
+                print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
+                print(f"  Total cost:      ${metrics['total_cost']:.4f}", flush=True)
         
         # Initialize the print_metrics function state
         print_metrics.initialized = False
         
-        # Print initial metrics
-        print_metrics()
+        # Wait a bit for server to start
+        await asyncio.sleep(2)
         
         while True:
             try:
@@ -339,8 +457,10 @@ def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_
                 response = await client.get(f"http://127.0.0.1:{server_port}/metrics")
                 metrics = response.json()
                 print_metrics(metrics)
-            except Exception:
+            except Exception as e:
+                print(f"\nError: failed to fetch engine metrics: {e}")
                 print_metrics()
+                break
             await asyncio.sleep(5)
 
     async def run_server_and_frontend():
@@ -365,7 +485,90 @@ def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_
             print(f"\nError: Could not find available port for web frontend (tried ports {web_port}-{web_port+9})")
             return
 
-        # Create server with proper logging level
+        # Determine logging and metrics behavior
+        using_logs = False
+        show_metrics = False
+        logs_dir_path = None
+        engine_hash = None
+
+        # Get engine instance to get its hash
+        from .server import get_engine
+        engine = await get_engine()
+        engine_hash = engine._instance_hash
+
+        # Determine logging behavior based on settings
+        if settings.logs_dir:
+            # User specified logs directory in config - always log to files and show metrics
+            logs_dir_path = Path(settings.logs_dir)
+            if not logs_dir_path.exists():
+                logs_dir_path.mkdir(parents=True)
+            using_logs = True
+            show_metrics = True
+        # No need for elif condition since we always want to use logs if logs_dir is set
+
+        # Configure logging if using logs
+        log_config = None
+        if using_logs:
+            # Remove any existing handlers from root logger to prevent double output
+            root_logger = logging.getLogger()
+            for handler in root_logger.handlers[:]:
+                root_logger.removeHandler(handler)
+                
+            log_config = {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "default": {
+                    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                },
+            },
+            "handlers": {
+                "engine_file": {
+                    "class": "logging.FileHandler",
+                    "filename": str(logs_dir_path / f"{engine_hash}.engine.log"),
+                    "formatter": "default",
+                },
+                "web_file": {
+                    "class": "logging.FileHandler",
+                    "filename": str(logs_dir_path / f"{engine_hash}.web.log"),
+                    "formatter": "default",
+                }
+            },
+            "loggers": {
+                "blastai": {
+                    "handlers": ["engine_file"],
+                    "level": settings.blastai_log_level.upper(),
+                    "propagate": False,
+                },
+                "browser_use": {
+                    "handlers": ["engine_file"],
+                    "level": settings.browser_use_log_level.upper(),
+                    "propagate": False,
+                },
+                "uvicorn": {
+                    "handlers": ["engine_file"],
+                    "level": settings.blastai_log_level.upper(),
+                    "propagate": False,
+                },
+                "uvicorn.error": {
+                    "handlers": ["engine_file"],
+                    "level": settings.blastai_log_level.upper(),
+                    "propagate": False,
+                },
+                "uvicorn.access": {
+                    "handlers": ["engine_file"],
+                    "level": settings.blastai_log_level.upper(),
+                    "propagate": False,
+                },
+                "web": {
+                    "handlers": ["web_file"],
+                    "level": settings.browser_use_log_level.upper(),
+                    "propagate": False,
+                }
+            }
+        }
+
+        # Create server with proper logging level and config
         server_config = uvicorn.Config(
             "blastai.server:app",
             host="127.0.0.1",
@@ -376,36 +579,51 @@ def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_
             lifespan="on",
             timeout_keep_alive=5,
             timeout_graceful_shutdown=10,
-            access_log=False
+            access_log=False,
+            log_config=log_config if using_logs else None
         )
         server = uvicorn.Server(server_config)
         server.force_exit = False  # Allow graceful shutdown
 
-        # Print server endpoint
-        if component == 'engine':
-            print(f"Server: http://127.0.0.1:{actual_server_port}")
-        elif component == 'web':
-            print(f"Web: http://localhost:{actual_web_port}")
-        elif component is None:
-            print(f"Server: http://127.0.0.1:{actual_server_port}")
-            print(f"Web: http://localhost:{actual_web_port}")
+        # Print endpoints with log paths if using logs
+        if mode == 'engine':
+            if using_logs:
+                print(f"Engine: http://127.0.0.1:{actual_server_port} ({logs_dir_path / f'{engine_hash}.engine.log'})")
+            else:
+                print(f"Engine: http://127.0.0.1:{actual_server_port}")
+        elif mode == 'web':
+            if using_logs:
+                print(f"Web: http://localhost:{actual_web_port} ({logs_dir_path / f'{engine_hash}.web.log'})")
+            else:
+                print(f"Web: http://localhost:{actual_web_port}")
+        elif mode is None:
+            if using_logs:
+                print(f"Engine: http://127.0.0.1:{actual_server_port} ({logs_dir_path / f'{engine_hash}.engine.log'})")
+                print(f"Web: http://localhost:{actual_web_port} ({logs_dir_path / f'{engine_hash}.web.log'})")
+            else:
+                print(f"Engine: http://127.0.0.1:{actual_server_port}")
+                print(f"Web: http://localhost:{actual_web_port}")
 
         # Create metrics task if needed
         metrics_task = None
         metrics_client = None
+        output_event = None
+        web_logger = None
         try:
-            # Only show metrics if:
-            # 1. Metrics output is not disabled via --no-metrics-output
-            # 2. Running engine component (either standalone or with web)
-            # 3. Both log levels are ERROR or CRITICAL
-            if (not no_metrics_output and
-                (component == 'engine' or component is None) and
-                should_show_metrics(settings)):
+            # Set up metrics if enabled
+            if show_metrics and (mode == 'engine' or mode is None):
                 metrics_client = httpx.AsyncClient()
-                metrics_task = asyncio.create_task(display_metrics(metrics_client, settings, actual_server_port))
+                output_event = asyncio.Event()
+                metrics_task = asyncio.create_task(
+                    display_metrics(metrics_client, settings, actual_server_port, output_event)
+                )
 
-            if component is None:
-                # Default behavior: run both backend and web frontend
+            # Get web logger if using logs
+            if using_logs:
+                web_logger = logging.getLogger("web")
+
+            if mode is None:
+                # Default behavior: run both server and web UI
                 frontend_dir = Path(__file__).parent / 'frontend'
                 
                 # Check Node.js and npm installation
@@ -485,18 +703,23 @@ def serve(config: Optional[str], no_metrics_output: bool, server_port: int, web_
                         process.kill()
                         process.wait()
 
-            elif component == 'web':
+            elif mode == 'web':
                 await run_web_frontend()
-            elif component == 'cli':
+            elif mode == 'cli':
                 await run_standalone_cli(actual_server_port)
-            elif component == 'engine':
-                # Only run the backend server
+            elif mode == 'engine':
+                # Only run the server
                 await server.serve()
 
         except asyncio.CancelledError:
-            # Let server handle its own shutdown
-            await server.shutdown()
-            raise
+            if using_logs:
+                # Silently shutdown when using logs
+                await server.shutdown()
+                raise
+            else:
+                print("\nShutting down server...")
+                await server.shutdown()
+                raise
         finally:
             # Clean up metrics task if it exists
             if metrics_task and not metrics_task.done():
@@ -582,25 +805,37 @@ def install_browsers(quiet: bool = False):
     import subprocess
     import sys
     import platform
+    from pathlib import Path
     
     try:
-        # Check if already installed
-        if check_installation_state():
-            return
+        # Get system-specific Playwright executable path
+        system = platform.system().lower()
+        if system == 'linux':
+            executable_path = Path.home() / '.cache/ms-playwright/chromium_headless_shell-1169/chrome-linux/headless_shell'
+        elif system == 'darwin':
+            executable_path = Path.home() / 'Library/Caches/ms-playwright/chromium_headless_shell-1169/chrome-mac/headless_shell'
+        elif system == 'windows':
+            executable_path = Path.home() / 'AppData/Local/ms-playwright/chromium_headless_shell-1169/chrome-win/headless_shell.exe'
+        else:
+            executable_path = None
             
-        # First install browsers
-        subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], check=True)
-        if not quiet:
-            print("Successfully installed Playwright browsers")
+        # Only install if executable doesn't exist
+        if not executable_path or not executable_path.exists():
+            if not quiet:
+                print("Installing Playwright browsers...")
+            subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], check=True)
+            if not quiet:
+                print("Successfully installed Playwright browsers")
         
-        # Then install system dependencies if on Linux
-        if platform.system() == 'Linux':
+        # Only install system dependencies on Linux if not already installed
+        if system == 'linux' and not check_installation_state():
             try:
                 # Try using playwright install-deps first
                 subprocess.run([sys.executable, '-m', 'playwright', 'install-deps'], check=True)
             except subprocess.CalledProcessError:
                 # If that fails, try apt-get directly
                 try:
+                    print("Installing dependencies...")
                     subprocess.run(['sudo', 'apt-get', 'update'], check=True)
                     subprocess.run(['sudo', 'apt-get', 'install', '-y',
                         'libnss3',

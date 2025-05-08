@@ -30,6 +30,11 @@ class Settings(BaseModel):
         default="secrets.env",
         description="Path to secrets file containing sensitive data"
     )
+    
+    logs_dir: Optional[str] = Field(
+        default=None,
+        description="Directory for log files. If not set, uses blast-logs when log level is warning+"
+    )
 
 class Constraints(BaseModel):
     """Constraints for BLAST execution."""

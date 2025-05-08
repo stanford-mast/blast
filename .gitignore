@@ -38,6 +38,8 @@ secrets.env
 .coverage
 htmlcov/
 .pytest_cache/
+blast-logs/
+*.log
 
 docs/instructions/
 blast-venv/

@@ -44,34 +44,36 @@ def setup_logging(settings: Optional[Settings] = None):
     log_format = '%(asctime)s [%(name)s] %(message)s' if use_detailed_format else '%(message)s'
     date_format = '%Y-%m-%d %H:%M:%S'
     
-    # Configure root logger
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter(log_format, date_format))
-    
-    logging.basicConfig(
-        level=logging.ERROR,
-        handlers=[handler]
-    )
-    
-    # Configure all loggers to error level
-    logging.getLogger().setLevel(logging.ERROR)
-    
-    # Configure blastai logger
-    blastai_logger = logging.getLogger('blastai')
-    blastai_logger.setLevel(blastai_level)
-    
-    # Configure browser-use logger via environment variable and direct configuration
-    # Set env var for browser-use's own setup
-    os.environ["BROWSER_USE_LOGGING_LEVEL"] = settings.browser_use_log_level.lower()
-    
-    # Also configure browser-use logger directly after its setup
-    browser_level = getattr(logging, settings.browser_use_log_level.upper())
-    browser_use_logger = logging.getLogger('browser_use')
-    browser_use_logger.setLevel(browser_level)
-    
-    # And ensure playwright logger matches the level
-    playwright_logger = logging.getLogger('playwright')
-    playwright_logger.setLevel(browser_level)
+    # Only set up console logging if logs_dir is not set
+    if not settings.logs_dir:
+        # Configure root logger for console
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter(log_format, date_format))
+        
+        logging.basicConfig(
+            level=logging.ERROR,
+            handlers=[handler]
+        )
+        
+        # Configure all loggers to error level
+        logging.getLogger().setLevel(logging.ERROR)
+        
+        # Configure blastai logger
+        blastai_logger = logging.getLogger('blastai')
+        blastai_logger.setLevel(blastai_level)
+        
+        # Configure browser-use logger via environment variable and direct configuration
+        # Set env var for browser-use's own setup
+        os.environ["BROWSER_USE_LOGGING_LEVEL"] = settings.browser_use_log_level.lower()
+        
+        # Also configure browser-use logger directly after its setup
+        browser_level = getattr(logging, settings.browser_use_log_level.upper())
+        browser_use_logger = logging.getLogger('browser_use')
+        browser_use_logger.setLevel(browser_level)
+        
+        # And ensure playwright logger matches the level
+        playwright_logger = logging.getLogger('playwright')
+        playwright_logger.setLevel(browser_level)
     
     # Silence third-party loggers
     for logger_name in [

@@ -64,7 +64,10 @@ def load_config(config_path: Optional[str] = None) -> tuple[Settings, Constraint
     settings = Settings(
         persist_cache=config['settings']['persist_cache'],
         browser_use_log_level=config['settings']['browser_use_log_level'],
-        blastai_log_level=config['settings']['blastai_log_level']
+        blastai_log_level=config['settings']['blastai_log_level'],
+        secrets_file_path=config['settings']['secrets_file_path'],
+        local_browser_path=config['settings']['local_browser_path'],
+        logs_dir=config['settings']['logs_dir']
     )
     
     # Configure logging with new settings

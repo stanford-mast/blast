@@ -8,7 +8,7 @@
 
 [![Website](https://img.shields.io/badge/blastproject.org-FFE067)](https://blastproject.org)
 [![Documentation](https://img.shields.io/badge/Docs-FFE067)](https://docs.blastproject.org)
-[![Discord](https://img.shields.io/badge/Discord-FFE067)](https://discord.gg/AUMAYTAS)
+[![Discord](https://img.shields.io/badge/Discord-FFE067)](https://discord.gg/NqrkJwYYh4)
 [![Twitter Follow](https://img.shields.io/twitter/follow/realcalebwin?style=social)](https://x.com/realcalebwin)
 
 </div>

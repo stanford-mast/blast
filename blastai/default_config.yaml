@@ -1,9 +1,10 @@
 settings:
   local_browser_path: "none"  # Path to Chrome/Chromium binary: "none" (default), "auto" for auto-detect, or specific path
   persist_cache: false
-  browser_use_log_level: "error"  # Logging level for browser-use module
-  blastai_log_level: "error"  # Logging level for blastai module
+  browser_use_log_level: "info"  # Logging level for browser-use module
+  blastai_log_level: "debug"  # Logging level for blastai module
   secrets_file_path: "secrets.env"  # Path to secrets file containing sensitive data
+  logs_dir: "blast-logs/"  # Directory for log files. Set to null to log to stdout instead.
 
 constraints:
   max_memory: null  # No default memory limit
@@ -17,6 +18,6 @@ constraints:
   max_parallelism_nesting_depth: 1
   llm_model: "gpt-4.1"
   llm_model_mini: "gpt-4.1-mini"
-  allow_vision: false
+  allow_vision: true
   require_headless: true
   share_browser_process: true  # Whether to share browser process between contexts
