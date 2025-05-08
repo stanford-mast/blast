@@ -67,3 +67,5 @@ website/package-lock.json
 website/.npm
 website/.env*.local
 website/.vercel
+
+browser-use/**

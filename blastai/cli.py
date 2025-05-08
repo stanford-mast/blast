@@ -1,25 +1,19 @@
-# Set environment variables before any imports
-import hashlib
-import os
-import warnings
-import logging
-from dotenv import load_dotenv
-
-os.environ["ANONYMIZED_TELEMETRY"] = "false"
-
-# Disable all warnings for this process and subprocesses
-os.environ["PYTHONWARNINGS"] = "ignore"
-warnings.filterwarnings("ignore")
-
-# Patch warning display
-def _null_warn(*args, **kwargs):
-    pass
-warnings.warn = _null_warn
-warnings.showwarning = _null_warn
-
 """CLI interface for BLAST."""
 
+import hashlib
+import os
 import sys
+import warnings
+import logging
+from pathlib import Path
+from typing import Optional, Dict, Union
+from dotenv import load_dotenv
+
+# Set default environment variables
+os.environ["ANONYMIZED_TELEMETRY"] = "false"
+os.environ["PYTHONWARNINGS"] = "ignore"
+
+# Now import everything else
 import rich_click as click
 from rich.console import Console
 from rich.text import Text
@@ -48,7 +42,7 @@ import threading
 import subprocess
 import shutil
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Union
 from openai import OpenAI
 
 from .server import app, init_app_state
@@ -179,7 +173,7 @@ async def run_cli_server(server, port: int):
     await server.serve()
 
 @click.group(invoke_without_command=True)
-@click.version_option('0.1.0', '-V', '--version', prog_name='BLAST')
+@click.version_option('0.1.6', '-V', '--version', prog_name='BLAST')
 @click.pass_context
 def cli(ctx):
     """🚀  Browser-LLM Auto-Scaling Technology"""
@@ -234,6 +228,40 @@ def find_available_port(start_port: int, max_attempts: int = 10) -> Optional[int
 @click.option('--env', type=str, metavar='KEY=VALUE,...', help='Environment variables to set (e.g. OPENAI_API_KEY=xxx)')
 def serve(config: Optional[str], server_port: int, web_port: int, env: Optional[str], mode: Optional[str] = None):
     """Start BLAST (default: serves engine and web UI)"""
+    
+    # Load environment variables first
+    env_path = load_environment(env)
+    
+    # Initialize app state with config
+    init_app_state(config)
+    
+    # Get settings that were loaded
+    from .server import _settings, _constraints
+    if _settings is None or _constraints is None:
+        raise RuntimeError("Settings not initialized properly")
+    settings = _settings
+    constraints = _constraints
+    
+    # Check for required API keys
+    if not check_model_api_key(constraints.llm_model, env_path):
+        print("\nRequired API key not found. Exiting.")
+        sys.exit(1)
+        
+    if constraints.llm_model_mini and not check_model_api_key(constraints.llm_model_mini, env_path):
+        print("\nRequired API key not found for mini model. Exiting.")
+        sys.exit(1)
+    
+    # Check if already installed
+    already_installed = check_installation_state()
+    
+    # Install browsers and dependencies if needed
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            if not p.chromium.executable_path.exists():
+                install_browsers(quiet=already_installed)
+    except Exception:
+        install_browsers(quiet=already_installed)
     # Print BLAST logo and version
     logo = """              ...........              
           ..........--.......          
@@ -929,66 +957,79 @@ def install_browsers(quiet: bool = False):
         print(f"Error installing browsers: {e}")
         print("Please run 'python -m playwright install chromium' manually")
 
-def check_model_api_key(model_name: str, env_overrides: Optional[Dict[str, str]] = None) -> bool:
+def is_valid_openai_key(api_key: str) -> bool:
+    """Check if a string is a valid OpenAI API key format.
+    
+    Args:
+        api_key: String to check
+        
+    Returns:
+        True if valid format, False otherwise
+    """
+    return api_key.startswith("sk-") and len(api_key) > 40
+
+def save_api_key(key: str, value: str, env_path: Path) -> bool:
+    """Save API key to .env file.
+    
+    Args:
+        key: Environment variable name
+        value: API key value
+        env_path: Path to .env file
+        
+    Returns:
+        True if saved successfully, False otherwise
+    """
+    try:
+        if not env_path.exists():
+            env_path.write_text(f"{key}={value}\n")
+        else:
+            content = env_path.read_text()
+            if f"{key}=" in content:
+                lines = content.splitlines()
+                new_lines = []
+                for line in lines:
+                    if line.startswith(f"{key}="):
+                        new_lines.append(f"{key}={value}")
+                    else:
+                        new_lines.append(line)
+                env_path.write_text("\n".join(new_lines) + "\n")
+            else:
+                with env_path.open("a") as f:
+                    f.write(f"\n{key}={value}\n")
+        return True
+    except Exception as e:
+        print(f"\nError saving API key: {e}")
+        return False
+
+def check_model_api_key(model_name: str, env_path: Optional[Path] = None) -> bool:
     """Check if required API key is available for the given model.
     
     Args:
         model_name: Name of the model to check API key for
-        env_overrides: Optional environment variable overrides from --env
+        env_path: Optional path to .env file for saving API key
         
     Returns:
         True if API key is available, False otherwise
     """
-    from .utils import get_env_var, parse_env_param, is_openai_model
-    
-    # Parse environment overrides if provided
-    env_vars = parse_env_param(env_overrides) if env_overrides else {}
+    from .models import is_openai_model
     
     # Check if model requires OpenAI API key
     if is_openai_model(model_name):
-        api_key = get_env_var("OPENAI_API_KEY", env_vars)
+        api_key = os.getenv("OPENAI_API_KEY")
         if api_key:
             return True
             
-        # Check .env file in current directory
-        env_path = Path(".env")
-        if env_path.exists():
-            load_dotenv(env_path)
-            api_key = get_env_var("OPENAI_API_KEY", env_vars)
-            if api_key:
-                return True
-        
-        print(f"OpenAI API key required for {model_name}.")
-        print("Get an API key from https://platform.openai.com/api-keys")
+        print(f"OpenAI API key required for {model_name}. [https://platform.openai.com/api-keys]")
         
         while True:
-            api_key = input("\nAdd your OpenAI API key: ").strip()
-            if api_key.startswith("sk-") and len(api_key) > 40:
-                try:
-                    # Save to .env file
-                    if not env_path.exists():
-                        env_path.write_text(f"OPENAI_API_KEY={api_key}\n")
-                    else:
-                        content = env_path.read_text()
-                        if "OPENAI_API_KEY=" in content:
-                            lines = content.splitlines()
-                            new_lines = []
-                            for line in lines:
-                                if line.startswith("OPENAI_API_KEY="):
-                                    new_lines.append(f"OPENAI_API_KEY={api_key}")
-                                else:
-                                    new_lines.append(line)
-                            env_path.write_text("\n".join(new_lines) + "\n")
-                        else:
-                            with env_path.open("a") as f:
-                                f.write(f"\nOPENAI_API_KEY={api_key}\n")
-                    
-                    os.environ["OPENAI_API_KEY"] = api_key
+            api_key = input("Enter your OpenAI API key: ").strip()
+            if is_valid_openai_key(api_key):
+                # Save to .env file if path provided
+                if env_path and save_api_key("OPENAI_API_KEY", api_key, env_path):
                     print("\nAPI key saved successfully!")
-                    return True
-                except Exception as e:
-                    print(f"\nError saving API key: {e}")
-                    print("Please try again.")
+                
+                os.environ["OPENAI_API_KEY"] = api_key
+                return True
             else:
                 print("\nInvalid API key format. API keys should start with 'sk-' and be at least 40 characters long.")
                 retry = input("Would you like to try again? (y/n): ").lower()
@@ -998,22 +1039,80 @@ def check_model_api_key(model_name: str, env_overrides: Optional[Dict[str, str]]
     # For other models, no API key check needed yet
     return True
 
-def main():
-    """Main entry point for CLI."""
-    # Initialize app state to get settings and constraints
+def parse_env_param(env_param: Optional[str]) -> Dict[str, str]:
+    """Parse --env parameter value into a dictionary.
+    
+    Args:
+        env_param: String in format "KEY1=value1,KEY2=value2"
+        
+    Returns:
+        Dictionary of environment variable overrides
+    """
+    if not env_param:
+        return {}
+        
+    env_dict = {}
+    for pair in env_param.split(","):
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        env_dict[key.strip()] = value.strip()
+    return env_dict
+
+def load_environment(env: Optional[Union[str, Dict[str, str]]] = None) -> Path:
+    """Load environment variables in priority order.
+    
+    Args:
+        env: Optional environment variables from --env parameter
+        
+    Returns:
+        Path to .env file for saving new variables
+    """
+    # 1. Load CLI args (highest priority)
+    if isinstance(env, str):
+        env_vars = parse_env_param(env)
+        if env_vars:
+            for key, value in env_vars.items():
+                os.environ[key] = value
+    elif isinstance(env, dict):
+        for key, value in env.items():
+            os.environ[key] = value
+            
+    # 2. Load .env file (lower priority)
+    env_path = Path(".env")
+    if env_path.exists():
+        load_dotenv(env_path)
+        
+    return env_path
+
+def setup_environment_and_dependencies(env: Optional[str] = None) -> Path:
+    """Set up environment variables and install dependencies.
+    
+    Args:
+        env: Optional environment variables from --env parameter
+        
+    Returns:
+        Path to .env file
+    """
+    # Load environment variables first
+    env_path = load_environment(env)
+    
+    # Initialize app state
     init_app_state(None)
+    
+    # Get settings and constraints
     from .server import _settings, _constraints
     if _settings is None or _constraints is None:
         raise RuntimeError("Settings or constraints not initialized properly")
     settings = _settings
     constraints = _constraints
     
-    # Check for required API keys based on model
-    if not check_model_api_key(constraints.llm_model):
+    # Check for required API keys
+    if not check_model_api_key(constraints.llm_model, env_path):
         print("\nRequired API key not found. Exiting.")
         sys.exit(1)
         
-    if constraints.llm_model_mini and not check_model_api_key(constraints.llm_model_mini):
+    if constraints.llm_model_mini and not check_model_api_key(constraints.llm_model_mini, env_path):
         print("\nRequired API key not found for mini model. Exiting.")
         sys.exit(1)
     
@@ -1028,7 +1127,12 @@ def main():
                 install_browsers(quiet=already_installed)
     except Exception:
         install_browsers(quiet=already_installed)
-    cli()
+        
+    return env_path
+
+def main():
+    """Main entry point for CLI."""
+    return cli()  # Return Click's exit code
 
 if __name__ == '__main__':
     main()

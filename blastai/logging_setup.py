@@ -2,6 +2,7 @@
 
 import logging
 import os
+from pathlib import Path
 import sys
 import warnings
 from typing import Optional
@@ -15,18 +16,19 @@ def setup_logging(settings: Optional[Settings] = None):
     1. Configures root logger and all third-party loggers to ERROR by default
     2. Sets up blastai logger based on config
     3. Sets up browser-use logger via environment variable
-    4. Silences deprecation warnings
+    4. Configures warning handling through logging system
     
     Args:
         settings: Optional Settings instance with logging configuration
     """
+    # Set up warning logging first
+    logging.captureWarnings(True)
+    warning_logger = logging.getLogger('py.warnings')
+    warning_logger.setLevel(logging.WARNING)
     # Use default settings if none provided
     if not settings:
         settings = Settings()
         
-    # Silence deprecation warnings (e.g. from uvicorn)
-    warnings.filterwarnings("ignore", category=DeprecationWarning)
-    
     # Get log levels
     blastai_level = getattr(logging, settings.blastai_log_level.upper())
     browser_level = getattr(logging, settings.browser_use_log_level.upper())
@@ -44,8 +46,22 @@ def setup_logging(settings: Optional[Settings] = None):
     log_format = '%(asctime)s [%(name)s] %(message)s' if use_detailed_format else '%(message)s'
     date_format = '%Y-%m-%d %H:%M:%S'
     
+    # Configure warning logging
+    logging.captureWarnings(True)
+    warning_logger = logging.getLogger('py.warnings')
+    warning_logger.setLevel(logging.WARNING)
+    
+    # If logs_dir is set, redirect warnings there
+    if settings.logs_dir:
+        logs_dir = Path(settings.logs_dir)
+        if not logs_dir.exists():
+            logs_dir.mkdir(parents=True)
+        warning_handler = logging.FileHandler(str(logs_dir / 'warnings.log'))
+        warning_handler.setFormatter(logging.Formatter(log_format, date_format))
+        warning_logger.addHandler(warning_handler)
+        warning_logger.propagate = False
     # Only set up console logging if logs_dir is not set
-    if not settings.logs_dir:
+    else:
         # Configure root logger for console
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(logging.Formatter(log_format, date_format))

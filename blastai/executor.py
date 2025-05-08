@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 from .config import Settings, Constraints
 from .response import AgentReasoning, AgentHistoryListResponse
-from .utils import estimate_llm_cost, get_base_url_for_provider, get_env_var, is_openai_model
+from .utils import estimate_llm_cost, get_base_url_for_provider
+from .models import is_openai_model
 
 class Executor:
     """Wrapper around browser_use Agent for task execution."""
