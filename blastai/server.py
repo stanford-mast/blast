@@ -37,26 +37,20 @@ async def lifespan(app: FastAPI):
                 logger.error(f"Error stopping engine: {e}")
         shutdown_event.set()
     
+    # Store shutdown handler
+    app.state.handle_shutdown = handle_shutdown
+    
     try:
-        # Initialize engine if needed
-        if not _engine:
-            _engine = await Engine.create()
-            logger.info("Engine started successfully")
-        
-        # Store shutdown handler
-        app.state.handle_shutdown = handle_shutdown
-        
+        yield
+    except asyncio.CancelledError:
+        # Handle cancellation explicitly
+        await handle_shutdown()
+        # Wait briefly for cleanup to complete
         try:
-            yield
-        except asyncio.CancelledError:
-            # Handle cancellation explicitly
-            await handle_shutdown()
-            # Wait briefly for cleanup to complete
-            try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
-                pass
-            raise
+            await asyncio.wait_for(shutdown_event.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
+        raise
     finally:
         if not shutdown_event.is_set():
             await handle_shutdown()
@@ -89,6 +83,24 @@ async def log_requests(request, call_next):
 async def ping():
     """Simple ping endpoint for testing."""
     return {"status": "ok"}
+
+from pydantic import BaseModel
+
+class InitializeRequest(BaseModel):
+    instance_hash: Optional[str] = None
+
+@app.post("/initialize")
+async def initialize(request: InitializeRequest):
+    """Initialize the engine and return any errors."""
+    global _engine
+    try:
+        if not _engine:
+            _engine = await Engine.create(instance_hash=request.instance_hash)
+            logger.debug("Engine started successfully")
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Failed to initialize engine: {e}")
+        return {"status": "error", "error": str(e)}
 
 @app.get("/health")
 async def health_check():
@@ -127,12 +139,16 @@ async def get_metrics():
         logger.error(f"Error getting metrics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-async def get_engine() -> Engine:
+async def get_engine(instance_hash: Optional[str] = None) -> Engine:
     """Get the global engine instance, creating it if needed."""
     global _engine
     if _engine is None:
-        _engine = await Engine.create()
-        logger.info("Engine started successfully")
+        try:
+            _engine = await Engine.create(instance_hash=instance_hash)
+            logger.info("Engine started successfully")
+        except Exception as e:
+            logger.error(f"Failed to create engine: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
     return _engine
 
 # Chat completions endpoint

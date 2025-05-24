@@ -113,6 +113,11 @@ class Constraints(BaseModel):
         description="Whether to share browser process between requests"
     )
     
+    require_steel: bool = Field(
+        default=True,
+        description="Whether to require Steel for browser management"
+    )
+    
     @classmethod
     def create(cls, max_memory: Optional[str] = None, **kwargs):
         """Create Constraints from keyword arguments.

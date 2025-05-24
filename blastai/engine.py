@@ -6,8 +6,11 @@ import logging
 import threading
 import time
 import yaml
+import docker
+import os
+import subprocess
 from pathlib import Path
-from typing import Optional, Union, List, Dict, Any, AsyncIterator, Set, TYPE_CHECKING
+from typing import Optional, Union, List, Dict, Any, AsyncIterator, Tuple, Set, TYPE_CHECKING
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -57,10 +60,58 @@ class Engine:
         return config
     
     @classmethod
-    async def create(cls, 
+    def check_requirements(cls, config_path: Optional[str] = None,
+                         settings: Optional[Settings] = None,
+                         constraints: Optional[Constraints] = None) -> Tuple[bool, str]:
+        """Check if all requirements are met for running the engine.
+        
+        Args:
+            config_path: Optional path to config YAML file
+            settings: Optional Settings instance
+            constraints: Optional Constraints instance
+            
+        Returns:
+            Tuple of (requirements_met, error_message)
+        """
+        # Load config if needed
+        config = None
+        if config_path is not None or (settings is None and constraints is None):
+            config = cls.load_config(config_path)
+        
+        # Get constraints
+        if constraints is None:
+            if config is None:
+                config = cls.load_config()
+            constraints = Constraints.create(**config['constraints'])
+            
+        # Check Steel requirements if enabled
+        if constraints.require_steel:
+            # Import here to avoid circular import
+            from .cli_installation import is_wsl
+            
+            try:
+                client = docker.from_env()
+                client.ping()
+            except docker.errors.DockerException as e:
+                if is_wsl() and ("not found" in str(e) or "Connection aborted" in str(e)):
+                    return False, "Docker is not available in WSL. Docker Desktop integration needs to be enabled."
+                elif "ConnectionError" in str(e):
+                    return False, "Docker daemon is not running. Please start Docker and try again."
+                elif "not found" in str(e):
+                    return False, "Docker is not installed. Please install Docker to use Steel integration."
+                else:
+                    return False, f"Docker error: {e}"
+            except Exception as e:
+                return False, f"Failed to connect to Docker: {e}"
+                
+        return True, ""
+
+    @classmethod
+    async def create(cls,
                     config_path: Optional[str] = None,
                     settings: Optional[Settings] = None,
-                    constraints: Optional[Constraints] = None) -> "Engine":
+                    constraints: Optional[Constraints] = None,
+                    instance_hash: Optional[str] = None) -> "Engine":
         """Create an engine instance.
         
         This method handles several initialization cases:
@@ -95,18 +146,22 @@ class Engine:
             constraints = Constraints.create(**config['constraints'])
         
         # Create and start engine
-        engine = cls(settings=settings, constraints=constraints)
+        engine = cls(settings=settings, constraints=constraints, instance_hash=instance_hash)
+        # Start engine and store Steel port if used
         await engine.start()
         return engine
+        
+    def get_steel_port(self) -> Optional[int]:
+        """Get the port number for the Steel API server if running."""
+        return getattr(self, '_steel_port', None)
     
-    def __init__(self, constraints: Optional[Constraints] = None, settings: Optional[Settings] = None):
+    def __init__(self, constraints: Optional[Constraints] = None, settings: Optional[Settings] = None, instance_hash: Optional[str] = None):
         """Initialize engine with optional constraints and settings."""
         self.constraints = constraints or Constraints()
         self.settings = settings or Settings()
         
-        # Create unique hash for this engine instance
-        hash_input = f"{time.time()}-{id(self)}"
-        self._instance_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+        # Use provided instance hash or generate one
+        self._instance_hash = instance_hash or hashlib.sha256(f"{time.time()}-{id(self)}".encode()).hexdigest()[:8]
         
         # Initialize components in correct order to handle dependencies
         self.planner = Planner(constraints)
@@ -128,19 +183,78 @@ class Engine:
         # Load CacheManager with scheduler
         self.cache_manager.load(self.scheduler)
         
+        # Store Steel port if using Steel
+        self._steel_port = None
+        
         # Finally create ResourceManager with all dependencies
         self.resource_manager = ResourceManager(
             scheduler=self.scheduler,
             constraints=self.constraints,
             settings=self.settings,
             engine_hash=self._instance_hash,
-            cache_manager=self.cache_manager
+            cache_manager=self.cache_manager,
+            steel_port=None  # Will be set after Steel server starts
         )
         self._started = False
         
     async def start(self):
         """Start the engine's resource management."""
         if not self._started:
+            # Start Steel server if required
+            if self.constraints.require_steel:
+                # Check requirements first
+                requirements_ok, error_msg = self.check_requirements(
+                    settings=self.settings,
+                    constraints=self.constraints
+                )
+                if not requirements_ok:
+                    raise RuntimeError(error_msg)
+
+                try:
+                    client = docker.from_env()
+                    # Find available ports
+                    from .cli_process import find_available_port
+                    api_port = find_available_port(3100)
+                    debug_port = find_available_port(9229)
+                    ui_port = find_available_port(5174)
+                    
+                    if not all([api_port, debug_port, ui_port]):
+                        raise RuntimeError("Could not find available ports for Steel server")
+                    
+                    logger.info(f"Starting Steel server on ports - API: {api_port}, Debug: {debug_port}, UI: {ui_port}")
+                    self._steel_port = api_port
+                    self.resource_manager._steel_port = api_port
+                    
+                    # Start Steel server using docker compose
+                    try:
+                        # Get path to steel-docker-compose.yml
+                        compose_file = Path(__file__).parent / 'steel-docker-compose.yml'
+                        if not compose_file.exists():
+                            raise RuntimeError("steel-docker-compose.yml not found")
+
+                        # Set environment variables for ports
+                        env = os.environ.copy()
+                        env.update({
+                            "API_PORT": str(api_port),
+                            "DEBUG_PORT": str(debug_port),
+                            "UI_PORT": str(ui_port)
+                        })
+
+                        # Run docker compose with environment variables
+                        compose_cmd = [
+                            "docker", "compose",
+                            "-f", str(compose_file),
+                            "up", "-d"
+                        ]
+                        subprocess.run(compose_cmd, env=env, check=True)
+                        logger.info("Steel server started successfully")
+                    except subprocess.CalledProcessError as e:
+                        raise RuntimeError(f"Failed to start Steel server: {e}")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to start Steel server: {e}")
+                    raise RuntimeError(f"Steel server is required but failed to start: {e}")
+            
             await self.resource_manager.start()
             self._started = True
             
@@ -148,6 +262,18 @@ class Engine:
         """Stop the engine and cleanup resources."""
         if self._started:
             try:
+                # Stop Steel server if it was started
+                if self.constraints.require_steel:
+                    try:
+                        compose_file = Path(__file__).parent / 'steel-docker-compose.yml'
+                        if compose_file.exists():
+                            subprocess.run(["docker", "compose", "-f", str(compose_file), "down"], check=True)
+                            logger.info("Stopped Steel server")
+                        else:
+                            logger.warning("steel-docker-compose.yml not found during shutdown")
+                    except subprocess.CalledProcessError as e:
+                        logger.error(f"Failed to stop Steel server: {e}")
+
                 # First stop any running tasks
                 for task_id, task in list(self.scheduler.tasks.items()):
                     if task.executor:

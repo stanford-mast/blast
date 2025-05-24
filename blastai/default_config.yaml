@@ -22,4 +22,5 @@ constraints:
   llm_model_mini: "openai:gpt-4.1-mini"
   allow_vision: true
   require_headless: true
+  require_steel: true  # Whether to require Steel browser automation
   share_browser_process: true  # Whether to share browser process between contexts

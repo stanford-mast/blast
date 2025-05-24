@@ -1,7 +1,9 @@
 """CLI interface for BLAST."""
 
 # Set environment variables before any imports
+import hashlib
 import os
+import time
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
 os.environ["PYTHONWARNINGS"] = "ignore"
 os.environ["BROWSER_USE_LOGGING_LEVEL"] = "error"  # Default to error level
@@ -21,7 +23,7 @@ import rich_click as click
 from rich.console import Console
 from rich.panel import Panel
 
-from .cli_config import setup_environment_and_engine
+from .cli_config import setup_environment
 from .cli_process import (
     find_available_port,
     run_server_and_frontend
@@ -86,11 +88,21 @@ def help(command):
 def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None):
     """Start BLAST (default: serves engine and web UI)"""
     
-    # Set up environment and create engine
-    env_path, engine = asyncio.run(setup_environment_and_engine(env, config))
+    # Generate instance hash for logging
+    instance_hash = hashlib.sha256(f"{time.time()}-{os.getpid()}".encode()).hexdigest()[:8]
+    
+    # Set up environment and load config
+    env_path, config = asyncio.run(setup_environment(env, config))
     
     # Get settings
-    settings = engine.settings
+    settings = Settings.create(**config['settings'])
+    
+    # Configure logging with instance hash
+    if settings.logs_dir:
+        logs_dir = Path(settings.logs_dir)
+        if not logs_dir.exists():
+            logs_dir.mkdir(parents=True)
+        setup_logging(settings, instance_hash)
     
     # Find available ports
     actual_server_port = find_available_port(settings.server_port)
@@ -108,17 +120,10 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
     show_metrics = False
     web_logger = None
 
-    if settings.logs_dir:
-        # User specified logs directory in config - always log to files and show metrics
-        logs_dir = Path(settings.logs_dir)
-        if not logs_dir.exists():
-            logs_dir.mkdir(parents=True)
-        using_logs = True
-        show_metrics = True
-
-        # Configure logging with engine hash
-        setup_logging(settings, engine._instance_hash)
-        web_logger = logging.getLogger("web")
+    # Set up logging flags
+    using_logs = bool(settings.logs_dir)
+    show_metrics = using_logs
+    web_logger = logging.getLogger("web") if using_logs else None
 
     # Create server with proper logging level and config
     import uvicorn
@@ -140,18 +145,18 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
     # Print endpoints with log paths if using logs
     if mode == 'engine':
         if using_logs:
-            print(f"Engine: http://127.0.0.1:{actual_server_port} ({logs_dir / f'{engine._instance_hash}.engine.log'})")
+            print(f"Engine: http://127.0.0.1:{actual_server_port} ({logs_dir / f'{instance_hash}.engine.log'})")
         else:
             print(f"Engine: http://127.0.0.1:{actual_server_port}")
     elif mode == 'web':
         if using_logs:
-            print(f"Web: http://localhost:{actual_web_port} ({logs_dir / f'{engine._instance_hash}.web.log'})")
+            print(f"Web: http://localhost:{actual_web_port} ({logs_dir / f'{instance_hash}.web.log'})")
         else:
             print(f"Web: http://localhost:{actual_web_port}")
     elif mode is None:
         if using_logs:
-            print(f"Engine: http://127.0.0.1:{actual_server_port} ({logs_dir / f'{engine._instance_hash}.engine.log'})")
-            print(f"Web: http://localhost:{actual_web_port} ({logs_dir / f'{engine._instance_hash}.web.log'})")
+            print(f"Engine: http://127.0.0.1:{actual_server_port} ({logs_dir / f'{instance_hash}.engine.log'})")
+            print(f"Web: http://localhost:{actual_web_port} ({logs_dir / f'{instance_hash}.web.log'})")
         else:
             print(f"Engine: http://127.0.0.1:{actual_server_port}")
             print(f"Web: http://localhost:{actual_web_port}")
@@ -170,7 +175,8 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
             mode=mode,
             using_logs=using_logs,
             show_metrics=show_metrics,
-            web_logger=web_logger
+            web_logger=web_logger,
+            instance_hash=instance_hash
         ))
     except KeyboardInterrupt:
         print("\nShutting down...")

@@ -49,6 +49,7 @@ from datetime import datetime, timedelta
 
 from browser_use import Browser, BrowserConfig, Agent
 from browser_use.browser.context import BrowserContext
+from steel import Steel
 
 from .config import Settings, Constraints
 from .executor import Executor
@@ -63,7 +64,7 @@ class ResourceManager:
     
     def __init__(self, scheduler, constraints: Constraints,
                  settings: Settings, engine_hash: str,
-                 cache_manager):
+                 cache_manager, steel_port: Optional[int] = None):
         """Initialize resource manager."""
         self.scheduler = scheduler
         self.constraints = constraints
@@ -74,6 +75,10 @@ class ResourceManager:
         # Shared browser instance when share_browser_process is enabled
         self._shared_browser = None
         self._shared_browser_users = 0
+        
+        # Steel configuration
+        self._steel_port = steel_port
+        self._steel_client = None
         
         self._allocate_task = None
         self._monitor_task = None
@@ -95,6 +100,15 @@ class ResourceManager:
     async def start(self):
         """Start resource management."""
         if not self._running:
+            # Initialize Steel client if required and port is available
+            if self.constraints.require_steel and self._steel_port:
+                try:
+                    self._steel_client = Steel(base_url=f"http://localhost:{self._steel_port}")
+                    logger.debug(f"Initialized Steel client on port {self._steel_port}")
+                except Exception as e:
+                    logger.error(f"Failed to initialize Steel client: {e}")
+                    raise
+
             self._running = True
             self._allocate_task = asyncio.create_task(self._allocate_resources())
             self._monitor_task = asyncio.create_task(self._monitor_resources())
@@ -285,6 +299,21 @@ class ResourceManager:
 
         try:
             try:
+                # If Steel is required, create a Steel session
+                if self.constraints.require_steel and self._steel_client:
+                    try:
+                        session = self._steel_client.sessions.create(
+                            session_timeout=3600000,  # 60 minutes
+                            block_ads=True,
+                        )
+                        logger.debug(f"Created Steel session: {session.id}")
+                        
+                        # Connect browser-use to Steel session
+                        browser_config.cdp_url = session.websocket_url
+                    except Exception as e:
+                        logger.error(f"Failed to create Steel session: {e}")
+                        raise
+
                 if self.constraints.share_browser_process and self._shared_browser is None:
                     # Create shared browser if it doesn't exist
                     self._shared_browser = Browser(config=browser_config)

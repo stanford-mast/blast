@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from .models import is_openai_model
 from .engine import Engine
+from .cli_installation import check_installation_state, install_browsers, check_docker_installation
 
 def is_valid_openai_key(api_key: str) -> bool:
     """Check if a string is a valid OpenAI API key format.
@@ -135,28 +136,40 @@ def load_environment(env: Optional[Union[str, Dict[str, str]]] = None) -> Path:
         
     return env_path
 
-async def setup_environment_and_engine(env: Optional[str] = None, config_path: Optional[str] = None) -> Tuple[Path, Engine]:
-    """Set up environment variables and create engine instance.
+async def setup_environment(env: Optional[str] = None, config_path: Optional[str] = None) -> Tuple[Path, Dict]:
+    """Set up environment variables and load config.
     
     Args:
         env: Optional environment variables from --env parameter
         config_path: Optional path to config file
         
     Returns:
-        Tuple of (env_path, engine)
+        Tuple of (env_path, config)
     """
     # Load environment variables first
     env_path = load_environment(env)
     
-    # Create engine with config
-    engine = await Engine.create(config_path=config_path)
+    # Load config
+    config = Engine.load_config(config_path)
     
-    # Check for required API keys
-    if not check_model_api_key(engine.constraints.llm_model, env_path):
+    # Check Steel requirements if enabled
+    if config['constraints'].get('require_steel', False):
+        requirements_ok, error_msg = Engine.check_requirements(config_path=config_path)
+        if not requirements_ok:
+            if "Docker" in error_msg:
+                # Just print instructions and exit - check_docker_installation handles the output
+                _, _ = check_docker_installation()
+                sys.exit(1)
+            else:
+                print(f"\nError: {error_msg}")
+                sys.exit(1)
+    
+    # Check for required API keys based on config
+    if not check_model_api_key(config['constraints']['llm_model'], env_path):
         print("\nRequired API key not found. Exiting.")
         sys.exit(1)
         
-    if engine.constraints.llm_model_mini and not check_model_api_key(engine.constraints.llm_model_mini, env_path):
+    if config['constraints'].get('llm_model_mini') and not check_model_api_key(config['constraints']['llm_model_mini'], env_path):
         print("\nRequired API key not found for mini model. Exiting.")
         sys.exit(1)
     
@@ -173,4 +186,4 @@ async def setup_environment_and_engine(env: Optional[str] = None, config_path: O
     except Exception:
         install_browsers(quiet=already_installed)
         
-    return env_path, engine
+    return env_path, config

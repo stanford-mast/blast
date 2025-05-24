@@ -94,7 +94,8 @@ async def run_server_and_frontend(
     *,
     using_logs: bool = False,
     show_metrics: bool = False,
-    web_logger: Optional[logging.Logger] = None
+    web_logger: Optional[logging.Logger] = None,
+    instance_hash: Optional[str] = None
 ) -> None:
     """Run server and frontend processes.
     
@@ -123,41 +124,82 @@ async def run_server_and_frontend(
                 display_metrics(metrics_client, actual_server_port, output_event)
             ))
 
-        if mode is None:
+        # Start server for all modes except 'web'
+        server_task = None
+        if mode in [None, 'engine']:  # Server needed for None, 'engine', and 'cli' modes
+            server_task = asyncio.create_task(server.serve())
+            tasks.append(server_task)
+            
+            # Wait briefly for server to start
+            await asyncio.sleep(1)
+            
+            # Initialize engine and cleanly handle failure
+            async with httpx.AsyncClient() as client:
+                try:
+                    response = await client.post(
+                        f"http://127.0.0.1:{actual_server_port}/initialize",
+                        json={"instance_hash": instance_hash} if instance_hash else {}
+                    )
+                    result = response.json()
+                    if result["status"] == "error":
+                        # Clean shutdown
+                        server.should_exit = True
+                        await server.shutdown()
+                        # Wait for server to finish shutdown
+                        try:
+                            await asyncio.wait_for(server_task, timeout=5.0)
+                        except asyncio.TimeoutError:
+                            pass
+                        # Clean up other tasks
+                        for task in tasks:
+                            if task != server_task and not task.done():
+                                task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                        # Clean up clients
+                        if metrics_client:
+                            await metrics_client.aclose()
+                        return False
+                except httpx.ConnectError:
+                    print("Error: Failed to connect to server")
+                    # Clean shutdown
+                    server.should_exit = True
+                    await server.shutdown()
+                    # Wait for server to finish shutdown
+                    try:
+                        await asyncio.wait_for(server_task, timeout=5.0)
+                    except asyncio.TimeoutError:
+                        pass
+                    # Clean up other tasks
+                    for task in tasks:
+                        if task != server_task and not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    # Clean up clients
+                    if metrics_client:
+                        await metrics_client.aclose()
+                    return False
+
+        # Start frontend based on mode
+        if mode in [None, 'web']:
             # Default behavior: run both server and web UI
             frontend_ready = threading.Event()
-            
-            async def run_both():
-                frontend_task = asyncio.create_task(
-                    run_web_frontend(
-                        server_port=actual_server_port,
-                        web_port=actual_web_port,
-                        output_event=output_event,
-                        web_logger=web_logger,
-                        using_logs=using_logs,
-                        frontend_ready=frontend_ready
-                    )
+            frontend_task = asyncio.create_task(
+                run_web_frontend(
+                    server_port=actual_server_port,
+                    web_port=actual_web_port,
+                    output_event=output_event,
+                    web_logger=web_logger,
+                    using_logs=using_logs,
+                    frontend_ready=frontend_ready
                 )
-                tasks.append(frontend_task)
-                await server.serve()
-                
-            tasks.append(asyncio.create_task(run_both()))
-            
-        elif mode == 'web':
-            tasks.append(asyncio.create_task(run_web_frontend(
-                server_port=actual_server_port,
-                web_port=actual_web_port,
-                output_event=output_event,
-                web_logger=web_logger,
-                using_logs=using_logs
-            )))
+            )
+            tasks.append(frontend_task)
         elif mode == 'cli':
             tasks.append(asyncio.create_task(run_cli_frontend(actual_server_port)))
-        elif mode == 'engine':
-            tasks.append(asyncio.create_task(server.serve()))
 
         # Wait for all tasks to complete
         await asyncio.gather(*tasks)
+        return True
         
     except asyncio.CancelledError:
         # Cancel all tasks

@@ -6,8 +6,9 @@ import shutil
 import subprocess
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
+import docker
 from .utils import get_appdata_dir
 
 def find_executable(*names: str) -> Optional[str]:
@@ -17,6 +18,95 @@ def find_executable(*names: str) -> Optional[str]:
         if path:
             return path
     return None
+
+def is_wsl() -> bool:
+    """Check if running under Windows Subsystem for Linux."""
+    try:
+        with open('/proc/version', 'r') as f:
+            return 'microsoft' in f.read().lower()
+    except:
+        return False
+
+def check_docker_installation() -> Tuple[bool, str]:
+    """Check if Docker is installed and running.
+    
+    Returns:
+        Tuple of (is_available, error_message)
+        is_available: True if Docker is installed and running
+        error_message: Error message if Docker is not available, empty string otherwise
+    """
+    try:
+        client = docker.from_env()
+        client.ping()
+        return True, ""
+    except docker.errors.DockerException as e:
+        error_msg = str(e)
+        if is_wsl() and ("not found" in error_msg or "Connection aborted" in error_msg):
+            print("The current BLAST configuration requires Steel for browser management.")
+            print()
+            print("You can either:")
+            print("1. Install Docker to use Steel (recommended)")
+            print("2. Set require_steel=false in blastai/default_config.yaml")
+            print("\nTo set up Docker in WSL 2:")
+            print("1. Install Docker Desktop for Windows")
+            print("   Visit: https://docs.docker.com/desktop/install/windows-install/")
+            print("2. In Docker Desktop settings:")
+            print("   - Go to Settings > Resources > WSL Integration")
+            print("   - Enable 'Ubuntu' or your WSL distro")
+            print("3. Restart Docker Desktop")
+            print("4. Open a new WSL terminal")
+            print("\nFor detailed instructions, visit:")
+            print("https://docs.docker.com/go/wsl2/")
+            print("\nAfter installation:")
+            print("1. Open Docker Desktop")
+            print("2. Wait for Docker Desktop to finish starting")
+            print("3. Try 'blastai serve' again")
+            return False, "Docker is not available in WSL. Docker Desktop integration needs to be enabled."
+        elif "ConnectionError" in error_msg:
+            print("The current BLAST configuration requires Steel for browser management.")
+            print("You can either:")
+            print("1. Start Docker to use Steel (recommended)")
+            print("2. Set require_steel=false in blastai/default_config.yaml")
+            print("\nDocker daemon is not running.")
+            print("Please start Docker and try again.")
+            return False, "Docker daemon is not running"
+        elif "not found" in error_msg:
+            print("The current BLAST configuration requires Steel for browser management.")
+            print("You can either:")
+            print("1. Install Docker to use Steel (recommended)")
+            print("2. Set require_steel=false in blastai/default_config.yaml")
+            print("\nTo install Docker:")
+            
+            if sys.platform == 'win32':
+                print("\nOn Windows:")
+                print("1. Visit https://docs.docker.com/desktop/install/windows-install/")
+                print("2. Download and run Docker Desktop Installer")
+                print("3. Follow the installation wizard")
+                print("4. Start Docker Desktop")
+                
+            elif sys.platform == 'darwin':
+                print("\nOn macOS:")
+                print("1. Visit https://docs.docker.com/desktop/install/mac-install/")
+                print("2. Download and install Docker Desktop")
+                print("3. Start Docker Desktop")
+                
+            else:  # Linux
+                print("\nOn Linux:")
+                print("Ubuntu/Debian:")
+                print("1. sudo apt-get update")
+                print("2. sudo apt-get install docker.io")
+                print("3. sudo systemctl start docker")
+                print("4. sudo systemctl enable docker")
+                print("\nFedora:")
+                print("1. sudo dnf install docker")
+                print("2. sudo systemctl start docker")
+                print("3. sudo systemctl enable docker")
+            
+            return False, "Docker is not installed"
+        else:
+            return False, f"Docker error: {e}"
+    except Exception as e:
+        return False, f"Failed to connect to Docker: {e}"
 
 def check_node_installation() -> Optional[str]:
     """Check if Node.js is installed and available."""
