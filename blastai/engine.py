@@ -5,6 +5,8 @@ import hashlib
 import logging
 import threading
 import time
+import yaml
+from pathlib import Path
 from typing import Optional, Union, List, Dict, Any, AsyncIterator, Set, TYPE_CHECKING
 from uuid import uuid4
 
@@ -26,6 +28,76 @@ class Engine:
     
     # Import browser_use only when needed
     from browser_use.agent.views import AgentHistoryList
+    
+    @classmethod
+    def load_config(cls, config_path: Optional[str] = None) -> Dict[str, Any]:
+        """Load configuration from file.
+        
+        Args:
+            config_path: Optional path to config YAML file
+            
+        Returns:
+            Dictionary containing settings and constraints
+        """
+        # Load default config
+        default_config_path = Path(__file__).parent / 'default_config.yaml'
+        with open(default_config_path) as f:
+            config = yaml.safe_load(f)
+            
+        # Override with user config if provided
+        if config_path:
+            with open(config_path) as f:
+                user_config = yaml.safe_load(f)
+                # Update nested dicts
+                if 'settings' in user_config:
+                    config['settings'].update(user_config['settings'])
+                if 'constraints' in user_config:
+                    config['constraints'].update(user_config['constraints'])
+        
+        return config
+    
+    @classmethod
+    async def create(cls, 
+                    config_path: Optional[str] = None,
+                    settings: Optional[Settings] = None,
+                    constraints: Optional[Constraints] = None) -> "Engine":
+        """Create an engine instance.
+        
+        This method handles several initialization cases:
+        1. No arguments -> load from default_config.yaml
+        2. config_path -> load from specified config file
+        3. settings/constraints -> use provided instances
+        4. Mix of above -> merge appropriately
+        
+        Args:
+            config_path: Optional path to config YAML file
+            settings: Optional Settings instance
+            constraints: Optional Constraints instance
+            
+        Returns:
+            Initialized Engine instance
+        """
+        # Load config if needed
+        config = None
+        if config_path is not None or (settings is None and constraints is None):
+            config = cls.load_config(config_path)
+        
+        # Create or update settings
+        if settings is None:
+            if config is None:
+                config = cls.load_config()
+            settings = Settings.create(**config['settings'])
+        
+        # Create or update constraints
+        if constraints is None:
+            if config is None:
+                config = cls.load_config()
+            constraints = Constraints.create(**config['constraints'])
+        
+        # Create and start engine
+        engine = cls(settings=settings, constraints=constraints)
+        await engine.start()
+        return engine
     
     def __init__(self, constraints: Optional[Constraints] = None, settings: Optional[Settings] = None):
         """Initialize engine with optional constraints and settings."""
@@ -65,32 +137,12 @@ class Engine:
             cache_manager=self.cache_manager
         )
         self._started = False
-
-    @classmethod
-    async def create(cls, **kwargs) -> "Engine":
-        """Asynchronously create an engine instance with optional settings."""
-        new_engine = cls(**kwargs)
-        await new_engine.start()
-        return new_engine
         
     async def start(self):
         """Start the engine's resource management."""
         if not self._started:
             await self.resource_manager.start()
             self._started = True
-        # Thread for logging metrics (if needed)
-        # self._metrics_thread = threading.Thread(target=self._log_metrics, daemon=True)
-        # self._metrics_thread.start()
-
-    def _log_metrics(self):
-        """Log engine metrics every 5 seconds."""
-        while self._started:
-            try:
-                metrics = asyncio.run(self.get_metrics())
-                logger.debug(f"Engine metrics: {metrics}")
-            except Exception as e:
-                logger.error(f"Error logging metrics: {e}")
-            time.sleep(5)
             
     async def stop(self):
         """Stop the engine and cleanup resources."""

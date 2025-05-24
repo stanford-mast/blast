@@ -36,6 +36,21 @@ class Settings(BaseModel):
         description="Directory for log files. If not set, uses blast-logs when log level is warning+"
     )
 
+    server_port: int = Field(
+        default=8000,
+        description="Port number for the BLAST server"
+    )
+
+    web_port: int = Field(
+        default=3000,
+        description="Port number for the web UI"
+    )
+
+    @classmethod
+    def create(cls, **kwargs):
+        """Create Settings from keyword arguments."""
+        return cls(**kwargs)
+
 class Constraints(BaseModel):
     """Constraints for BLAST execution."""
     
@@ -99,31 +114,12 @@ class Constraints(BaseModel):
     )
     
     @classmethod
-    def create(cls, max_memory: Optional[str] = None,
-                   max_concurrent_browsers: int = 20,
-                   max_cost_per_minute: Optional[float] = None,
-                   max_cost_per_hour: Optional[float] = None,
-                   allow_parallelism: dict = {"task": True, "data": False, "first_of_n": False},
-                   max_parallelism_nesting_depth: int = 1,
-                   llm_model: str = "gpt-4.1",
-                   llm_model_mini: str = "gpt-4.1-mini",
-                   allow_vision: bool = True,
-                   require_headless: bool = True,
-                   share_browser_process: bool = True) -> "Constraints":
-        """Create Constraints from string values.
+    def create(cls, max_memory: Optional[str] = None, **kwargs):
+        """Create Constraints from keyword arguments.
         
         Args:
             max_memory: Maximum memory as string (e.g. "4GB")
-            max_concurrent_browsers: Maximum concurrent browser contexts
-            max_cost_per_minute: Maximum cost per minute in USD
-            max_cost_per_hour: Maximum cost per hour in USD
-            allow_parallelism: Whether to allow parallel execution
-            max_parallelism_nesting_depth: Maximum depth of nested parallel tasks
-            llm_model: Primary LLM model identifier
-            llm_model_mini: Smaller LLM model for parallel processing
-            allow_vision: Whether to allow vision capabilities
-            require_headless: Whether to require headless mode
-            share_browser_process: Whether to share browser process between contexts
+            **kwargs: Additional keyword arguments matching field names
             
         Returns:
             Constraints instance
@@ -151,17 +147,9 @@ class Constraints(BaseModel):
                     raise ValueError(f"Invalid memory unit: {unit}")
             else:
                 raise ValueError(f"Invalid memory format: {max_memory}")
+
+        # Update kwargs with converted memory
+        if memory_bytes is not None:
+            kwargs['max_memory'] = memory_bytes
                 
-        return cls(
-            max_memory=memory_bytes,
-            max_concurrent_browsers=max_concurrent_browsers,
-            max_cost_per_minute=max_cost_per_minute,
-            max_cost_per_hour=max_cost_per_hour,
-            allow_parallelism=allow_parallelism,
-            max_parallelism_nesting_depth=max_parallelism_nesting_depth,
-            llm_model=llm_model,
-            llm_model_mini=llm_model_mini,
-            allow_vision=allow_vision,
-            require_headless=require_headless,
-            share_browser_process=share_browser_process
-        )
+        return cls(**kwargs)

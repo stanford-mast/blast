@@ -5,6 +5,8 @@ settings:
   blastai_log_level: "debug"  # Logging level for blastai module
   secrets_file_path: "secrets.env"  # Path to secrets file containing sensitive data
   logs_dir: "blast-logs/"  # Directory for log files. Set to null to log to stdout instead.
+  server_port: 8000  # Port number for the BLAST server
+  web_port: 3000  # Port number for the web UI
 
 constraints:
   max_memory: null  # No default memory limit

@@ -1,15 +1,101 @@
 """Logging configuration for BLAST."""
 
 import logging
+import logging.config
 import os
 from pathlib import Path
 import sys
 import warnings
-from typing import Optional
+from typing import Optional, Dict
 
 from .config import Settings
 
-def setup_logging(settings: Optional[Settings] = None):
+def create_log_config(settings: Settings, logs_dir: Path, engine_hash: str) -> Dict:
+    """Create logging configuration dictionary.
+    
+    Args:
+        settings: Settings instance with logging configuration
+        logs_dir: Path to logs directory
+        engine_hash: Hash of the engine instance for unique log files
+        
+    Returns:
+        Logging configuration dictionary
+    """
+    # Use consistent timestamp format without milliseconds
+    log_format = '%(asctime)s [%(name)s] %(message)s'
+    date_format = '%Y-%m-%d %H:%M:%S'
+    
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "format": log_format,
+                "datefmt": date_format,
+            },
+        },
+        "handlers": {
+            "engine_file": {
+                "class": "logging.FileHandler",
+                "filename": str(logs_dir / f"{engine_hash}.engine.log"),
+                "formatter": "default",
+            },
+            "web_file": {
+                "class": "logging.FileHandler",
+                "filename": str(logs_dir / f"{engine_hash}.web.log"),
+                "formatter": "default",
+            },
+            "warnings_file": {
+                "class": "logging.FileHandler",
+                "filename": str(logs_dir / f"{engine_hash}.warnings.log"),
+                "formatter": "default",
+            }
+        },
+        "loggers": {
+            "": {  # Root logger
+                "handlers": ["engine_file"],
+                "level": "ERROR",
+                "propagate": True,
+            },
+            "blastai": {
+                "handlers": ["engine_file"],
+                "level": settings.blastai_log_level.upper(),
+                "propagate": False,
+            },
+            "browser_use": {
+                "handlers": ["engine_file"],
+                "level": settings.browser_use_log_level.upper(),
+                "propagate": False,
+            },
+            "uvicorn": {
+                "handlers": ["engine_file"],
+                "level": settings.blastai_log_level.upper(),
+                "propagate": False,
+            },
+            "uvicorn.error": {
+                "handlers": ["engine_file"],
+                "level": settings.blastai_log_level.upper(),
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "handlers": ["engine_file"],
+                "level": settings.blastai_log_level.upper(),
+                "propagate": False,
+            },
+            "web": {
+                "handlers": ["web_file"],
+                "level": settings.browser_use_log_level.upper(),
+                "propagate": False,
+            },
+            "py.warnings": {
+                "handlers": ["warnings_file"],
+                "level": "WARNING",
+                "propagate": False,
+            }
+        }
+    }
+
+def setup_logging(settings: Optional[Settings] = None, engine_hash: Optional[str] = None):
     """Configure logging for BLAST.
     
     This function:
@@ -20,86 +106,71 @@ def setup_logging(settings: Optional[Settings] = None):
     
     Args:
         settings: Optional Settings instance with logging configuration
+        engine_hash: Optional hash of the engine instance for unique log files
     """
-    # Set up warning logging first
-    logging.captureWarnings(True)
-    warning_logger = logging.getLogger('py.warnings')
-    warning_logger.setLevel(logging.WARNING)
     # Use default settings if none provided
     if not settings:
         settings = Settings()
-        
-    # Get log levels
-    blastai_level = getattr(logging, settings.blastai_log_level.upper())
-    browser_level = getattr(logging, settings.browser_use_log_level.upper())
     
-    # Show timestamps for all levels except ERROR and CRITICAL
-    def should_show_timestamp(level):
-        return level not in {logging.ERROR, logging.CRITICAL}
+    # Remove any existing handlers from root logger
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
     
-    # Set format based on log levels
-    show_blastai_timestamp = should_show_timestamp(blastai_level)
-    show_browser_timestamp = should_show_timestamp(browser_level)
-    use_detailed_format = True # show_blastai_timestamp or show_browser_timestamp
-    
-    # Use consistent timestamp format without milliseconds
-    log_format = '%(asctime)s [%(name)s] %(message)s' if use_detailed_format else '%(message)s'
-    date_format = '%Y-%m-%d %H:%M:%S'
-    
-    # Configure warning logging
+    # Set up warning logging
     logging.captureWarnings(True)
-    warning_logger = logging.getLogger('py.warnings')
-    warning_logger.setLevel(logging.WARNING)
+    warnings.filterwarnings("default")  # Enable warnings
     
-    # If logs_dir is set, redirect warnings there
+    # Configure logging based on settings
     if settings.logs_dir:
+        # Create logs directory if needed
         logs_dir = Path(settings.logs_dir)
         if not logs_dir.exists():
             logs_dir.mkdir(parents=True)
-        warning_handler = logging.FileHandler(str(logs_dir / 'warnings.log'))
-        warning_handler.setFormatter(logging.Formatter(log_format, date_format))
-        warning_logger.addHandler(warning_handler)
-        warning_logger.propagate = False
-    # Only set up console logging if logs_dir is not set
-    else:
-        # Configure root logger for console
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(logging.Formatter(log_format, date_format))
+            
+        # Create and apply logging config
+        log_config = create_log_config(settings, logs_dir, engine_hash or "default")
+        logging.config.dictConfig(log_config)
         
-        logging.basicConfig(
-            level=logging.ERROR,
-            handlers=[handler]
+        # Configure warning formatting to log to file
+        def warning_on_one_line(message, category, filename, lineno, file=None, line=None):
+            logger = logging.getLogger('py.warnings')
+            logger.warning(f'{category.__name__}: {message}')
+            return ''  # Suppress terminal output
+        warnings.formatwarning = warning_on_one_line
+        
+    else:
+        # Configure console logging
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(
+            logging.Formatter('%(asctime)s [%(name)s] %(message)s', '%Y-%m-%d %H:%M:%S')
         )
         
-        # Configure all loggers to error level
-        logging.getLogger().setLevel(logging.ERROR)
+        # Configure root logger
+        root_logger.addHandler(handler)
+        root_logger.setLevel(logging.ERROR)
         
-        # Configure blastai logger
+        # Configure specific loggers
         blastai_logger = logging.getLogger('blastai')
-        blastai_logger.setLevel(blastai_level)
+        blastai_logger.setLevel(getattr(logging, settings.blastai_log_level.upper()))
         
-        # Configure browser-use logger via environment variable and direct configuration
-        # Set env var for browser-use's own setup
+        # Set browser-use log level via environment variable
         os.environ["BROWSER_USE_LOGGING_LEVEL"] = settings.browser_use_log_level.lower()
         
-        # Also configure browser-use logger directly after its setup
+        # Configure browser-use logger
         browser_level = getattr(logging, settings.browser_use_log_level.upper())
         browser_use_logger = logging.getLogger('browser_use')
         browser_use_logger.setLevel(browser_level)
         
-        # And ensure playwright logger matches the level
+        # Configure playwright logger
         playwright_logger = logging.getLogger('playwright')
         playwright_logger.setLevel(browser_level)
     
     # Silence third-party loggers
     for logger_name in [
-        'uvicorn',
-        'uvicorn.access',
-        'uvicorn.error',
         'asyncio',
         'httpx',
         'httpcore',
-        'playwright',
         'PIL',
     ]:
         third_party = logging.getLogger(logger_name)
