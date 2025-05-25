@@ -41,7 +41,19 @@ def check_docker_installation() -> Tuple[bool, str]:
         return True, ""
     except docker.errors.DockerException as e:
         error_msg = str(e)
-        if is_wsl() and ("not found" in error_msg or "Connection aborted" in error_msg):
+        # Check for permission error in the full error chain
+        if "Permission denied" in error_msg or "PermissionError(13" in error_msg:
+            print("The current BLAST configuration requires Steel for browser management.\n")
+            print("You can either:")
+            print("1. Set up Docker to use Steel (recommended)")
+            print("2. Set require_steel=false in blastai/default_config.yaml")
+            print("\nDocker is installed but you don't have permission to use it.")
+            print("To fix this:")
+            print("1. Run: sudo usermod -aG docker $USER")
+            print("2. Run: newgrp docker")
+            print("3. Try 'blastai serve' again")
+            return False, "Permission denied accessing Docker socket"
+        elif is_wsl() and ("not found" in error_msg or "Connection aborted" in error_msg):
             print("The current BLAST configuration requires Steel for browser management.")
             print()
             print("You can either:")

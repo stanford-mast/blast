@@ -99,7 +99,7 @@ async def initialize(request: InitializeRequest):
             logger.debug("Engine started successfully")
         return {"status": "ok"}
     except Exception as e:
-        logger.error(f"Failed to initialize engine: {e}")
+        logger.error(f"Failed to initialize engine: {e}", exc_info=True)
         return {"status": "error", "error": str(e)}
 
 @app.get("/health")
@@ -147,7 +147,7 @@ async def get_engine(instance_hash: Optional[str] = None) -> Engine:
             _engine = await Engine.create(instance_hash=instance_hash)
             logger.info("Engine started successfully")
         except Exception as e:
-            logger.error(f"Failed to create engine: {e}")
+            logger.error(f"Failed to create engine: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
     return _engine
 

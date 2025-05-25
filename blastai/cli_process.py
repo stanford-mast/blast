@@ -85,6 +85,36 @@ async def display_metrics(client: httpx.AsyncClient, server_port: int, output_ev
             break
         await asyncio.sleep(5)
 
+async def cleanup_tasks(server, tasks, metrics_client):
+    """Clean up tasks and resources."""
+    try:
+        # Clean shutdown server first
+        if server:
+            server.should_exit = True
+            try:
+                # Give server time to shutdown
+                await asyncio.wait_for(
+                    asyncio.gather(*[t for t in tasks if t.get_name() == 'Server.serve'], return_exceptions=True),
+                    timeout=2.0
+                )
+            except asyncio.TimeoutError:
+                pass
+
+        # Then cancel other tasks
+        for task in tasks:
+            if not task.done() and task.get_name() != 'Server.serve':
+                task.cancel()
+        
+        # Wait for all tasks to finish
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Clean up clients last
+        if metrics_client:
+            await metrics_client.aclose()
+    except Exception:
+        # Ignore any cleanup errors
+        pass
+
 async def run_server_and_frontend(
     server,
     settings,
@@ -127,57 +157,37 @@ async def run_server_and_frontend(
         # Start server for all modes except 'web'
         server_task = None
         if mode in [None, 'engine']:  # Server needed for None, 'engine', and 'cli' modes
-            server_task = asyncio.create_task(server.serve())
+            server_task = asyncio.create_task(server.serve(), name='Server.serve')
             tasks.append(server_task)
             
-            # Wait briefly for server to start
-            await asyncio.sleep(1)
+            # Wait longer for server to start
+            await asyncio.sleep(3)
             
             # Initialize engine and cleanly handle failure
             async with httpx.AsyncClient() as client:
-                try:
-                    response = await client.post(
-                        f"http://127.0.0.1:{actual_server_port}/initialize",
-                        json={"instance_hash": instance_hash} if instance_hash else {}
-                    )
-                    result = response.json()
-                    if result["status"] == "error":
-                        # Clean shutdown
-                        server.should_exit = True
-                        await server.shutdown()
-                        # Wait for server to finish shutdown
-                        try:
-                            await asyncio.wait_for(server_task, timeout=5.0)
-                        except asyncio.TimeoutError:
-                            pass
-                        # Clean up other tasks
-                        for task in tasks:
-                            if task != server_task and not task.done():
-                                task.cancel()
-                        await asyncio.gather(*tasks, return_exceptions=True)
-                        # Clean up clients
-                        if metrics_client:
-                            await metrics_client.aclose()
-                        return False
-                except httpx.ConnectError:
-                    print("Error: Failed to connect to server")
-                    # Clean shutdown
-                    server.should_exit = True
-                    await server.shutdown()
-                    # Wait for server to finish shutdown
+                for attempt in range(3):  # Try 3 times
                     try:
-                        await asyncio.wait_for(server_task, timeout=5.0)
-                    except asyncio.TimeoutError:
-                        pass
-                    # Clean up other tasks
-                    for task in tasks:
-                        if task != server_task and not task.done():
-                            task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    # Clean up clients
-                    if metrics_client:
-                        await metrics_client.aclose()
-                    return False
+                        logger.info(f"Attempting to initialize engine (attempt {attempt + 1})")
+                        response = await client.post(
+                            f"http://127.0.0.1:{actual_server_port}/initialize",
+                            json={"instance_hash": instance_hash} if instance_hash else {},
+                            timeout=30.0
+                        )
+                        result = response.json()
+                        if result["status"] == "error":
+                            logger.error(f"Engine initialization failed: {result.get('error', 'Unknown error')}")
+                            print(f"\nEngine failed to start. Please check {settings.logs_dir}{instance_hash}.engine.log for details.")
+                            os._exit(1)
+                        logger.info("Engine initialized successfully")
+                        break
+                    except (httpx.ConnectError, httpx.ReadTimeout) as e:
+                        logger.warning(f"Engine initialization attempt {attempt + 1} failed: {e}")
+                        if attempt < 2:  # Don't sleep on last attempt
+                            await asyncio.sleep(2)
+                        else:
+                            logger.error("Failed to initialize engine after multiple attempts")
+                            print(f"\nEngine failed to start. Please check {settings.logs_dir}{instance_hash}.engine.log for details.")
+                            os._exit(1)
 
         # Start frontend based on mode
         if mode in [None, 'web']:
@@ -191,7 +201,8 @@ async def run_server_and_frontend(
                     web_logger=web_logger,
                     using_logs=using_logs,
                     frontend_ready=frontend_ready
-                )
+                ),
+                name='frontend'
             )
             tasks.append(frontend_task)
         elif mode == 'cli':
@@ -200,28 +211,8 @@ async def run_server_and_frontend(
         # Wait for all tasks to complete
         await asyncio.gather(*tasks)
         return True
-        
-    except asyncio.CancelledError:
-        # Cancel all tasks
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        
-        # Wait for tasks to complete
-        try:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            import traceback
-            logger.error(f"Error during shutdown: {e}")
-            logger.error(f"Stack trace:\n{traceback.format_exc()}")
-        
-        raise
     except Exception as e:
-        logger.error(f"Error: {e}")
-        raise
-    finally:
-        # Clean up metrics client
-        if metrics_client:
-            await metrics_client.aclose()
+        logger.error(f"Failure: {e}", exc_info=True)
+        print(f"\nFailed. Please check {settings.logs_dir}{instance_hash}.engine.log for details.")
+        # Exit immediately without cleanup to avoid task destruction messages
+        os._exit(1)

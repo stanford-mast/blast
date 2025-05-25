@@ -179,7 +179,8 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
             instance_hash=instance_hash
         ))
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        pass
+        # print("\nShutting down...")
     except Exception as e:
         print(f"\nError: {e}")
     finally:

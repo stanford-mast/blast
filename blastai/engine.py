@@ -192,8 +192,7 @@ class Engine:
             constraints=self.constraints,
             settings=self.settings,
             engine_hash=self._instance_hash,
-            cache_manager=self.cache_manager,
-            steel_port=None  # Will be set after Steel server starts
+            cache_manager=self.cache_manager
         )
         self._started = False
         
@@ -221,38 +220,176 @@ class Engine:
                     if not all([api_port, debug_port, ui_port]):
                         raise RuntimeError("Could not find available ports for Steel server")
                     
+                    # Get path to steel-docker-compose.yml
+                    compose_file = Path(__file__).parent / 'steel-docker-compose.yml'
+                    if not compose_file.exists():
+                        raise RuntimeError("steel-docker-compose.yml not found")
+
                     logger.info(f"Starting Steel server on ports - API: {api_port}, Debug: {debug_port}, UI: {ui_port}")
-                    self._steel_port = api_port
-                    self.resource_manager._steel_port = api_port
+
+                    # Set environment variables for ports
+                    env = os.environ.copy()
+                    # Convert ports to strings and ensure they're set
+                    api_port_str = str(api_port)
+                    debug_port_str = str(debug_port)
+                    ui_port_str = str(ui_port)
+                    logger.info(f"Setting ports - API: {api_port_str}, Debug: {debug_port_str}, UI: {ui_port_str}")
                     
-                    # Start Steel server using docker compose
-                    try:
-                        # Get path to steel-docker-compose.yml
-                        compose_file = Path(__file__).parent / 'steel-docker-compose.yml'
-                        if not compose_file.exists():
-                            raise RuntimeError("steel-docker-compose.yml not found")
+                    env.update({
+                        "API_PORT": api_port_str,
+                        "DEBUG_PORT": debug_port_str,
+                        "UI_PORT": ui_port_str,
+                        "COMPOSE_PROJECT_NAME": "blastai"  # Ensure consistent container naming
+                    })
 
-                        # Set environment variables for ports
-                        env = os.environ.copy()
-                        env.update({
-                            "API_PORT": str(api_port),
-                            "DEBUG_PORT": str(debug_port),
-                            "UI_PORT": str(ui_port)
-                        })
+                    # Clean up any existing containers first
+                    cleanup_cmd = [
+                        "docker", "compose",
+                        "-f", str(compose_file),
+                        "down", "--remove-orphans"
+                    ]
+                    result = subprocess.run(cleanup_cmd, check=True,
+                                         capture_output=True, text=True,
+                                         env=env)
+                    if result.stdout:
+                        logger.debug(f"Docker cleanup: {result.stdout}")
+                    if result.stderr:
+                        logger.debug(f"Docker cleanup: {result.stderr}")
 
-                        # Run docker compose with environment variables
-                        compose_cmd = [
-                            "docker", "compose",
-                            "-f", str(compose_file),
-                            "up", "-d"
-                        ]
-                        subprocess.run(compose_cmd, env=env, check=True)
-                        logger.info("Steel server started successfully")
-                    except subprocess.CalledProcessError as e:
-                        raise RuntimeError(f"Failed to start Steel server: {e}")
+                    # Start new containers
+                    compose_cmd = [
+                        "docker", "compose",
+                        "-f", str(compose_file),
+                        "up", "-d"
+                    ]
+                    result = subprocess.run(compose_cmd, env=env, check=True,
+                                         capture_output=True, text=True)
+                    if result.stdout:
+                        logger.debug(f"Docker startup: {result.stdout}")
+                    if result.stderr:
+                        logger.debug(f"Docker startup: {result.stderr}")
+
+                    # Wait briefly for containers to start
+                    await asyncio.sleep(2)
+
+                    # Get API container logs to check for startup issues
+                    logs_cmd = ["docker", "logs", "blastai-api-1"]
+                    result = subprocess.run(logs_cmd, capture_output=True, text=True)
+                    if result.stdout:
+                        logger.info(f"API container startup logs:\n{result.stdout}")
+                    if result.stderr:
+                        logger.error(f"API container startup errors:\n{result.stderr}")
+                        raise RuntimeError(f"API container startup error: {result.stderr}")
+
+                    # Check container port bindings
+                    inspect_cmd = ["docker", "inspect", "blastai-api-1"]
+                    result = subprocess.run(inspect_cmd, capture_output=True, text=True)
+                    if result.returncode == 0:
+                        import json
+                        container_info = json.loads(result.stdout)
+                        ports = container_info[0].get("NetworkSettings", {}).get("Ports", {})
+                        logger.info(f"Container port bindings: {json.dumps(ports, indent=2)}")
                         
+                        # Check if our port is properly bound
+                        port_key = "3000/tcp"  # The container's internal port
+                        if port_key not in ports or not ports[port_key]:
+                            logger.error(f"Port {port_key} not bound correctly")
+                            raise RuntimeError(f"Container port {port_key} not bound correctly")
+                    else:
+                        logger.error(f"Failed to inspect container: {result.stderr}")
+                        raise RuntimeError("Failed to inspect container port bindings")
+
+                    try:
+                        # Get detailed container info
+                        inspect_cmd = ["docker", "inspect", "blastai-api-1"]
+                        result = subprocess.run(inspect_cmd, capture_output=True, text=True)
+                        if result.returncode == 0:
+                            import json
+                            container_info = json.loads(result.stdout)
+                            state = container_info[0].get("State", {})
+                            logger.info(f"Container state: {json.dumps(state, indent=2)}")
+                            
+                            if not state.get("Running"):
+                                logger.error("API container is not running")
+                                raise RuntimeError("API container failed to start")
+                        else:
+                            logger.error(f"Failed to inspect container: {result.stderr}")
+                            raise RuntimeError("Failed to inspect API container")
+
+                        # Get API container logs
+                        logs_cmd = ["docker", "logs", "blastai-api-1"]
+                        result = subprocess.run(logs_cmd, capture_output=True, text=True)
+                        if result.stdout:
+                            logger.info(f"API container logs:\n{result.stdout}")
+                        if result.stderr:
+                            logger.error(f"API container stderr:\n{result.stderr}")
+                            raise RuntimeError(f"API container error: {result.stderr}")
+
+                        # Check container status
+                        inspect_cmd = ["docker", "container", "inspect", "blastai-api-1"]
+                        result = subprocess.run(inspect_cmd, capture_output=True, text=True)
+                        if result.returncode != 0:
+                            logger.error(f"Failed to inspect API container:\n{result.stderr}")
+                            raise RuntimeError("Steel API container failed to start")
+
+                        # Try to connect to the API
+                        import httpx
+                        async with httpx.AsyncClient() as client:
+                            for attempt in range(3):  # Try 3 times
+                                try:
+                                    logger.info(f"Attempting to connect to Steel API (attempt {attempt + 1})")
+                                    response = await client.get(f"http://localhost:{api_port}/health", timeout=30.0)
+                                    if response.status_code == 200:
+                                        logger.info("Successfully connected to Steel API")
+                                        break
+                                except Exception as e:
+                                    logger.warning(f"API connection attempt {attempt + 1} failed: {e}")
+                                    if attempt < 2:  # Don't sleep on last attempt
+                                        await asyncio.sleep(2)
+                            else:
+                                raise RuntimeError("Failed to connect to Steel API after multiple attempts")
+                    except Exception as e:
+                        logger.error(f"Failed to verify Steel API: {e}", exc_info=True)
+                        raise RuntimeError(f"Failed to verify Steel API: {e}")
+
+                    # Verify containers are running and healthy
+                    inspect_cmd = ["docker", "container", "inspect", "blastai-api-1"]
+                    result = subprocess.run(inspect_cmd, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        logger.error(f"Failed to inspect API container: {result.stderr}")
+                        raise RuntimeError("Steel API container failed to start")
+                    
+                    container_info = json.loads(result.stdout)
+                    if not container_info or not container_info[0].get("State", {}).get("Running"):
+                        logger.error("Steel API container is not running")
+                        raise RuntimeError("Steel API container is not running")
+
+                    # Try to connect to the API to verify it's responding
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient() as client:
+                            response = await client.get(f"http://localhost:{api_port}/health", timeout=5.0)
+                            if response.status_code != 200:
+                                logger.error(f"Steel API health check failed: {response.status_code}")
+                                raise RuntimeError("Steel API health check failed")
+                    except Exception as e:
+                        logger.error(f"Failed to connect to Steel API: {e}")
+                        raise RuntimeError(f"Failed to connect to Steel API: {e}")
+
+                    logger.info("Steel server started successfully and API is responding")
+                    self._steel_port = api_port
+                    # Update resource manager with Steel port
+                    self.resource_manager = ResourceManager(
+                        scheduler=self.scheduler,
+                        constraints=self.constraints,
+                        settings=self.settings,
+                        engine_hash=self._instance_hash,
+                        cache_manager=self.cache_manager,
+                        steel_port=api_port
+                    )
+                    
                 except Exception as e:
-                    logger.error(f"Failed to start Steel server: {e}")
+                    logger.error(f"Failed to start Steel server: {e}", exc_info=True)
                     raise RuntimeError(f"Steel server is required but failed to start: {e}")
             
             await self.resource_manager.start()
@@ -267,7 +404,15 @@ class Engine:
                     try:
                         compose_file = Path(__file__).parent / 'steel-docker-compose.yml'
                         if compose_file.exists():
-                            subprocess.run(["docker", "compose", "-f", str(compose_file), "down"], check=True)
+                            # Capture output and send to logger
+                            result = subprocess.run(
+                                ["docker", "compose", "-f", str(compose_file), "down"],
+                                check=True,
+                                capture_output=True,
+                                text=True
+                            )
+                            if result.stdout:
+                                logger.info(result.stdout)
                             logger.info("Stopped Steel server")
                         else:
                             logger.warning("steel-docker-compose.yml not found during shutdown")

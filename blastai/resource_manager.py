@@ -103,10 +103,31 @@ class ResourceManager:
             # Initialize Steel client if required and port is available
             if self.constraints.require_steel and self._steel_port:
                 try:
-                    self._steel_client = Steel(base_url=f"http://localhost:{self._steel_port}")
-                    logger.debug(f"Initialized Steel client on port {self._steel_port}")
+                    # Check if port is accepting connections
+                    import socket
+                    for attempt in range(3):  # Try 3 times
+                        try:
+                            logger.info(f"Checking if port {self._steel_port} is ready (attempt {attempt + 1})")
+                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                                s.settimeout(5.0)
+                                result = s.connect_ex(('localhost', self._steel_port))
+                                if result == 0:
+                                    logger.info(f"Port {self._steel_port} is accepting connections")
+                                    break
+                                else:
+                                    logger.warning(f"Port {self._steel_port} not ready (attempt {attempt + 1})")
+                        except Exception as e:
+                            logger.warning(f"Failed to check port {self._steel_port} (attempt {attempt + 1}): {e}")
+                        if attempt < 2:
+                            await asyncio.sleep(2)
+                    else:
+                        raise RuntimeError(f"Port {self._steel_port} not ready after multiple attempts")
+
+                    # Initialize Steel client
+                    self._steel_client = Steel(base_url=f"http://localhost:{self._steel_port}", steel_api_key="")
+                    logger.info(f"Initialized Steel on port {self._steel_port}")
                 except Exception as e:
-                    logger.error(f"Failed to initialize Steel client: {e}")
+                    logger.error(f"Failed to initialize Steel on port {self._steel_port}: {e}", exc_info=True)
                     raise
 
             self._running = True
@@ -303,15 +324,15 @@ class ResourceManager:
                 if self.constraints.require_steel and self._steel_client:
                     try:
                         session = self._steel_client.sessions.create(
-                            session_timeout=3600000,  # 60 minutes
-                            block_ads=True,
+                            # session_timeout=3600000,  # 60 minutes
+                            # block_ads=True,
                         )
                         logger.debug(f"Created Steel session: {session.id}")
                         
                         # Connect browser-use to Steel session
                         browser_config.cdp_url = session.websocket_url
                     except Exception as e:
-                        logger.error(f"Failed to create Steel session: {e}")
+                        logger.error(f"Failed to create Steel session: {e}", exc_info=True)
                         raise
 
                 if self.constraints.share_browser_process and self._shared_browser is None:
@@ -352,10 +373,10 @@ class ResourceManager:
                         logger.error(f"Failed to install Playwright browsers: {install_error}")
                         return None
                 else:
-                    logger.error(f"Failed to create browser with config: {e}")
+                    logger.error(f"Failed to create browser with config: {e}", exc_info=True)
                     return None
         except Exception as e:
-            logger.error(f"Failed to create browser with config: {e}")
+            logger.error(f"Failed to create browser with config: {e}", exc_info=True)
             return None
         
         # Create LLMs
