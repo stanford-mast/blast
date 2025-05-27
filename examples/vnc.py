@@ -47,21 +47,6 @@ def get_chromium_class():
         return match.group(2)
     return "Chromium-browser"
 
-def configure_vnc_config():
-    vnc_config_path = Path.home() / ".vnc" / "config"
-    vnc_config_path.write_text("""\
-# TigerVNC server configuration
-SecurityTypes=None
-localhost=no
-geometry=1920x1080
-depth=24
-dpi=96
-CompareFB=1
-FrameRate=60
-""")
-    print("Configured ~/.vnc/config with high-quality settings")
-
-
 def configure_openbox(wm_class):
     ob_dir = Path.home() / ".config" / "openbox"
     ob_dir.mkdir(parents=True, exist_ok=True)
@@ -85,7 +70,7 @@ def configure_openbox(wm_class):
 
 def patch_novnc_ui():
     html_path = "/usr/share/novnc/vnc.html"
-    patch_version = "v0.1.11"
+    patch_version = "v0.1.20"
 
     if not os.path.exists(html_path):
         print("\u26a0\ufe0f noVNC HTML not found!")
@@ -94,21 +79,34 @@ def patch_novnc_ui():
     with open(html_path, "r") as f:
         html = f.read()
 
-    html = re.sub(
-        r"<!-- custom patch v0\\.\d+\\.\d+ -->\s*<script>.*?</script>\s*",
-        "",
-        html,
-        flags=re.DOTALL
-    )
+    while True:
+        new_html = re.sub(
+            r"<!-- custom patch v0\.\d+\.\d+ -->\s*(<style>.*?</style>\s*)?(<script>.*?</script>\s*)?",
+            "",
+            html,
+            flags=re.DOTALL
+        )
+        if new_html == html:
+            break
+        html = new_html
 
     if f"<!-- custom patch {patch_version} -->" in html:
         print(f"\u2705 noVNC UI already patched with {patch_version}.")
         return
 
     patch = f"""<!-- custom patch {patch_version} -->
+<style>
+    #noVNC_control_bar_anchor,
+    #noVNC_control_bar,
+    #noVNC_status,
+    #noVNC_connect_dlg,
+    #noVNC_control_bar_hint,
+    #noVNC_transition {{
+        display: none !important;
+    }}
+</style>
 <script>
 window.addEventListener('load', function () {{
-    // 1) Hide the default UI
     const style = document.createElement('style');
     style.textContent = `
         #noVNC_control_bar_anchor,
@@ -116,40 +114,13 @@ window.addEventListener('load', function () {{
         #noVNC_status,
         #noVNC_connect_dlg,
         #noVNC_control_bar_hint,
-        #noVNC_transition,
-        #noVNC_fallback_error {{
+        #noVNC_transition {{
             display: none !important;
-        }}
-        /* 2) Make the canvas fill its container */
-        #noVNC_canvas {{
-            width: 100% !important;
-            height: 100% !important;
-            image-rendering: pixelated !important;
         }}
     `;
     document.head.appendChild(style);
-
-    // 3) Configure noVNC settings for remote resizing, no clipping
-    document.querySelector('#noVNC_setting_resize').value = 'remote';
-    document.querySelector('#noVNC_setting_view_clip').checked = false;
-    document.querySelector('#noVNC_setting_quality').value = 9;
-    document.querySelector('#noVNC_setting_compression').value = 0;
-
-    // 4) Dispatch change events to apply
-    ['resize','view_clip','quality','compression'].forEach(id =>
-        document.querySelector('#noVNC_setting_' + id)
-            .dispatchEvent(new Event('change'))
-    );
-
-    // 5) Auto-connect
-    const btn = document.querySelector('#noVNC_connect_button');
-    if (btn) btn.click();
-
-    // 6) Optional: Ensure RFB API flags (if using the JS API)
-    //   window.RFB && window.RFB.display && Object.assign(window.RFB, {{
-    //       scaleViewport: false,
-    //       resizeSession: false
-    //   }});
+    const button = document.querySelector("#noVNC_connect_button");
+    if (button) button.click();
 }});
 </script>"""
 
@@ -169,23 +140,21 @@ def cleanup_display(display_no, vnc_port, http_port):
     for port in (vnc_port, http_port):
         subprocess.run(f"fuser -k {port}/tcp", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def launch_session(display_no=1, geometry="1920x1080", target_url="https://w3schools.com"):
+def launch_session(display_no=1, geometry="1280x720", target_url="https://practicepanther.com"):
     vnc_port = 5900 + display_no
     http_port = 6080 + display_no
 
     cleanup_display(display_no, vnc_port, http_port)
     configure_xstartup()
     patch_novnc_ui()
-    configure_vnc_config()
 
     os.environ["DISPLAY"] = f":{display_no}"
     wm_class = get_chromium_class()
     configure_openbox(wm_class)
 
     print(f"Starting TigerVNC on display :{display_no}")
-    # Start VNC with high-quality encoding settings
     subprocess.run(
-        f"vncserver :{display_no} -geometry {geometry} -depth 24 -dpi 96 -localhost no -SecurityTypes None --I-KNOW-THIS-IS-INSECURE",
+        f"vncserver :{display_no} -geometry {geometry} -localhost no -SecurityTypes None --I-KNOW-THIS-IS-INSECURE",
         shell=True,
         check=True
     )
@@ -199,7 +168,7 @@ def launch_session(display_no=1, geometry="1920x1080", target_url="https://w3sch
 
     iframe_url = f"http://localhost:{http_port}/vnc.html"
 
-    print("Launching Chromium via Playwright and going to w3schools")
+    print("Launching Chromium via Playwright")
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
             user_data_dir='/tmp/playwright',
@@ -209,20 +178,17 @@ def launch_session(display_no=1, geometry="1920x1080", target_url="https://w3sch
                 '--disable-infobars',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-features=TranslateUI,OverlayScrollbar,ExperimentalFullscreenExitUI',
-                '--window-size=1920,1080',
-                '--force-device-scale-factor=1',  # Ensure 1:1 pixel mapping
                 '--kiosk',
                 '--start-fullscreen',
                 '--start-maximized',
                 '--disable-translate',
                 '--disable-dev-shm-usage'
             ],
-            ignore_default_args=['--enable-automation', "--mute-audio"],
-            # viewport={'width': 1920, 'height': 1080}
+            ignore_default_args=['--enable-automation']
         )
         time.sleep(2)
-        subprocess.run("xdotool search --class chromium windowactivate --sync key F11", shell=True)
         context.pages[0].goto(target_url)
+        subprocess.run("xdotool search --class chromium windowactivate --sync key F11", shell=True)
         print("\U0001f4cc Embed iframe using:", iframe_url)
         input("Press ENTER to terminate session...")
         context.close()
