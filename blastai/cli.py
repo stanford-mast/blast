@@ -26,6 +26,7 @@ from .cli_process import (
     find_available_port,
     run_server_and_frontend
 )
+from .logging_setup import should_show_metrics
 
 # Configure rich-click
 click.rich_click.USE_RICH_MARKUP = True
@@ -94,37 +95,23 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
     # Get settings
     settings = engine.settings
     
+    # Set up logging
+    setup_logging(settings, engine._instance_hash)
+    
     # Find available ports
     actual_server_port = find_available_port(settings.server_port)
     if not actual_server_port:
-        print(f"\nError: Could not find available port for server (tried ports {settings.server_port}-{settings.server_port+9})")
+        print(f"Error: Could not find available port for server (tried ports {settings.server_port}-{settings.server_port+9})")
         return
     
     actual_web_port = find_available_port(settings.web_port)
     if not actual_web_port:
-        print(f"\nError: Could not find available port for web frontend (tried ports {settings.web_port}-{settings.web_port+9})")
+        print(f"Error: Could not find available port for web frontend (tried ports {settings.web_port}-{settings.web_port+9})")
         return
-
-    # Determine logging behavior
-    using_logs = False
-    show_metrics = False
-    web_logger = None
-
-    if settings.logs_dir:
-        # User specified logs directory in config - always log to files and show metrics
-        logs_dir = Path(settings.logs_dir)
-        if not logs_dir.exists():
-            logs_dir.mkdir(parents=True)
-        using_logs = True
-        show_metrics = True
-
-        # Configure logging with engine hash
-        setup_logging(settings, engine._instance_hash)
-        web_logger = logging.getLogger("web")
-
-    # Create server with proper logging level and config
+        
+    # Configure uvicorn
     import uvicorn
-    # Configure uvicorn to use our logging
+    uvicorn.config.LOGGING_CONFIG = None  # Use our logging
     server_config = uvicorn.Config(
         "blastai.server:app",
         host="127.0.0.1",
@@ -138,36 +125,35 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
         access_log=False,
         log_config=None  # Use our logging config instead of uvicorn's
     )
+    
     # Create server with custom error handler
     server = uvicorn.Server(server_config)
     server.force_exit = False  # Allow graceful shutdown
-    
-    # Override error logger to use our logger
-    error_logger = logging.getLogger('blastai')
     server.install_signal_handlers = lambda: None  # Disable uvicorn's signal handlers
 
     # Print startup banner
+    logs_dir = Path(settings.logs_dir or 'blast-logs')
+    # Always show logs since they're essential information
     if mode == 'engine':
         console.print(Panel(
             f"[green]Engine:[/] http://127.0.0.1:{actual_server_port}\n" +
-            (f"[dim]Logs:[/]   {logs_dir / f'{engine._instance_hash}.engine.log'}" if using_logs else ""),
+            f"[dim]Logs:[/]   {logs_dir / f'{engine._instance_hash}.engine.log'}",
             title="BLAST Engine",
             border_style="bright_black"
         ))
     elif mode == 'web':
         console.print(Panel(
             f"[green]Web:[/]  http://localhost:{actual_web_port}\n" +
-            (f"[dim]Logs:[/] {logs_dir / f'{engine._instance_hash}.web.log'}" if using_logs else ""),
+            f"[dim]Logs:[/] {logs_dir / f'{engine._instance_hash}.web.log'}",
             title="BLAST Web UI",
             border_style="bright_black"
         ))
     elif mode is None:
         console.print(Panel(
-            f"[green]Engine:[/] http://127.0.0.1:{actual_server_port}" +
-            (f"  [dim]{logs_dir / f'{engine._instance_hash}.engine.log'}[/]\n" if using_logs else "\n") +
-            f"[green]Web:[/]    http://localhost:{actual_web_port}" +
-            (f"  [dim]{logs_dir / f'{engine._instance_hash}.web.log'}[/]" if using_logs else ""),
-            # title="BLAST",
+            f"[green]Engine:[/] http://127.0.0.1:{actual_server_port}  " +
+            f"[dim]{logs_dir / f'{engine._instance_hash}.engine.log'}[/]\n" +
+            f"[green]Web:[/]    http://localhost:{actual_web_port}  " +
+            f"[dim]{logs_dir / f'{engine._instance_hash}.web.log'}[/]",
             border_style="bright_black"
         ))
 
@@ -175,87 +161,51 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
-    # Configure logging handler for uvicorn errors
-    error_logger = logging.getLogger('blastai')
-    
     # Set up signal handlers
     import signal
     
     def handle_signal(sig, frame):
         """Handle SIGINT/SIGTERM gracefully."""
         if not loop.is_closed():
-            error_logger.info("Received shutdown signal, stopping...")
-            
-            # Clear screen
-            print("\033[J", end='')
-            
-            if using_logs:
-                console.print("[yellow]Shutting down...[/]")
-            
-            # Force cleanup
+            print("\nShutting down...\n")  # Add newline to avoid overwriting metrics
             try:
-                loop.create_task(cleanup(force=True))
+                # Run cleanup synchronously to ensure completion
+                loop.run_until_complete(cleanup())
+                # Don't close loop here, let finally block handle it
             except:
-                # If event loop is broken, force exit
                 sys.exit(0)
             
-    async def cleanup(force: bool = False):
-        """Clean up resources gracefully.
-        
-        Args:
-            force: If True, force close resources without waiting
-        """
+    async def cleanup():
+        """Clean up resources gracefully."""
         try:
-            # Cancel all tasks except current
+            # Cancel all tasks except cleanup
             tasks = [t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task()]
-            
-            # Cancel all tasks first
             for task in tasks:
                 task.cancel()
             
             if tasks:
-                # Wait briefly for tasks to cancel
-                try:
-                    done, pending = await asyncio.wait(tasks, timeout=1.0 if not force else 0.1)
-                    
-                    # Force close any pending tasks
-                    for task in pending:
-                        try:
-                            task._coro.close()
-                        except:
-                            pass
-                            
-                    # Check for task errors
-                    for task in done:
-                        try:
-                            exc = task.exception()
-                            if exc and not isinstance(exc, asyncio.CancelledError):
-                                name = task.get_name() or 'unknown'
-                                error_logger.debug(f"Task {name} failed: {exc}")
-                        except:
-                            pass
-                except:
-                    if not force:
-                        error_logger.debug("Error waiting for tasks to cancel")
-            
-            # Cleanup asyncgens with timeout
-            try:
-                await asyncio.wait_for(loop.shutdown_asyncgens(),
-                                     timeout=1.0 if not force else 0.1)
-            except:
-                if not force:
-                    error_logger.debug("Error shutting down asyncgens")
-            
-            # Stop loop
-            try:
-                loop.stop()
-            except:
-                pass
+                # Wait longer for tasks to cancel
+                await asyncio.wait(tasks, timeout=5.0)
                 
+            # Give subprocess cleanup a chance
+            await asyncio.sleep(0.5)
+            
+            # Run event loop one more time to allow subprocess cleanup
+            loop.stop()
+            loop.run_forever()
+            
+            # Now we can close transports
+            for task in tasks:
+                if hasattr(task, 'transport'):
+                    try:
+                        task.transport.close()
+                    except:
+                        pass
+                        
+            # Finally stop the loop
+            loop.stop()
         except Exception as e:
-            # Only log if not forced shutdown
-            if not force and loop.is_running():
-                error_logger.error(f"Error during cleanup: {e}")
+            logging.getLogger('blastai').error(f"Error during cleanup: {e}")
             
     # Install signal handlers for all relevant signals
     signals = (
@@ -278,45 +228,30 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
             # Run server and frontend
             loop.run_until_complete(run_server_and_frontend(
                 server=server,
-                settings=settings,
                 actual_server_port=actual_server_port,
                 actual_web_port=actual_web_port,
                 mode=mode,
-                using_logs=using_logs,
-                show_metrics=show_metrics,
-                web_logger=web_logger
+                show_metrics=True  # Always show metrics
             ))
         except KeyboardInterrupt:
             # Handle Ctrl+C
-            error_logger.info("Shutting down...")
+            print("\nShutting down...\n")  # Add newline to avoid overwriting metrics
             loop.run_until_complete(cleanup())
-            print("\nServer stopped cleanly.")
         except Exception as e:
-            # Log error but don't crash
-            error_logger.error("Server error", exc_info=True)
-            
-            # Only show error panel if server is stopping
+            # Handle any errors
+            print("\nShutting down...\n")  # Add newline to avoid overwriting metrics
             if e.__class__.__name__ in ('SystemExit', 'KeyboardInterrupt'):
-                # Clear screen and show error
-                print("\033[J", end='')
-                if using_logs:
-                    console.print(Panel(
-                        f"[red]Server stopped.[/]\nPlease check [blue]{logs_dir / f'{engine._instance_hash}.engine.log'}[/] for details.",
-                        title="Server Stopped",
-                        border_style="red"
-                    ))
-                # Force cleanup on shutdown
-                loop.run_until_complete(cleanup(force=True))
-                sys.exit(0)
+                loop.run_until_complete(cleanup())
             else:
-                # For task errors, just log and continue
-                loop.run_until_complete(cleanup(force=False))
+                loop.run_until_complete(cleanup())
     finally:
         try:
+            # Run loop one final time to clean up any remaining transports
             if not loop.is_closed():
+                loop.run_until_complete(asyncio.sleep(0))
                 loop.close()
         except Exception as e:
-            error_logger.error(f"Error closing loop: {e}")
+            logging.getLogger('blastai').error(f"Error closing loop: {e}")
 
 def main():
     """Main entry point for CLI."""

@@ -280,7 +280,7 @@ class Engine:
                 "running": len(running_tasks),
                 "completed": len(completed_tasks)
             },
-            "concurrent_browsers": len([t for t in tasks.values() if t.executor and t.executor.browser]),
+            "concurrent_browsers": len([t for t in tasks.values() if t.executor and t.executor.browser_session]),
             "memory_usage_gb": round(memory_gb, 2),
             "total_cost": round(total_cost, 2)
         }

@@ -2,12 +2,15 @@
 
 import os
 import sys
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Union, Tuple
 from dotenv import load_dotenv
 
 from .models import is_openai_model
 from .engine import Engine
+
+logger = logging.getLogger('blastai')
 
 def is_valid_openai_key(api_key: str) -> bool:
     """Check if a string is a valid OpenAI API key format.
@@ -50,7 +53,7 @@ def save_api_key(key: str, value: str, env_path: Path) -> bool:
                     f.write(f"\n{key}={value}\n")
         return True
     except Exception as e:
-        print(f"\nError saving API key: {e}")
+        logger.error(f"Error saving API key: {e}")
         return False
 
 def check_model_api_key(model_name: str, env_path: Optional[Path] = None) -> bool:
@@ -76,11 +79,13 @@ def check_model_api_key(model_name: str, env_path: Optional[Path] = None) -> boo
             if is_valid_openai_key(api_key):
                 # Save to .env file if path provided
                 if env_path and save_api_key("OPENAI_API_KEY", api_key, env_path):
+                    logger.info("API key saved successfully")
                     print("\nAPI key saved successfully!")
                 
                 os.environ["OPENAI_API_KEY"] = api_key
                 return True
             else:
+                logger.warning("Invalid API key format provided")
                 print("\nInvalid API key format. API keys should start with 'sk-' and be at least 40 characters long.")
                 retry = input("Would you like to try again? (y/n): ").lower()
                 if retry != 'y':
@@ -153,24 +158,24 @@ async def setup_serving_environment(env: Optional[str] = None, config_path: Opti
     
     # Check for required API keys
     if not check_model_api_key(engine.constraints.llm_model, env_path):
+        logger.error("Required API key not found")
         print("\nRequired API key not found. Exiting.")
         sys.exit(1)
         
     if engine.constraints.llm_model_mini and not check_model_api_key(engine.constraints.llm_model_mini, env_path):
+        logger.error("Required API key not found for mini model")
         print("\nRequired API key not found for mini model. Exiting.")
         sys.exit(1)
     
-    # Check if already installed
+    # Only install if not already installed
     from .cli_installation import check_installation_state, install_browsers
-    already_installed = check_installation_state()
-    
-    # Install browsers and dependencies if needed
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            if not p.chromium.executable_path.exists():
-                install_browsers(quiet=already_installed)
-    except Exception:
-        install_browsers(quiet=already_installed)
+    if not check_installation_state():
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                if not p.chromium.executable_path.exists():
+                    install_browsers()
+        except Exception:
+            install_browsers()
         
     return env_path, engine

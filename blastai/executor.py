@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 from .config import Settings, Constraints
 from .response import AgentReasoning, AgentHistoryListResponse
 from .utils import estimate_llm_cost, get_base_url_for_provider
-from .models import is_openai_model
 
 class Executor:
     """Wrapper around browser_use Agent for task execution."""
@@ -82,15 +81,17 @@ class Executor:
                 cost = self._cb.total_cost
                 if cost == 0 and self._cb.total_tokens > 0:
                     cached_tokens = getattr(self._cb, "prompt_tokens_cached", 0)
-                    cost = estimate_llm_cost(
-                        model_name=self.constraints.llm_model,
-                        prompt_tokens=self._cb.prompt_tokens,
-                        completion_tokens=self._cb.completion_tokens,
-                        cached_tokens=cached_tokens,
-                    )
+                    from .models import is_openai_model
+                    if is_openai_model(self.constraints.llm_model):
+                        cost = estimate_llm_cost(
+                            model_name=self.constraints.llm_model,
+                            prompt_tokens=self._cb.prompt_tokens,
+                            completion_tokens=self._cb.completion_tokens,
+                            cached_tokens=cached_tokens,
+                        )
                 self._total_cost += cost
             except Exception as e:
-                logger.error(f"Error updating partial cost: {e}")
+                logger.debug(f"Error updating partial cost: {e}")  # Debug level since this is expected for non-OpenAI models
 
     async def run(self, task_or_plan: Union[str, AgentHistoryList], initial_url: Optional[str] = None) -> AgentHistoryList:
         """Run a task or reuse a cached plan.
@@ -132,6 +133,7 @@ class Executor:
                     self.agent.add_new_task(task)
                 
                 # Run task with cost tracking if using OpenAI
+                from .models import is_openai_model
                 if is_openai_model(self.constraints.llm_model):
                     with get_openai_callback() as cb:
                         self._cb = cb  # Store callback
@@ -157,6 +159,7 @@ class Executor:
                     )
                 
                 # Run plan with cost tracking if using OpenAI
+                from .models import is_openai_model
                 if is_openai_model(self.constraints.llm_model):
                     with get_openai_callback() as cb:
                         self._cb = cb  # Store callback
@@ -211,12 +214,12 @@ class Executor:
                 ))
             
             # Create separate reasoning for screenshot if available
-            current_page = self.browser_session.get_current_page()
-            if current_page and current_page.screenshot:
+            state = getattr(self.browser_session, 'browser_state_summary', None)
+            if state and state.screenshot:
                 reasonings.append(AgentReasoning(
                     task_id=self.task_id,
                     type="screenshot",
-                    content=current_page.screenshot
+                    content=state.screenshot
                 ))
             
         return reasonings

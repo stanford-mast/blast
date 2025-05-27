@@ -31,9 +31,9 @@ class Settings(BaseModel):
         description="Path to secrets file containing sensitive data"
     )
     
-    logs_dir: Optional[str] = Field(
-        default=None,
-        description="Directory for log files. If not set, uses blast-logs when log level is warning+"
+    logs_dir: str = Field(
+        default="blast-logs",
+        description="Directory for log files (defaults to blast-logs if not specified)"
     )
 
     server_port: int = Field(

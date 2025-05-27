@@ -12,8 +12,6 @@ from openai import OpenAI
 
 from .cli_installation import check_node_installation, check_npm_installation
 
-logger = logging.getLogger(__name__)
-
 async def run_cli_frontend(server_port: int):
     """Run CLI frontend for interacting with BLAST.
     
@@ -59,81 +57,45 @@ async def run_cli_frontend(server_port: int):
         except KeyboardInterrupt:
             break
         except Exception as e:
-            print(f"Error: {e}")
+            logging.getLogger('blastai').error(f"CLI frontend error: {e}")
+            print(f"Error: {e}")  # Keep error visible for user interaction
             continue
 
-async def run_web_frontend(*,
-    server_port: int,
-    web_port: int,
-    output_event: Optional[asyncio.Event] = None,
-    web_logger: Optional[logging.Logger] = None,
-    using_logs: bool = False,
-    frontend_ready: Optional[threading.Event] = None
-):
-    """Run web frontend.
-    
-    Args:
-        server_port: Port number for the BLAST server
-        web_port: Port number for the web UI
-        output_event: Event to signal when output occurs (for metrics)
-        web_logger: Logger for web UI output when using file logging
-        using_logs: Whether to use file logging
-        frontend_ready: Event to signal when frontend is ready
-    """
+async def run_web_frontend(server_port: int, web_port: int):
+    """Run web frontend."""
+    web_logger = logging.getLogger('web')
     frontend_dir = Path(__file__).parent / 'frontend'
-    if frontend_ready is None:
-        frontend_ready = threading.Event()
     
     # Check Node.js and npm installation
     if not check_node_installation():
+        web_logger.error("Node.js not found")
         return
         
     npm_cmd = check_npm_installation()
     if not npm_cmd:
+        web_logger.error("npm not found")
         return
         
     # Install dependencies if needed
     if not (frontend_dir / 'node_modules').exists():
-        # Log installation start
-        msg = "Installing frontend dependencies..."
-        if web_logger:
-            web_logger.info(msg)
-        if not using_logs:
-            print(msg)
-            
+        web_logger.info("Installing frontend dependencies...")
         try:
-            # Capture npm install output
             result = subprocess.run(
-                [npm_cmd, 'install'], 
-                cwd=frontend_dir, 
-                capture_output=True, 
+                [npm_cmd, 'install'],
+                cwd=frontend_dir,
+                capture_output=True,
                 text=True
             )
-            
-            # Log npm output
             if result.stdout:
-                if web_logger:
-                    web_logger.info(result.stdout)
-                if not using_logs:
-                    print(result.stdout)
-                    
+                web_logger.info(result.stdout)
             if result.stderr:
-                if web_logger:
-                    web_logger.warning(result.stderr)
-                if not using_logs:
-                    print(result.stderr, file=sys.stderr)
-                    
+                web_logger.warning(result.stderr)
         except subprocess.CalledProcessError as e:
-            error = f"Error installing frontend dependencies: {e}"
-            if web_logger:
-                web_logger.error(error)
-            if not using_logs:
-                print(error)
+            web_logger.error(f"Error installing frontend dependencies: {e}")
             return
 
     # Start frontend process
     try:
-        # Set environment variables for the frontend process
         frontend_env = os.environ.copy()
         frontend_env['NEXT_PUBLIC_SERVER_PORT'] = str(server_port)
         frontend_env['PORT'] = str(web_port)
@@ -147,64 +109,59 @@ async def run_web_frontend(*,
             env=frontend_env
         )
     except subprocess.CalledProcessError as e:
-        error = f"Error starting frontend: {e}"
-        if web_logger:
-            web_logger.error(error)
-        if not using_logs:
-            print(error)
+        web_logger.error(f"Error starting frontend: {e}")
         return
 
     # Monitor frontend output
-    def print_output():
+    def log_output():
         try:
             for line in process.stdout:
                 line = line.strip()
                 if line:
-                    # Signal output if metrics are being shown
-                    if output_event:
-                        output_event.set()
-                        timer = threading.Timer(5.0, output_event.clear)
-                        timer.daemon = True
-                        timer.start()
-
-                    # Always log important info
+                    # Log based on content
                     if any(x in line.lower() for x in ['error:', 'warn:', 'invalid']):
-                        if web_logger:
-                            web_logger.warning(f"Web: {line}")
-                        print(f"Web: {line}")
+                        web_logger.warning(f"Web: {line}")
                     elif '✓ ready' in line:
-                        # Always show ready message
-                        if web_logger:
-                            web_logger.info(f"Web: {line}")
-                        print(f"Web: {line}")
-                        frontend_ready.set()
+                        web_logger.info(f"Web: {line}")
                     else:
-                        # Log other output based on settings
-                        if web_logger:
-                            web_logger.debug(f"Web: {line}")
-                        elif not using_logs:
-                            print(f"Web: {line}")
-
+                        web_logger.debug(f"Web: {line}")
         except (ValueError, IOError) as e:
-            error = f"Error reading frontend output: {e}"
-            if web_logger:
-                web_logger.error(error)
-            if not using_logs:
-                print(error)
+            web_logger.error(f"Error reading frontend output: {e}")
     
-    output_thread = threading.Thread(target=print_output, daemon=True)
+    output_thread = threading.Thread(target=log_output, daemon=True)
     output_thread.start()
 
     try:
-        # Keep running until interrupted
         while True:
             await asyncio.sleep(1)
     except asyncio.CancelledError:
-        raise
-    finally:
+        # Clean up process first
         process.terminate()
         try:
-            process.wait(timeout=5)
+            process.wait(timeout=2)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+            
+        # Close stdout to stop output thread
+        try:
+            process.stdout.close()
+        except:
+            pass
+            
+        # Wait briefly for output thread
+        output_thread.join(timeout=0.5)
+        
+        # Now we can raise
+        raise
+    finally:
+        # Final cleanup attempt
+        if process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=0.1)
+            except:
+                pass

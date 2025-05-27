@@ -4,7 +4,7 @@ settings:
   browser_use_log_level: "info"  # Logging level for browser-use module
   blastai_log_level: "debug"  # Logging level for blastai module
   secrets_file_path: "secrets.env"  # Path to secrets file containing sensitive data
-  logs_dir: "blast-logs/"  # Directory for log files. Set to null to log to stdout instead.
+  logs_dir: "blast-logs"  # Directory for log files (defaults to blast-logs if not specified)
   server_port: 8000  # Port number for the BLAST server
   web_port: 3000  # Port number for the web UI
 

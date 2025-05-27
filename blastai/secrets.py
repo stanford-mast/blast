@@ -56,14 +56,24 @@ class SecretsManager:
                     # Store as flat secret
                     self._flat_secrets[key] = value
     
-    def get_secrets(self) -> Dict[str, Dict[str, str]]:
-        """Get all loaded secrets.
+    def get_secrets(self) -> Dict[str, Union[Dict[str, str], str]]:
+        """Get all loaded secrets in browser-use compatible format.
         
         Returns:
-            Dictionary mapping domains to their secrets, with flat secrets under None key
+            Dictionary with:
+            - Domain keys mapping to secret dicts: "https://*.example.com" -> {"username": "value"}
+            - Flat secrets: "key" -> "value"
         """
-        secrets = self._secrets.copy()
-        if self._flat_secrets:
-            secrets[None] = self._flat_secrets.copy()  # Store flat secrets under None key
+        # Start with flat secrets
+        secrets = self._flat_secrets.copy()
+        
+        # Add domain-specific secrets
+        for domain, domain_secrets in self._secrets.items():
+            # Convert domain to wildcard format if needed
+            if domain.count('.') > 1:  # Has subdomain
+                base_domain = '.'.join(domain.split('.')[-2:])  # Get example.com
+                domain = domain.replace(base_domain, f'*.{base_domain}')
+            secrets[domain] = domain_secrets
+            
         return secrets
         
