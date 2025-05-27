@@ -10,6 +10,8 @@ from typing import Dict, Optional, List, Union, Any
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from .models import is_openai_model
+
 def init_model(model_name: str, **kwargs: Any) -> BaseChatModel:
     """Initialize a chat model with proper configuration.
     

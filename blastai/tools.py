@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Dict, Optional, Any, List
 from browser_use import Controller, ActionResult
+from browser_use.browser import BrowserSession
 import markdownify
 from langchain_core.prompts import PromptTemplate
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -130,7 +131,7 @@ class Tools:
             Args:
                 task: Task description
                 optional_initial_search_or_url: Optional initial URL or search query for the task
-                browser: Optional browser instance
+                num_copies: Optional number of parallel copies to launch
                 
             Returns:
                 Result of launching the subtask
@@ -172,7 +173,6 @@ class Tools:
             
             Args:
                 comma_separated_list_of_task_ids: Comma-separated list of task IDs
-                browser: Optional browser instance
                 
             Returns:
                 First available result from any subtask
@@ -188,17 +188,17 @@ class Tools:
             return await self._get_first_subtask_result(scheduler, task_ids, as_final=False)
 
         @self.controller.action("Extract page content to retrieve specific information from the page, e.g. all company names, a specific description, all information about, links with companies in structured format or simply links")
-        async def extract_content_fast(goal: str, should_strip_link_urls: bool = False, page_extraction_llm: Optional[BaseChatModel] = None) -> ActionResult:
+        async def extract_content_fast(goal: str, should_strip_link_urls: bool = False, browser_session: BrowserSession = None, page_extraction_llm: Optional[BaseChatModel] = None) -> ActionResult:
             """Extract content by splitting into chunks and processing in parallel."""
-            if not browser:
-                return ActionResult(success=False, error="Browser instance required")
+            if not browser_session:
+                return ActionResult(success=False, error="Browser session required")
 
             try:
                 # Record overall start time
                 overall_start = time.time()
 
                 # Get raw content
-                page = await browser.get_current_page()
+                page = await browser_session.get_current_page()
                 content_start = time.time()
                 
                 strip = ['a', 'img'] if should_strip_link_urls else []
@@ -254,6 +254,9 @@ class Tools:
 
                 # Use provided model or fallback to page_extraction_llm
                 extraction_model = self.llm_model or page_extraction_llm
+                if not extraction_model:
+                    return ActionResult(success=False, error="No LLM model available for extraction")
+                    
                 parallel_results = await extraction_model.abatch([
                     chunk_template.format(goal=goal, chunk=chunk) for chunk in chunks
                 ])
@@ -327,8 +330,7 @@ class Tools:
                 error_time = time.time() - overall_start
                 logger.error(
                     f"Failed after {error_time:.2f}s: {str(e)}\n"
-                    f"Content extraction: {content_time:.2f}s, "
-                    f"LLM ({llm_id}): {single_time if 'single_time' in locals() else 'N/A'}s"
+                    f"Content extraction: {content_time:.2f}s"
                 )
                 return ActionResult(
                     success=False,
@@ -341,7 +343,6 @@ class Tools:
             
             Args:
                 comma_separated_list_of_task_ids: Comma-separated list of task IDs
-                browser: Optional browser instance
                 
             Returns:
                 Combined results of all subtasks

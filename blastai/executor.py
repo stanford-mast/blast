@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 from .config import Settings, Constraints
 from .response import AgentReasoning, AgentHistoryListResponse
 from .utils import estimate_llm_cost, get_base_url_for_provider
+from .models import is_openai_model
 
 class Executor:
     """Wrapper around browser_use Agent for task execution."""
@@ -37,7 +38,7 @@ class Executor:
         self.settings = settings or Settings()
         self.engine_hash = engine_hash
         self.scheduler = scheduler
-        self.sensitive_data = sensitive_data or {}
+        self.sensitive_data = sensitive_data
         self.agent: Optional[Agent] = None
         self._paused = False
         self._running = False
@@ -81,7 +82,6 @@ class Executor:
                 cost = self._cb.total_cost
                 if cost == 0 and self._cb.total_tokens > 0:
                     cached_tokens = getattr(self._cb, "prompt_tokens_cached", 0)
-                    from .models import is_openai_model
                     if is_openai_model(self.constraints.llm_model):
                         cost = estimate_llm_cost(
                             model_name=self.constraints.llm_model,
@@ -117,6 +117,7 @@ class Executor:
                     if url:
                         initial_actions = [{'open_tab': {'url': url}}]
                         
+                    logger.debug(f"Creating new agent for task: {task} with sensitive data: {self.sensitive_data}")
                     self.agent = Agent(
                         task=task,
                         browser_session=self.browser_session,
@@ -133,7 +134,6 @@ class Executor:
                     self.agent.add_new_task(task)
                 
                 # Run task with cost tracking if using OpenAI
-                from .models import is_openai_model
                 if is_openai_model(self.constraints.llm_model):
                     with get_openai_callback() as cb:
                         self._cb = cb  # Store callback
@@ -159,7 +159,6 @@ class Executor:
                     )
                 
                 # Run plan with cost tracking if using OpenAI
-                from .models import is_openai_model
                 if is_openai_model(self.constraints.llm_model):
                     with get_openai_callback() as cb:
                         self._cb = cb  # Store callback

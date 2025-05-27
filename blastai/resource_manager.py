@@ -316,6 +316,10 @@ class ResourceManager:
         
         # Create and return executor with browser session and sensitive data
         logger.debug(f"Created new executor for task {task_id}")
+        # Only pass sensitive_data if we actually have secrets
+        secrets = self._secrets_manager.get_secrets()
+        sensitive_data = secrets if secrets else None
+        
         return Executor(
             browser_session=browser_session,
             controller=tools.controller,
@@ -325,7 +329,7 @@ class ResourceManager:
             settings=self.settings,
             engine_hash=self.engine_hash,
             scheduler=self.scheduler,
-            sensitive_data=self._secrets_manager.get_secrets()
+            sensitive_data=sensitive_data
         )
         
     async def end_task(self, task_id: str):

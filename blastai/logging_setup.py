@@ -66,6 +66,10 @@ def setup_logging(settings: Optional[Settings] = None, engine_hash: Optional[str
     sys.stdout = LogRedirect(engine_log, sys.__stdout__)
     sys.stderr = LogRedirect(engine_log, sys.__stderr__)
     
+    # Get log levels from settings
+    blastai_level = getattr(logging, settings.blastai_log_level.upper(), logging.DEBUG)
+    browser_use_level = getattr(logging, settings.browser_use_log_level.upper(), logging.INFO)
+    
     # Configure root logger to WARNING (for all third-party libraries)
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.WARNING)
@@ -79,7 +83,7 @@ def setup_logging(settings: Optional[Settings] = None, engine_hash: Optional[str
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # Set up engine log handler for all logs except web
+    # Set up engine log handler for all logs
     engine_handler = logging.FileHandler(engine_log)
     engine_handler.setFormatter(formatter)
     engine_handler.setLevel(logging.WARNING)  # Base level for third-party libs
@@ -92,21 +96,32 @@ def setup_logging(settings: Optional[Settings] = None, engine_hash: Optional[str
     web_handler.setLevel(logging.INFO)  # Web UI logs at INFO level
     root_logger.addHandler(web_handler)
     
-    # Configure blastai logger to DEBUG
-    blastai_logger = logging.getLogger('blastai')
-    blastai_logger.setLevel(logging.DEBUG)
-    blastai_logger.propagate = True
+    # Configure loggers with their own handlers to ensure proper levels
+    def setup_logger(name: str, level: int):
+        logger = logging.getLogger(name)
+        logger.setLevel(level)
+        
+        # Add handler specifically for this logger
+        handler = logging.FileHandler(engine_log)
+        handler.setFormatter(formatter)
+        handler.setLevel(level)
+        logger.addHandler(handler)
+        
+        # Don't propagate to root logger since we have our own handler
+        logger.propagate = False
+        
+        return logger
     
-    # Configure browser_use logger based on settings
-    browser_use_level = getattr(logging, settings.browser_use_log_level.upper(), logging.INFO)
-    browser_use_logger = logging.getLogger('browser_use')
-    browser_use_logger.setLevel(browser_use_level)
-    browser_use_logger.propagate = True
+    # Set up specific loggers
+    blastai_logger = setup_logger('blastai', blastai_level)
+    browser_use_logger = setup_logger('browser_use', browser_use_level)
+    web_logger = setup_logger('web', logging.INFO)
     
-    # Configure web logger to INFO
-    web_logger = logging.getLogger('web')
-    web_logger.setLevel(logging.INFO)
-    web_logger.propagate = True
+    # Also set child loggers
+    for name, level in [('blastai', blastai_level), ('browser_use', browser_use_level)]:
+        for child in ['server', 'engine', 'scheduler', 'executor']:
+            child_logger = logging.getLogger(f"{name}.{child}")
+            child_logger.setLevel(level)
 
 def should_show_metrics(settings: Settings) -> bool:
     """Always return True since metrics should always be shown."""

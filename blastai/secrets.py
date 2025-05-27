@@ -1,9 +1,8 @@
 """Secrets management for BLAST."""
 
-import os
 from pathlib import Path
 from typing import Dict, Optional, Union
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 class SecretsManager:
     """Manages sensitive data loaded from secrets file.
@@ -31,11 +30,11 @@ class SecretsManager:
             path = Path("secrets.env")
             
         if path.exists():
-            # Load secrets using python-dotenv
-            load_dotenv(path)
+            # Load secrets directly from file without affecting os.environ
+            env_values = dotenv_values(path)
             
-            # Process all environment variables
-            for key, value in os.environ.items():
+            # Process secrets from file
+            for key, value in env_values.items():
                 if key.startswith('DOMAIN_'):
                     # Extract domain and secret name
                     # Format: DOMAIN_example.com_secretname=value
@@ -56,14 +55,19 @@ class SecretsManager:
                     # Store as flat secret
                     self._flat_secrets[key] = value
     
-    def get_secrets(self) -> Dict[str, Union[Dict[str, str], str]]:
+    def get_secrets(self) -> Optional[Dict[str, Union[Dict[str, str], str]]]:
         """Get all loaded secrets in browser-use compatible format.
         
         Returns:
             Dictionary with:
             - Domain keys mapping to secret dicts: "https://*.example.com" -> {"username": "value"}
             - Flat secrets: "key" -> "value"
+            Returns None if no secrets are loaded.
         """
+        # Return None if no secrets
+        if not self._flat_secrets and not self._secrets:
+            return None
+            
         # Start with flat secrets
         secrets = self._flat_secrets.copy()
         

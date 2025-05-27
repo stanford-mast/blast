@@ -126,7 +126,6 @@ async def get_metrics():
     try:
         # Get metrics from engine
         metrics = await _engine.get_metrics()
-        logger.debug(f"Metrics retrieved: {metrics}")
         return metrics
     except Exception as e:
         logger.error(f"Error getting metrics: {e}", exc_info=True)
@@ -153,7 +152,6 @@ async def chat_completions(request: ChatCompletionRequest):
 async def responses(request: ResponseRequest):
     """Handle responses requests."""
     engine = await get_engine()
-    logger.debug(f"Received response request: {request}")
     return await handle_responses(request, engine)
 
 @app.delete("/responses/{response_id}")
