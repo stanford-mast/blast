@@ -69,3 +69,5 @@ website/.env*.local
 website/.vercel
 
 browser-use/**
+
+ourera/

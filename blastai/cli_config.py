@@ -135,7 +135,7 @@ def load_environment(env: Optional[Union[str, Dict[str, str]]] = None) -> Path:
         
     return env_path
 
-async def setup_environment_and_engine(env: Optional[str] = None, config_path: Optional[str] = None) -> Tuple[Path, Engine]:
+async def setup_serving_environment(env: Optional[str] = None, config_path: Optional[str] = None) -> Tuple[Path, Engine]:
     """Set up environment variables and create engine instance.
     
     Args:

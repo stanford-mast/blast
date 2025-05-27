@@ -21,7 +21,7 @@ import rich_click as click
 from rich.console import Console
 from rich.panel import Panel
 
-from .cli_config import setup_environment_and_engine
+from .cli_config import setup_serving_environment
 from .cli_process import (
     find_available_port,
     run_server_and_frontend
@@ -86,8 +86,10 @@ def help(command):
 def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None):
     """Start BLAST (default: serves engine and web UI)"""
     
-    # Set up environment and create engine
-    env_path, engine = asyncio.run(setup_environment_and_engine(env, config))
+    # Set up environment and create engine for config
+    # NOTE: This engine should only be used for getting configuration, it shouldn't actually be
+    # started (that's the responsibility of the server process)
+    env_path, engine = asyncio.run(setup_serving_environment(env, config))
     
     # Get settings
     settings = engine.settings
@@ -161,23 +163,36 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
     asyncio.set_event_loop(loop)
     
     try:
-        # Run server and frontend
-        loop.run_until_complete(run_server_and_frontend(
-            server=server,
-            settings=settings,
-            actual_server_port=actual_server_port,
-            actual_web_port=actual_web_port,
-            mode=mode,
-            using_logs=using_logs,
-            show_metrics=show_metrics,
-            web_logger=web_logger
-        ))
-    except KeyboardInterrupt:
-        print("\nShutting down...")
-    except Exception as e:
-        print(f"\nError: {e}")
+        try:
+            # Run server and frontend
+            loop.run_until_complete(run_server_and_frontend(
+                server=server,
+                settings=settings,
+                actual_server_port=actual_server_port,
+                actual_web_port=actual_web_port,
+                mode=mode,
+                using_logs=using_logs,
+                show_metrics=show_metrics,
+                web_logger=web_logger
+            ))
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+            # Cancel all tasks and wait briefly for cleanup
+            for task in asyncio.all_tasks(loop):
+                if not task.done():
+                    task.cancel()
+            try:
+                loop.run_until_complete(asyncio.gather(*asyncio.all_tasks(loop), return_exceptions=True))
+            except asyncio.CancelledError:
+                pass
+        except Exception as e:
+            print(f"\nError: {e}")
     finally:
-        loop.close()
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+        except Exception:
+            pass
 
 def main():
     """Main entry point for CLI."""

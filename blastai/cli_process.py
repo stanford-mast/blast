@@ -158,28 +158,38 @@ async def run_server_and_frontend(
 
         # Wait for all tasks to complete
         await asyncio.gather(*tasks)
-        
     except asyncio.CancelledError:
-        # Cancel all tasks
+        logger.debug("Received CancelledError, cleaning up...")
+        # First cancel all tasks
         for task in tasks:
             if not task.done():
                 task.cancel()
         
-        # Wait for tasks to complete
+        # Wait briefly for tasks to complete
         try:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        except asyncio.CancelledError:
-            pass
+            done, pending = await asyncio.wait(tasks, timeout=2.0)
+            for task in pending:
+                logger.debug(f"Task {task.get_name()} did not complete in time")
         except Exception as e:
-            import traceback
-            logger.error(f"Error during shutdown: {e}")
-            logger.error(f"Stack trace:\n{traceback.format_exc()}")
-        
-        raise
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        raise
-    finally:
-        # Clean up metrics client
+            logger.debug(f"Error waiting for tasks: {e}")
+            
+        # Clean up metrics client if it exists
         if metrics_client:
-            await metrics_client.aclose()
+            try:
+                await asyncio.wait_for(metrics_client.aclose(), timeout=1.0)
+            except Exception as e:
+                logger.debug(f"Error closing metrics client: {e}")
+                
+        # Don't exit here - let the parent handle it
+        return
+        
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+        return
+    finally:
+        # Clean up metrics client if we haven't already
+        if metrics_client and not metrics_client.is_closed:
+            try:
+                await asyncio.wait_for(metrics_client.aclose(), timeout=1.0)
+            except Exception as e:
+                logger.debug(f"Error closing metrics client in finally: {e}")

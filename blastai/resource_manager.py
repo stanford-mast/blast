@@ -299,34 +299,10 @@ class ResourceManager:
                     browser = Browser(config=browser_config)
                 browser_context = BrowserContext(browser=browser)
             except Exception as e:
-                # Check if error is about missing Playwright browsers
-                if "Executable doesn't exist" in str(e) and "playwright" in str(e):
-                    import subprocess
-                    import sys
-                    logger.info("Installing Playwright browsers...")
-                    try:
-                        subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], check=True)
-                        logger.info("Successfully installed Playwright browsers")
-                        
-                        # Retry browser creation after installing
-                        if self.constraints.share_browser_process and self._shared_browser is None:
-                            self._shared_browser = Browser(config=browser_config)
-                            self._shared_browser_users = 0
-
-                        if self.constraints.share_browser_process:
-                            browser = self._shared_browser
-                            self._shared_browser_users += 1
-                        else:
-                            browser = Browser(config=browser_config)
-                        browser_context = BrowserContext(browser=browser)
-                    except subprocess.CalledProcessError as install_error:
-                        logger.error(f"Failed to install Playwright browsers: {install_error}")
-                        return None
-                else:
-                    logger.error(f"Failed to create browser with config: {e}")
-                    return None
+                logger.error(f"Failed to create executor: {e}")
+                return None
         except Exception as e:
-            logger.error(f"Failed to create browser with config: {e}")
+            logger.error(f"Failed to create executor: {e}")
             return None
         
         # Create LLMs
