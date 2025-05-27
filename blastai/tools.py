@@ -124,7 +124,7 @@ class Tools:
         """Register tools that require a scheduler."""
         
         @self.controller.action("Launch a subtask")
-        async def launch_subtask(task: str, optional_initial_search_or_url: Optional[str] = None, num_copies: Optional[int] = 1, browser: Optional[Any] = None) -> ActionResult:
+        async def launch_subtask(task: str, optional_initial_search_or_url: Optional[str] = None, num_copies: Optional[int] = 1) -> ActionResult:
             """Launch a new subtask.
             
             Args:
@@ -166,8 +166,7 @@ class Tools:
 
         @self.controller.action("Get first result from subtask(s)")
         async def get_first_subtask_result(
-            comma_separated_list_of_task_ids: str,
-            browser: Optional[Any] = None
+            comma_separated_list_of_task_ids: str
         ) -> ActionResult:
             """Get the first result from multiple subtasks running in parallel.
             
@@ -189,7 +188,7 @@ class Tools:
             return await self._get_first_subtask_result(scheduler, task_ids, as_final=False)
 
         @self.controller.action("Extract page content to retrieve specific information from the page, e.g. all company names, a specific description, all information about, links with companies in structured format or simply links")
-        async def extract_content_fast(goal: str, should_strip_link_urls: bool = False, browser: Optional[Any] = None, page_extraction_llm: Optional[BaseChatModel] = None) -> ActionResult:
+        async def extract_content_fast(goal: str, should_strip_link_urls: bool = False, page_extraction_llm: Optional[BaseChatModel] = None) -> ActionResult:
             """Extract content by splitting into chunks and processing in parallel."""
             if not browser:
                 return ActionResult(success=False, error="Browser instance required")
@@ -337,7 +336,7 @@ class Tools:
                 )
 
         @self.controller.action("Get result(s) of subtask(s)")
-        async def get_subtask_results(comma_separated_list_of_task_ids: str, browser: Optional[Any] = None) -> ActionResult:
+        async def get_subtask_results(comma_separated_list_of_task_ids: str) -> ActionResult:
             """Get the results of multiple subtasks in parallel.
             
             Args:

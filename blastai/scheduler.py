@@ -296,7 +296,7 @@ class Scheduler:
                     return result
                     
                 except Exception as e:
-                    logger.error(f"Task {task_id} failed: {e}")
+                    # logger.error(f"Task {task_id} failed: {e}")
                     # Mark task as complete but failed
                     await self.complete_task(task_id, success=False)
                     raise

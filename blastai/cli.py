@@ -3,7 +3,7 @@
 # Set environment variables before any imports
 import os
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
-os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ["PYTHONWARNINGS"] = "ignore::ResourceWarning"
 os.environ["BROWSER_USE_LOGGING_LEVEL"] = "error"  # Default to error level
 
 import sys
@@ -124,6 +124,7 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
 
     # Create server with proper logging level and config
     import uvicorn
+    # Configure uvicorn to use our logging
     server_config = uvicorn.Config(
         "blastai.server:app",
         host="127.0.0.1",
@@ -134,33 +135,143 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
         lifespan="on",
         timeout_keep_alive=5,
         timeout_graceful_shutdown=10,
-        access_log=False
+        access_log=False,
+        log_config=None  # Use our logging config instead of uvicorn's
     )
+    # Create server with custom error handler
     server = uvicorn.Server(server_config)
     server.force_exit = False  # Allow graceful shutdown
+    
+    # Override error logger to use our logger
+    error_logger = logging.getLogger('blastai')
+    server.install_signal_handlers = lambda: None  # Disable uvicorn's signal handlers
 
-    # Print endpoints with log paths if using logs
+    # Print startup banner
     if mode == 'engine':
-        if using_logs:
-            print(f"Engine: http://127.0.0.1:{actual_server_port} ({logs_dir / f'{engine._instance_hash}.engine.log'})")
-        else:
-            print(f"Engine: http://127.0.0.1:{actual_server_port}")
+        console.print(Panel(
+            f"[green]Engine:[/] http://127.0.0.1:{actual_server_port}\n" +
+            (f"[dim]Logs:[/]   {logs_dir / f'{engine._instance_hash}.engine.log'}" if using_logs else ""),
+            title="BLAST Engine",
+            border_style="bright_black"
+        ))
     elif mode == 'web':
-        if using_logs:
-            print(f"Web: http://localhost:{actual_web_port} ({logs_dir / f'{engine._instance_hash}.web.log'})")
-        else:
-            print(f"Web: http://localhost:{actual_web_port}")
+        console.print(Panel(
+            f"[green]Web:[/]  http://localhost:{actual_web_port}\n" +
+            (f"[dim]Logs:[/] {logs_dir / f'{engine._instance_hash}.web.log'}" if using_logs else ""),
+            title="BLAST Web UI",
+            border_style="bright_black"
+        ))
     elif mode is None:
-        if using_logs:
-            print(f"Engine: http://127.0.0.1:{actual_server_port} ({logs_dir / f'{engine._instance_hash}.engine.log'})")
-            print(f"Web: http://localhost:{actual_web_port} ({logs_dir / f'{engine._instance_hash}.web.log'})")
-        else:
-            print(f"Engine: http://127.0.0.1:{actual_server_port}")
-            print(f"Web: http://localhost:{actual_web_port}")
+        console.print(Panel(
+            f"[green]Engine:[/] http://127.0.0.1:{actual_server_port}" +
+            (f"  [dim]{logs_dir / f'{engine._instance_hash}.engine.log'}[/]\n" if using_logs else "\n") +
+            f"[green]Web:[/]    http://localhost:{actual_web_port}" +
+            (f"  [dim]{logs_dir / f'{engine._instance_hash}.web.log'}[/]" if using_logs else ""),
+            # title="BLAST",
+            border_style="bright_black"
+        ))
 
     # Run everything in event loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    
+    # Configure logging handler for uvicorn errors
+    error_logger = logging.getLogger('blastai')
+    
+    # Set up signal handlers
+    import signal
+    
+    def handle_signal(sig, frame):
+        """Handle SIGINT/SIGTERM gracefully."""
+        if not loop.is_closed():
+            error_logger.info("Received shutdown signal, stopping...")
+            
+            # Clear screen
+            print("\033[J", end='')
+            
+            if using_logs:
+                console.print("[yellow]Shutting down...[/]")
+            
+            # Force cleanup
+            try:
+                loop.create_task(cleanup(force=True))
+            except:
+                # If event loop is broken, force exit
+                sys.exit(0)
+            
+    async def cleanup(force: bool = False):
+        """Clean up resources gracefully.
+        
+        Args:
+            force: If True, force close resources without waiting
+        """
+        try:
+            # Cancel all tasks except current
+            tasks = [t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task()]
+            
+            # Cancel all tasks first
+            for task in tasks:
+                task.cancel()
+            
+            if tasks:
+                # Wait briefly for tasks to cancel
+                try:
+                    done, pending = await asyncio.wait(tasks, timeout=1.0 if not force else 0.1)
+                    
+                    # Force close any pending tasks
+                    for task in pending:
+                        try:
+                            task._coro.close()
+                        except:
+                            pass
+                            
+                    # Check for task errors
+                    for task in done:
+                        try:
+                            exc = task.exception()
+                            if exc and not isinstance(exc, asyncio.CancelledError):
+                                name = task.get_name() or 'unknown'
+                                error_logger.debug(f"Task {name} failed: {exc}")
+                        except:
+                            pass
+                except:
+                    if not force:
+                        error_logger.debug("Error waiting for tasks to cancel")
+            
+            # Cleanup asyncgens with timeout
+            try:
+                await asyncio.wait_for(loop.shutdown_asyncgens(),
+                                     timeout=1.0 if not force else 0.1)
+            except:
+                if not force:
+                    error_logger.debug("Error shutting down asyncgens")
+            
+            # Stop loop
+            try:
+                loop.stop()
+            except:
+                pass
+                
+        except Exception as e:
+            # Only log if not forced shutdown
+            if not force and loop.is_running():
+                error_logger.error(f"Error during cleanup: {e}")
+            
+    # Install signal handlers for all relevant signals
+    signals = (
+        signal.SIGINT,   # Ctrl+C
+        signal.SIGTERM,  # Termination request
+        signal.SIGHUP,   # Terminal closed
+        signal.SIGQUIT,  # Quit program
+        signal.SIGABRT,  # Abort
+    )
+    
+    for sig in signals:
+        try:
+            signal.signal(sig, handle_signal)
+        except (AttributeError, ValueError):
+            # Some signals might not be available on all platforms
+            pass
     
     try:
         try:
@@ -176,23 +287,36 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
                 web_logger=web_logger
             ))
         except KeyboardInterrupt:
-            print("\nShutting down...")
-            # Cancel all tasks and wait briefly for cleanup
-            for task in asyncio.all_tasks(loop):
-                if not task.done():
-                    task.cancel()
-            try:
-                loop.run_until_complete(asyncio.gather(*asyncio.all_tasks(loop), return_exceptions=True))
-            except asyncio.CancelledError:
-                pass
+            # Handle Ctrl+C
+            error_logger.info("Shutting down...")
+            loop.run_until_complete(cleanup())
+            print("\nServer stopped cleanly.")
         except Exception as e:
-            print(f"\nError: {e}")
+            # Log error but don't crash
+            error_logger.error("Server error", exc_info=True)
+            
+            # Only show error panel if server is stopping
+            if e.__class__.__name__ in ('SystemExit', 'KeyboardInterrupt'):
+                # Clear screen and show error
+                print("\033[J", end='')
+                if using_logs:
+                    console.print(Panel(
+                        f"[red]Server stopped.[/]\nPlease check [blue]{logs_dir / f'{engine._instance_hash}.engine.log'}[/] for details.",
+                        title="Server Stopped",
+                        border_style="red"
+                    ))
+                # Force cleanup on shutdown
+                loop.run_until_complete(cleanup(force=True))
+                sys.exit(0)
+            else:
+                # For task errors, just log and continue
+                loop.run_until_complete(cleanup(force=False))
     finally:
         try:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.close()
-        except Exception:
-            pass
+            if not loop.is_closed():
+                loop.close()
+        except Exception as e:
+            error_logger.error(f"Error closing loop: {e}")
 
 def main():
     """Main entry point for CLI."""

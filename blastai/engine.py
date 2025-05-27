@@ -250,8 +250,10 @@ class Engine:
             # For streaming, return scheduler's stream directly
             return self.scheduler.stream_task_events(final_task_id)
         except Exception as e:
-            logger.error(f"Task {final_task_id} failed: {str(e)}")
-            raise RuntimeError(f"Failed to run task(s): {str(e)}")
+            # Log full exception details with traceback
+            logger.error(f"Task {final_task_id} failed", exc_info=True)
+            # Wrap original exception to preserve traceback
+            raise RuntimeError(f"Failed to run task(s): {str(e)}") from e
             
     async def __aenter__(self):
         """Context manager entry."""

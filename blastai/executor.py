@@ -8,9 +8,9 @@ from typing import List, Optional, Union, AsyncIterator, Dict, Any, cast
 from datetime import datetime
 from urllib.parse import urlparse, quote_plus
 
-from browser_use import Agent, Browser, Controller
+from browser_use import Agent, Controller
 from browser_use.agent.views import AgentHistoryList, ActionModel
-from browser_use.browser.context import BrowserContext
+from browser_use.browser import BrowserSession
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain.chat_models import init_chat_model
 from langchain_community.callbacks import get_openai_callback
@@ -25,13 +25,12 @@ from .models import is_openai_model
 class Executor:
     """Wrapper around browser_use Agent for task execution."""
     
-    def __init__(self, browser: Browser, browser_context: BrowserContext, controller: Controller,
+    def __init__(self, browser_session: BrowserSession, controller: Controller,
                  llm: BaseChatModel, constraints: Constraints, task_id: str,
                  settings: Settings = None, engine_hash: str = None, scheduler = None,
                  sensitive_data: Optional[Dict[str, str]] = None):
-        """Initialize executor with browser, controller, LLM and constraints."""
-        self.browser = browser
-        self.browser_context = browser_context
+        """Initialize executor with browser session, controller, LLM and constraints."""
+        self.browser_session = browser_session
         self.llm = llm
         self.controller = controller
         self.constraints = constraints
@@ -119,8 +118,7 @@ class Executor:
                         
                     self.agent = Agent(
                         task=task,
-                        browser=self.browser,
-                        browser_context=self.browser_context,
+                        browser_session=self.browser_session,
                         controller=self.controller,
                         llm=self.llm,
                         use_vision=self.constraints.allow_vision,
@@ -151,8 +149,7 @@ class Executor:
                 if not self.agent:
                     self.agent = Agent(
                         task="",  # Plan already contains the task
-                        browser=self.browser,
-                        browser_context=self.browser_context,
+                        browser_session=self.browser_session,
                         controller=self.controller,
                         llm=self.llm,
                         use_vision=self.constraints.allow_vision,
@@ -173,7 +170,7 @@ class Executor:
                 return self._history
             
         except Exception as e:
-            logger.error(f"Task {self.task_id} failed: {str(e)}")
+            # logger.error(f"Task {self.task_id} failed: {str(e)}")
             raise RuntimeError(f"Failed to execute task: {str(e)}")
         finally:
             self._running = False
@@ -214,11 +211,12 @@ class Executor:
                 ))
             
             # Create separate reasoning for screenshot if available
-            if self.browser_context and self.browser_context.current_state.screenshot:
+            current_page = self.browser_session.get_current_page()
+            if current_page and current_page.screenshot:
                 reasonings.append(AgentReasoning(
                     task_id=self.task_id,
                     type="screenshot",
-                    content=self.browser_context.current_state.screenshot
+                    content=current_page.screenshot
                 ))
             
         return reasonings

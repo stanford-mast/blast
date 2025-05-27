@@ -34,6 +34,9 @@ async def display_metrics(client: httpx.AsyncClient, server_port: int, output_ev
         server_port: Port number for the BLAST server
         output_event: Event to signal when output should be suppressed
     """
+    # Get logger
+    engine_logger = logging.getLogger('blastai')
+    
     # Constants for metrics display
     METRICS_LINES = 10  # Including blank line at start
     BLANK_METRICS = {
@@ -43,47 +46,87 @@ async def display_metrics(client: httpx.AsyncClient, server_port: int, output_ev
         'total_cost': 0.00
     }
     
-    def print_metrics(metrics=None):
+    def print_metrics(metrics=None, error_occurred=False, force_clear=False):
         """Print metrics in a consistent format."""
         if metrics is None:
             metrics = BLANK_METRICS
-        
-        # Only move cursor and reprint if no recent output
-        if not output_event.is_set():
-            if print_metrics.initialized:
-                print(f"\033[{METRICS_LINES}A", end='')
-            print_metrics.initialized = True
             
-            # Clear lines and print metrics
-            print("\033[J", end='')  # Clear everything below
-            print()  # Blank line for spacing
-            print("Tasks:")
-            print(f"  Scheduled: {metrics['tasks']['scheduled']}")
-            print(f"  Running:   {metrics['tasks']['running']}")
-            print(f"  Completed: {metrics['tasks']['completed']}")
-            print()
-            print("Resources:")
-            print(f"  Active browsers: {metrics['concurrent_browsers']}")
-            print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
-            print(f"  Total cost:      ${metrics['total_cost']:.4f}", flush=True)
+        # Handle different display states
+        if force_clear:
+            # Clear entire metrics section
+            print("\033[J", end='')
+            print_metrics.initialized = False
+            return
+            
+        if error_occurred or output_event.is_set():
+            if print_metrics.initialized:
+                # Clear metrics but leave space
+                print("\033[J", end='')
+                print("\n\nTasks:")
+                print("  Scheduled: 0")
+                print("  Running:   0")
+                print("  Completed: 0")
+                print("\nResources:")
+                print("  Active browsers: 0")
+                print("  Memory usage:    0.0 GB")
+                print("  Total cost:      $0.0000", flush=True)
+            return
+            
+        # Normal metrics update
+        if print_metrics.initialized:
+            print(f"\033[{METRICS_LINES}A\033[J", end='')
+        print_metrics.initialized = True
+        
+        # Print metrics
+        print("\nTasks:")
+        print(f"  Scheduled: {metrics['tasks']['scheduled']}")
+        print(f"  Running:   {metrics['tasks']['running']}")
+        print(f"  Completed: {metrics['tasks']['completed']}")
+        print("\nResources:")
+        print(f"  Active browsers: {metrics['concurrent_browsers']}")
+        print(f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB")
+        print(f"  Total cost:      ${metrics['total_cost']:.4f}", flush=True)
     
     # Initialize the print_metrics function state
     print_metrics.initialized = False
     
-    # Wait a bit for server to start
-    await asyncio.sleep(2)
-    
-    while True:
-        try:
-            # Get metrics from server
-            response = await client.get(f"http://127.0.0.1:{server_port}/metrics")
-            metrics = response.json()
-            print_metrics(metrics)
-        except Exception as e:
-            print(f"\nError: failed to fetch engine metrics: {e}")
-            print_metrics()
-            break
-        await asyncio.sleep(5)
+    try:
+        # Wait for server to start, checking every 0.5s
+        retries = 10
+        while retries > 0:
+            try:
+                response = await client.get(f"http://127.0.0.1:{server_port}/metrics")
+                metrics = response.json()
+                print_metrics(metrics)
+                break
+            except Exception:
+                retries -= 1
+                if retries == 0:
+                    engine_logger.error("Failed to connect to server for metrics")
+                    return
+                await asyncio.sleep(0.5)
+        
+        # Server is up, start regular updates
+        while not output_event.is_set():
+            try:
+                response = await client.get(f"http://127.0.0.1:{server_port}/metrics")
+                metrics = response.json()
+                print_metrics(metrics)
+                await asyncio.sleep(5)
+            except Exception as e:
+                if not output_event.is_set():  # Only log if not shutting down
+                    engine_logger.error(f"Failed to fetch metrics: {e}")
+                break
+    except asyncio.CancelledError:
+        # Clean shutdown, don't log
+        pass
+    except Exception as e:
+        if not output_event.is_set():  # Only log if not shutting down
+            engine_logger.error(f"Error in metrics display: {e}")
+    finally:
+        # Clear metrics display on exit
+        if print_metrics.initialized:
+            print_metrics(force_clear=True)
 
 async def run_server_and_frontend(
     server,
@@ -119,9 +162,23 @@ async def run_server_and_frontend(
         if show_metrics and (mode == 'engine' or mode is None):
             metrics_client = httpx.AsyncClient()
             output_event = asyncio.Event()
-            tasks.append(asyncio.create_task(
+            
+            # Print initial metrics before starting display task
+            print("\nTasks:")
+            print("  Scheduled: 0")
+            print("  Running:   0")
+            print("  Completed: 0")
+            print("\nResources:")
+            print("  Active browsers: 0")
+            print("  Memory usage:    0.0 GB")
+            print("  Total cost:      $0.0000", flush=True)
+            
+            # Create metrics display task
+            metrics_task = asyncio.create_task(
                 display_metrics(metrics_client, actual_server_port, output_event)
-            ))
+            )
+            metrics_task.set_name('metrics_display')
+            tasks.append(metrics_task)
 
         if mode is None:
             # Default behavior: run both server and web UI
@@ -157,39 +214,82 @@ async def run_server_and_frontend(
             tasks.append(asyncio.create_task(server.serve()))
 
         # Wait for all tasks to complete
-        await asyncio.gather(*tasks)
+        # Get engine logger
+        engine_logger = logging.getLogger('blastai')
+        
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            # Log error but continue running
+            engine_logger.error(f"Error in task: {e}", exc_info=True)
+            # Update metrics display
+            if output_event:
+                output_event.set()
+                # Show zeros but keep display space
+                print_metrics(error_occurred=True)
+            
     except asyncio.CancelledError:
-        logger.debug("Received CancelledError, cleaning up...")
-        # First cancel all tasks
+        engine_logger.debug("Received CancelledError, cleaning up...")
+        if output_event:
+            output_event.set()
+            # Clear metrics display completely
+            print_metrics(force_clear=True)
+        
+    except Exception as e:
+        # Log error but continue running
+        engine_logger.error(f"Server error: {e}", exc_info=True)
+        if output_event:
+            output_event.set()
+            # Show zeros but keep display space
+            print_metrics(error_occurred=True)
+        
+    finally:
+        # Always clean up resources
+        engine_logger = logging.getLogger('blastai')
+        
+        # Set output event to stop metrics display
+        if output_event:
+            output_event.set()
+            
+        try:
+            # Find and kill any running npm processes
+            import psutil
+            current_process = psutil.Process()
+            children = current_process.children(recursive=True)
+            for child in children:
+                try:
+                    if 'npm' in child.name().lower() or 'node' in child.name().lower():
+                        child.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+                    
+            # Wait for processes to terminate
+            psutil.wait_procs(children, timeout=1)
+        except Exception as e:
+            engine_logger.debug(f"Error cleaning up processes: {e}")
+            
+        # Cancel all tasks first
         for task in tasks:
             if not task.done():
                 task.cancel()
+                try:
+                    task._coro.close()
+                except:
+                    pass
         
-        # Wait briefly for tasks to complete
-        try:
-            done, pending = await asyncio.wait(tasks, timeout=2.0)
-            for task in pending:
-                logger.debug(f"Task {task.get_name()} did not complete in time")
-        except Exception as e:
-            logger.debug(f"Error waiting for tasks: {e}")
-            
-        # Clean up metrics client if it exists
+        # Wait briefly for tasks to cancel
+        if tasks:
+            try:
+                await asyncio.wait(tasks, timeout=0.5)
+            except:
+                pass
+        
+        # Clean up metrics client
         if metrics_client:
             try:
-                await asyncio.wait_for(metrics_client.aclose(), timeout=1.0)
-            except Exception as e:
-                logger.debug(f"Error closing metrics client: {e}")
-                
-        # Don't exit here - let the parent handle it
-        return
-        
-    except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
-        return
-    finally:
-        # Clean up metrics client if we haven't already
-        if metrics_client and not metrics_client.is_closed:
-            try:
-                await asyncio.wait_for(metrics_client.aclose(), timeout=1.0)
-            except Exception as e:
-                logger.debug(f"Error closing metrics client in finally: {e}")
+                await asyncio.wait_for(metrics_client.aclose(), timeout=0.5)
+            except:
+                try:
+                    metrics_client._client.close()
+                except:
+                    pass

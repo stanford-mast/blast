@@ -78,12 +78,16 @@ app.add_middleware(
     max_age=1  # Short cache for development
 )
 
-# Add middleware to log requests
+# Add middleware to log requests and errors
 @app.middleware("http")
 async def log_requests(request, call_next):
-    """Log all incoming requests."""
-    response = await call_next(request)
-    return response
+    """Log all incoming requests and errors."""
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as e:
+        logger.error(f"Error handling request: {str(e)}", exc_info=True)
+        raise
 
 @app.get("/ping")
 async def ping():
@@ -125,7 +129,8 @@ async def get_metrics():
         return metrics
     except Exception as e:
         logger.error(f"Error getting metrics: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        # Re-raise as HTTPException but ensure error is logged first
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 async def get_engine() -> Engine:
     """Get the global engine instance, creating it if needed."""

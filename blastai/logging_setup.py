@@ -39,23 +39,35 @@ def create_log_config(settings: Settings, logs_dir: Path, engine_hash: str) -> D
                 "class": "logging.FileHandler",
                 "filename": str(logs_dir / f"{engine_hash}.engine.log"),
                 "formatter": "default",
+                "filters": ["stdout_filter"],
+                "mode": "a",  # Append mode
+                "delay": True,  # Only open file when needed
             },
             "web_file": {
                 "class": "logging.FileHandler",
                 "filename": str(logs_dir / f"{engine_hash}.web.log"),
                 "formatter": "default",
+                "filters": ["stdout_filter"],
+                "mode": "a",
+                "delay": True,
             },
             "warnings_file": {
                 "class": "logging.FileHandler",
                 "filename": str(logs_dir / f"{engine_hash}.warnings.log"),
                 "formatter": "default",
+                "filters": ["stdout_filter"],
+                "mode": "a",
+                "delay": True,
+            },
+            "null_handler": {
+                "class": "logging.NullHandler",  # Discard any output not caught by other handlers
             }
         },
         "loggers": {
             "": {  # Root logger
                 "handlers": ["engine_file"],
                 "level": "ERROR",
-                "propagate": True,
+                "propagate": False,  # Don't propagate to avoid double logging
             },
             "blastai": {
                 "handlers": ["engine_file"],
@@ -91,6 +103,43 @@ def create_log_config(settings: Settings, logs_dir: Path, engine_hash: str) -> D
                 "handlers": ["warnings_file"],
                 "level": "WARNING",
                 "propagate": False,
+            },
+            "asyncio": {
+                "handlers": ["engine_file"],
+                "level": "ERROR",  # Only log asyncio errors
+                "propagate": False,
+            },
+            "playwright": {
+                "handlers": ["engine_file"],
+                "level": "ERROR",  # Only log playwright errors
+                "propagate": False,
+            },
+            "httpx": {
+                "handlers": ["engine_file"],
+                "level": "ERROR",  # Only log httpx errors
+                "propagate": False,
+            },
+            "fastapi": {
+                "handlers": ["engine_file"],
+                "level": "ERROR",  # Only log FastAPI errors
+                "propagate": False,
+            },
+            "starlette": {
+                "handlers": ["engine_file"],
+                "level": "ERROR",  # Only log Starlette errors
+                "propagate": False,
+            },
+            "httpcore": {
+                "handlers": ["engine_file"],
+                "level": "ERROR",  # Only log httpcore errors
+                "propagate": False,
+            }
+        },
+        "disable_existing_loggers": True,  # Disable any existing loggers
+        "filters": {
+            "stdout_filter": {
+                "()": "logging.Filter",
+                "name": ""  # Empty string means root logger
             }
         }
     }
@@ -140,31 +189,38 @@ def setup_logging(settings: Optional[Settings] = None, engine_hash: Optional[str
         warnings.formatwarning = warning_on_one_line
         
     else:
-        # Configure console logging
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(
-            logging.Formatter('%(asctime)s [%(name)s] %(message)s', '%Y-%m-%d %H:%M:%S')
-        )
-        
-        # Configure root logger
-        root_logger.addHandler(handler)
-        root_logger.setLevel(logging.ERROR)
-        
-        # Configure specific loggers
-        blastai_logger = logging.getLogger('blastai')
-        blastai_logger.setLevel(getattr(logging, settings.blastai_log_level.upper()))
-        
-        # Set browser-use log level via environment variable
-        os.environ["BROWSER_USE_LOGGING_LEVEL"] = settings.browser_use_log_level.lower()
-        
-        # Configure browser-use logger
-        browser_level = getattr(logging, settings.browser_use_log_level.upper())
-        browser_use_logger = logging.getLogger('browser_use')
-        browser_use_logger.setLevel(browser_level)
-        
-        # Configure playwright logger
-        playwright_logger = logging.getLogger('playwright')
-        playwright_logger.setLevel(browser_level)
+        # If no engine_hash, use console logging temporarily
+        if not engine_hash:
+            # Add null handler to root logger to prevent stdout output
+            root_logger.addHandler(logging.NullHandler())
+            root_logger.setLevel(logging.ERROR)
+            
+            # Configure specific loggers with null handlers
+            loggers = {
+                'blastai': settings.blastai_log_level.upper(),
+                'browser_use': settings.browser_use_log_level.upper(),
+                'playwright': 'ERROR',
+                'asyncio': 'ERROR',
+                'httpx': 'ERROR',
+                'fastapi': 'ERROR',
+                'starlette': 'ERROR',
+                'httpcore': 'ERROR',
+            }
+            
+            for name, level in loggers.items():
+                logger = logging.getLogger(name)
+                logger.addHandler(logging.NullHandler())
+                logger.setLevel(getattr(logging, level))
+                logger.propagate = False
+        else:
+            # If we have engine_hash but no logs_dir specified, use blast-logs/
+            logs_dir = Path("blast-logs")
+            if not logs_dir.exists():
+                logs_dir.mkdir(parents=True)
+                
+            # Create and apply logging config
+            log_config = create_log_config(settings, logs_dir, engine_hash)
+            logging.config.dictConfig(log_config)
     
     # Silence third-party loggers
     for logger_name in [

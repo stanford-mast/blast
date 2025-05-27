@@ -112,6 +112,11 @@ class Constraints(BaseModel):
         default=True,
         description="Whether to share browser process between requests"
     )
+
+    allowed_domains: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed domains for browser navigation. None means all domains are allowed."
+    )
     
     @classmethod
     def create(cls, max_memory: Optional[str] = None, **kwargs):

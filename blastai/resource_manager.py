@@ -47,8 +47,8 @@ from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from browser_use import Browser, BrowserConfig, Agent
-from browser_use.browser.context import BrowserContext
+from browser_use import Agent
+from browser_use.browser import BrowserSession, BrowserProfile
 
 from .config import Settings, Constraints
 from .executor import Executor
@@ -262,10 +262,15 @@ class ResourceManager:
                     return None
             return None
             
-        # Create browser components with proper configuration
-        browser_config = BrowserConfig(
-            headless=self.constraints.require_headless
-        )
+        # Configure browser session
+        browser_args = {
+            'headless': self.constraints.require_headless,
+            'user_data_dir': None,  # Use ephemeral profile for security
+        }
+        
+        # Add allowed domains if configured
+        if self.constraints.allowed_domains is not None:
+            browser_args['allowed_domains'] = self.constraints.allowed_domains
 
         # Handle local browser path if not "none"
         if self.settings.local_browser_path != "none":
@@ -273,7 +278,7 @@ class ResourceManager:
                 # Auto-detect browser path
                 browser_path = find_local_browser()
                 if browser_path:
-                    browser_config.browser_binary_path = browser_path
+                    browser_args['executable_path'] = browser_path
                     logger.debug(f"Using auto-detected browser at: {browser_path}")
             else:
                 # Use specified path directly
@@ -281,26 +286,23 @@ class ResourceManager:
                 if not os.path.exists(browser_path):
                     logger.error(f"Specified local browser path does not exist: {browser_path}")
                     return None
-                browser_config.browser_binary_path = browser_path
+                browser_args['executable_path'] = browser_path
 
         try:
-            try:
-                if self.constraints.share_browser_process and self._shared_browser is None:
-                    # Create shared browser if it doesn't exist
-                    self._shared_browser = Browser(config=browser_config)
-                    self._shared_browser_users = 0
+            if self.constraints.share_browser_process and self._shared_browser is None:
+                # Create shared browser session if it doesn't exist
+                self._shared_browser = BrowserSession(**browser_args)
+                await self._shared_browser.start()
+                self._shared_browser_users = 0
 
-                if self.constraints.share_browser_process:
-                    # Use shared browser with new context
-                    browser = self._shared_browser
-                    self._shared_browser_users += 1
-                else:
-                    # Create new browser instance
-                    browser = Browser(config=browser_config)
-                browser_context = BrowserContext(browser=browser)
-            except Exception as e:
-                logger.error(f"Failed to create executor: {e}")
-                return None
+            if self.constraints.share_browser_process:
+                # Use shared browser session
+                browser_session = self._shared_browser
+                self._shared_browser_users += 1
+            else:
+                # Create new browser session
+                browser_session = BrowserSession(**browser_args)
+                await browser_session.start()
         except Exception as e:
             logger.error(f"Failed to create executor: {e}")
             return None
@@ -312,11 +314,10 @@ class ResourceManager:
         # Create fresh Tools instance with scheduler, task_id, resource manager and mini LLM
         tools = Tools(scheduler=self.scheduler, task_id=task_id, resource_manager=self, llm_model=llm_mini)
         
-        # Create and return executor with sensitive data
+        # Create and return executor with browser session and sensitive data
         logger.debug(f"Created new executor for task {task_id}")
         return Executor(
-            browser=browser,
-            browser_context=browser_context,
+            browser_session=browser_session,
             controller=tools.controller,
             llm=llm,
             constraints=self.constraints,
@@ -379,11 +380,11 @@ class ResourceManager:
         self._total_cost_evicted_executors += task.executor.get_total_cost()
         
         # Clean up executor
-        if self.constraints.share_browser_process and task.executor.browser == self._shared_browser:
-            # Only cleanup context when using shared browser
-            await task.executor.browser_context.close()
+        if self.constraints.share_browser_process and task.executor.browser_session == self._shared_browser:
+            # Only cleanup page when using shared browser session
+            await task.executor.browser_session.get_current_page().close()
             self._shared_browser_users -= 1
-            logger.debug(f"Cleaned up shared browser context (remaining users: {self._shared_browser_users})")
+            logger.debug(f"Cleaned up shared browser page (remaining users: {self._shared_browser_users})")
             
             # Cleanup shared browser if no more users
             if self._shared_browser_users == 0:
@@ -391,8 +392,8 @@ class ResourceManager:
                 self._shared_browser = None
                 logger.debug("Cleaned up shared browser instance")
         else:
-            # Full cleanup for non-shared browsers
-            await task.executor.cleanup()
+            # Full cleanup for non-shared browser sessions
+            await task.executor.browser_session.close()
         
         # Clear executor reference
         task.executor = None
