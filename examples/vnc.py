@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 import re
+from multiprocessing import Process
 
 def setup_requirements():
     print("Installing dependencies...")
@@ -144,11 +145,14 @@ def launch_session(display_no=1, geometry="1280x720", target_url="https://practi
     vnc_port = 5900 + display_no
     http_port = 6080 + display_no
 
+    env = os.environ.copy()
+    env["DISPLAY"] = f":{display_no}"
+    os.environ["DISPLAY"] = f":{display_no}"
+
     cleanup_display(display_no, vnc_port, http_port)
     configure_xstartup()
     patch_novnc_ui()
 
-    os.environ["DISPLAY"] = f":{display_no}"
     wm_class = get_chromium_class()
     configure_openbox(wm_class)
 
@@ -156,13 +160,15 @@ def launch_session(display_no=1, geometry="1280x720", target_url="https://practi
     subprocess.run(
         f"vncserver :{display_no} -geometry {geometry} -localhost no -SecurityTypes None --I-KNOW-THIS-IS-INSECURE",
         shell=True,
-        check=True
+        check=True,
+        env=env
     )
 
     print(f"Starting noVNC proxy on port {http_port}")
     web_proc = subprocess.Popen(
         f"websockify --web /usr/share/novnc {http_port} localhost:{vnc_port}",
-        shell=True
+        shell=True,
+        env=env
     )
     time.sleep(2)
 
@@ -171,7 +177,7 @@ def launch_session(display_no=1, geometry="1280x720", target_url="https://practi
     print("Launching Chromium via Playwright")
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
-            user_data_dir='/tmp/playwright',
+            user_data_dir=f'/tmp/playwright_{display_no}',
             headless=False,
             args=[
                 f'--app={target_url}',
@@ -184,19 +190,47 @@ def launch_session(display_no=1, geometry="1280x720", target_url="https://practi
                 '--disable-translate',
                 '--disable-dev-shm-usage'
             ],
-            ignore_default_args=['--enable-automation']
+            ignore_default_args=['--enable-automation'],
+            env=env
         )
         time.sleep(2)
         context.pages[0].goto(target_url)
-        subprocess.run("xdotool search --class chromium windowactivate --sync key F11", shell=True)
+        subprocess.run("xdotool search --class chromium windowactivate --sync key F11", shell=True, env=env)
         print("\U0001f4cc Embed iframe using:", iframe_url)
-        input("Press ENTER to terminate session...")
+        while True:
+            time.sleep(1)
         context.close()
 
     web_proc.terminate()
     subprocess.run(f"vncserver -kill :{display_no}", shell=True)
-    print("\U0001f9fc Session cleaned up.")
+    print(f"\U0001f9fc Session on display :{display_no} cleaned up.")
+
+def run_parallel_sessions():
+    setup_requirements()
+
+    sessions = [
+        (1, "https://practicepanther.com"),
+        (2, "https://example.com")
+    ]
+
+    procs = []
+    for display_no, url in sessions:
+        p = Process(target=launch_session, args=(display_no, "1280x720", url))
+        p.start()
+        procs.append(p)
+
+    input("\nPress ENTER to terminate all sessions...\n")
+
+    for display_no, _ in sessions:
+        subprocess.run(f"vncserver -kill :{display_no}", shell=True)
+        subprocess.run(f"fuser -k {5900 + display_no}/tcp", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(f"fuser -k {6080 + display_no}/tcp", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    for p in procs:
+        p.terminate()
+        p.join()
+
+    print("\n✅ All sessions cleaned up.")
 
 if __name__ == "__main__":
-    setup_requirements()
-    launch_session()
+    run_parallel_sessions()
