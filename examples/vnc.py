@@ -1,6 +1,7 @@
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -9,16 +10,52 @@ import re
 from multiprocessing import Process
 
 def setup_requirements():
-    print("Installing dependencies...")
-    subprocess.run("sudo apt-get update", shell=True, check=True)
-    subprocess.run(
-        "sudo apt-get install -y openbox tigervnc-standalone-server novnc websockify dbus-x11 x11-utils xdotool",
-        shell=True,
-        check=True,
-    )
-    print("Fixing /tmp/.X11-unix permissions...")
-    subprocess.run("sudo mkdir -p /tmp/.X11-unix", shell=True, check=True)
-    subprocess.run("sudo chmod 1777 /tmp/.X11-unix", shell=True, check=True)
+    """Check and install required packages if needed"""
+    required_packages = [
+        "openbox",
+        "tigervnc-standalone-server",
+        "novnc",
+        "websockify",
+        "dbus-x11",
+        "x11-utils",
+        "xdotool"
+    ]
+    
+    # Check which packages are missing
+    missing_packages = []
+    for package in required_packages:
+        result = subprocess.run(
+            f"dpkg -l {package} 2>/dev/null | grep -E '^ii'",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        if result.returncode != 0:
+            missing_packages.append(package)
+    
+    if missing_packages:
+        print(f"Installing missing dependencies: {', '.join(missing_packages)}")
+        print("Note: This will require sudo access to install packages")
+        try:
+            subprocess.run("sudo apt-get update", shell=True, check=True)
+            subprocess.run(
+                f"sudo apt-get install -y {' '.join(missing_packages)}",
+                shell=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            print("Error: Failed to install required packages")
+            print(f"Please install manually: {' '.join(missing_packages)}")
+            sys.exit(1)
+    else:
+        print("All required packages are already installed.")
+    
+    # Check X11 unix socket directory
+    x11_dir = "/tmp/.X11-unix"
+    if not os.path.exists(x11_dir):
+        print("Note: /tmp/.X11-unix directory is missing.")
+        print("You may need to run: sudo mkdir -p /tmp/.X11-unix && sudo chmod 1777 /tmp/.X11-unix")
+        print("Attempting to continue anyway...")
 
 def configure_xstartup():
     vnc_dir = Path.home() / ".vnc"
@@ -149,14 +186,17 @@ def launch_session(display_no=1, geometry="1280x720", target_url="https://practi
     env["DISPLAY"] = f":{display_no}"
     os.environ["DISPLAY"] = f":{display_no}"
 
+    # Clean up any existing sessions
     cleanup_display(display_no, vnc_port, http_port)
+    
+    # Configure VNC and window manager
     configure_xstartup()
-    patch_novnc_ui()
-
     wm_class = get_chromium_class()
     configure_openbox(wm_class)
 
-    print(f"Starting TigerVNC on display :{display_no}")
+    # Start VNC server
+    print(f"\nStarting VNC session {display_no}:")
+    print(f"- Target URL: {target_url}")
     subprocess.run(
         f"vncserver :{display_no} -geometry {geometry} -localhost no -SecurityTypes None --I-KNOW-THIS-IS-INSECURE",
         shell=True,
@@ -164,7 +204,7 @@ def launch_session(display_no=1, geometry="1280x720", target_url="https://practi
         env=env
     )
 
-    print(f"Starting noVNC proxy on port {http_port}")
+    # Start noVNC proxy
     web_proc = subprocess.Popen(
         f"websockify --web /usr/share/novnc {http_port} localhost:{vnc_port}",
         shell=True,
@@ -172,9 +212,12 @@ def launch_session(display_no=1, geometry="1280x720", target_url="https://practi
     )
     time.sleep(2)
 
-    iframe_url = f"http://localhost:{http_port}/vnc.html"
+    # Show connection URLs
+    print(f"- VNC URL: vnc://localhost:{vnc_port}")
+    print(f"- Web URL: http://localhost:{http_port}/vnc.html")
 
-    print("Launching Chromium via Playwright")
+    # Launch browser
+    print("- Launching browser...")
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
             user_data_dir=f'/tmp/playwright_{display_no}',
@@ -196,14 +239,13 @@ def launch_session(display_no=1, geometry="1280x720", target_url="https://practi
         time.sleep(2)
         context.pages[0].goto(target_url)
         subprocess.run("xdotool search --class chromium windowactivate --sync key F11", shell=True, env=env)
-        print("\U0001f4cc Embed iframe using:", iframe_url)
+        print("- Browser launched successfully")
+        
         while True:
             time.sleep(1)
         context.close()
 
     web_proc.terminate()
-    subprocess.run(f"vncserver -kill :{display_no}", shell=True)
-    print(f"\U0001f9fc Session on display :{display_no} cleaned up.")
 
 def run_parallel_sessions():
     setup_requirements()
@@ -218,19 +260,26 @@ def run_parallel_sessions():
         p = Process(target=launch_session, args=(display_no, "1280x720", url))
         p.start()
         procs.append(p)
+        # Give each session a moment to start
+        time.sleep(3)
 
-    input("\nPress ENTER to terminate all sessions...\n")
-
+    print("\nAll sessions are now running!")
+    print("Press Ctrl+C or ENTER to terminate all sessions")
+    
+    try:
+        input()
+    except KeyboardInterrupt:
+        pass
+    
+    print("\nCleaning up sessions...")
     for display_no, _ in sessions:
-        subprocess.run(f"vncserver -kill :{display_no}", shell=True)
-        subprocess.run(f"fuser -k {5900 + display_no}/tcp", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(f"fuser -k {6080 + display_no}/tcp", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
+        cleanup_display(display_no, 5900 + display_no, 6080 + display_no)
+    
     for p in procs:
         p.terminate()
         p.join()
-
-    print("\n✅ All sessions cleaned up.")
+    
+    print("✅ All sessions cleaned up.")
 
 if __name__ == "__main__":
     run_parallel_sessions()
