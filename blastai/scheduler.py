@@ -336,7 +336,7 @@ class Scheduler:
                 # Handle running subtasks
                 if subtask.executor:
                     # Get new reasonings
-                    reasonings = subtask.executor.get_reasoning()
+                    reasonings = await subtask.executor.get_reasoning()
                     for reasoning in reasonings:
                         key = (reasoning.type, reasoning.thought_type, reasoning.content)
                         if subtask_id not in seen_reasonings:
@@ -370,7 +370,7 @@ class Scheduler:
             # Then check main task
             if task.executor:
                 # Get new reasonings
-                reasonings = task.executor.get_reasoning()
+                reasonings = await task.executor.get_reasoning()
                 for reasoning in reasonings:
                     key = (reasoning.type, reasoning.thought_type, reasoning.content)
                     if task_id not in seen_reasonings:

@@ -177,7 +177,7 @@ class Executor:
         finally:
             self._running = False
             
-    def get_reasoning(self) -> List[AgentReasoning]:
+    async def get_reasoning(self) -> List[AgentReasoning]:
         """Get current agent reasoning states.
         
         Returns:
@@ -213,13 +213,16 @@ class Executor:
                 ))
             
             # Create separate reasoning for screenshot if available
-            state = getattr(self.browser_session, 'browser_state_summary', None)
-            if state and state.screenshot:
-                reasonings.append(AgentReasoning(
-                    task_id=self.task_id,
-                    type="screenshot",
-                    content=state.screenshot
-                ))
+            try:
+                state = await self.browser_session.get_state_summary(cache_clickable_elements_hashes=True)
+                if state and state.screenshot:
+                    reasonings.append(AgentReasoning(
+                        task_id=self.task_id,
+                        type="screenshot",
+                        content=state.screenshot
+                    ))
+            except Exception as e:
+                pass
             
         return reasonings
     
@@ -251,7 +254,10 @@ class Executor:
                 await self.agent.close()
             except Exception as e:
                 logger.error(f"Error closing agent: {e}")
-        self.agent = None
+            self.agent = None
+            
+        # Clear browser session reference since it's now closed
+        self.browser_session = None
         
     def get_total_cost(self) -> float:
         """Get total LLM cost for this executor."""

@@ -266,6 +266,7 @@ class ResourceManager:
         browser_args = {
             'headless': self.constraints.require_headless,
             'user_data_dir': None,  # Use ephemeral profile for security
+            'keep_alive': True,  # Keep browser alive between tasks
         }
         
         # Add allowed domains if configured
@@ -384,20 +385,29 @@ class ResourceManager:
         self._total_cost_evicted_executors += task.executor.get_total_cost()
         
         # Clean up executor
-        if self.constraints.share_browser_process and task.executor.browser_session == self._shared_browser:
-            # Only cleanup page when using shared browser session
-            await task.executor.browser_session.get_current_page().close()
-            self._shared_browser_users -= 1
-            logger.debug(f"Cleaned up shared browser page (remaining users: {self._shared_browser_users})")
-            
-            # Cleanup shared browser if no more users
-            if self._shared_browser_users == 0:
-                await self._shared_browser.close()
-                self._shared_browser = None
-                logger.debug("Cleaned up shared browser instance")
-        else:
-            # Full cleanup for non-shared browser sessions
-            await task.executor.browser_session.close()
+        if task.executor.browser_session:
+            try:
+                if self.constraints.share_browser_process and task.executor.browser_session == self._shared_browser:
+                    # Only cleanup page when using shared browser session
+                    current_page = await task.executor.browser_session.get_current_page()
+                    if current_page and not current_page.is_closed():
+                        await current_page.close()
+                    self._shared_browser_users -= 1
+                    logger.debug(f"Cleaned up shared browser page (remaining users: {self._shared_browser_users})")
+                    
+                    # Cleanup shared browser if no more users
+                    if self._shared_browser_users == 0:
+                        await self._shared_browser.close()
+                        self._shared_browser = None
+                        logger.debug("Cleaned up shared browser instance")
+                else:
+                    # Full cleanup for non-shared browser sessions
+                    await task.executor.browser_session.close()
+            except Exception as e:
+                logger.error(f"Error cleaning up browser session: {e}")
+            finally:
+                # Always clear the executor reference
+                task.executor = None
         
         # Clear executor reference
         task.executor = None
