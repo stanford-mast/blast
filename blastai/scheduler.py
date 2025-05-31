@@ -357,7 +357,7 @@ class Scheduler:
                                     task_id=subtask_id
                                 )
                         except Exception as e:
-                            logger.error(f"Subtask {subtask_id} failed: {e}")
+                            logger.error(f"Subtask {subtask_id} failed: {e}", exc_info=True)
                 
                 # Handle cached subtask results
                 elif subtask.is_completed and subtask.result and subtask_id not in yielded_completed_subtasks:  # Only yield if there's a valid result

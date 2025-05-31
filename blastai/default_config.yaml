@@ -22,5 +22,6 @@ constraints:
   llm_model_mini: "openai:gpt-4.1-mini"
   allow_vision: true
   require_headless: true
-  share_browser_process: true  # Whether to share browser process between contexts
+  require_patchright: true
+  share_browser_process: false  # Whether to share browser process between contexts
   allowed_domains: null  # List of allowed domains, null means all domains are allowed

@@ -55,6 +55,7 @@ from .executor import Executor
 from .tools import Tools
 from .secrets import SecretsManager
 from .utils import find_local_browser, init_model
+from .resource_factory import create_executor, cleanup_stealth_profile_dir
 
 logger = logging.getLogger(__name__)
 
@@ -262,76 +263,42 @@ class ResourceManager:
                     return None
             return None
             
-        # Configure browser session
-        browser_args = {
-            'headless': self.constraints.require_headless,
-            'user_data_dir': None,  # Use ephemeral profile for security
-            'keep_alive': True,  # Keep browser alive between tasks
-        }
-        
-        # Add allowed domains if configured
-        if self.constraints.allowed_domains is not None:
-            browser_args['allowed_domains'] = self.constraints.allowed_domains
-
-        # Handle local browser path if not "none"
-        if self.settings.local_browser_path != "none":
-            if self.settings.local_browser_path == "auto":
-                # Auto-detect browser path
-                browser_path = find_local_browser()
-                if browser_path:
-                    browser_args['executable_path'] = browser_path
-                    logger.debug(f"Using auto-detected browser at: {browser_path}")
-            else:
-                # Use specified path directly
-                browser_path = self.settings.local_browser_path
-                if not os.path.exists(browser_path):
-                    logger.error(f"Specified local browser path does not exist: {browser_path}")
-                    return None
-                browser_args['executable_path'] = browser_path
-
-        try:
-            if self.constraints.share_browser_process and self._shared_browser is None:
-                # Create shared browser session if it doesn't exist
-                self._shared_browser = BrowserSession(**browser_args)
-                await self._shared_browser.start()
-                self._shared_browser_users = 0
-
-            if self.constraints.share_browser_process:
-                # Use shared browser session
-                browser_session = self._shared_browser
-                self._shared_browser_users += 1
-            else:
-                # Create new browser session
-                browser_session = BrowserSession(**browser_args)
-                await browser_session.start()
-        except Exception as e:
-            logger.error(f"Failed to create executor: {e}")
-            return None
-        
-        # Create LLMs
-        llm = init_model(self.constraints.llm_model)
-        llm_mini = init_model(self.constraints.llm_model_mini) if self.constraints.llm_model_mini else llm
-        
-        # Create fresh Tools instance with scheduler, task_id, resource manager and mini LLM
-        tools = Tools(scheduler=self.scheduler, task_id=task_id, resource_manager=self, llm_model=llm_mini)
-        
-        # Create and return executor with browser session and sensitive data
-        logger.debug(f"Created new executor for task {task_id}")
-        # Only pass sensitive_data if we actually have secrets
+        # Get secrets if available
         secrets = self._secrets_manager.get_secrets()
         sensitive_data = secrets if secrets else None
-        
-        return Executor(
-            browser_session=browser_session,
-            controller=tools.controller,
-            llm=llm,
-            constraints=self.constraints,
-            task_id=task_id,
-            settings=self.settings,
-            engine_hash=self.engine_hash,
-            scheduler=self.scheduler,
-            sensitive_data=sensitive_data
-        )
+
+        # Create executor using factory
+        if self.constraints.share_browser_process and self._shared_browser is None:
+            # Create shared browser session if it doesn't exist
+            self._shared_browser = await create_executor(
+                task_id=task_id,
+                constraints=self.constraints,
+                settings=self.settings,
+                scheduler=self.scheduler,
+                resource_manager=self,
+                engine_hash=self.engine_hash,
+                sensitive_data=sensitive_data
+            )
+            if not self._shared_browser:
+                return None
+            self._shared_browser_users = 0
+
+        if self.constraints.share_browser_process:
+            # Use shared browser session
+            executor = self._shared_browser
+            self._shared_browser_users += 1
+            return executor
+        else:
+            # Create new executor
+            return await create_executor(
+                task_id=task_id,
+                constraints=self.constraints,
+                settings=self.settings,
+                scheduler=self.scheduler,
+                resource_manager=self,
+                engine_hash=self.engine_hash,
+                sensitive_data=sensitive_data
+            )
         
     async def end_task(self, task_id: str):
         """Force end a task.
@@ -402,7 +369,14 @@ class ResourceManager:
                         logger.debug("Cleaned up shared browser instance")
                 else:
                     # Full cleanup for non-shared browser sessions
-                    await task.executor.browser_session.close()
+                    try:
+                        # Clean up stealth profile directory if it was a temporary one
+                        if task.executor.user_data_dir:
+                            cleanup_stealth_profile_dir(task.executor.user_data_dir)
+                    except Exception as cleanup_error:
+                        logger.error(f"Error cleaning up stealth profile: {cleanup_error}")
+                    finally:
+                        await task.executor.browser_session.close()
             except Exception as e:
                 logger.error(f"Error cleaning up browser session: {e}")
             finally:

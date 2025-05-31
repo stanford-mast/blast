@@ -108,6 +108,11 @@ class Constraints(BaseModel):
         description="Whether to require headless browser mode"
     )
     
+    require_patchright: bool = Field(
+        default=True,
+        description="Whether to use patchright for stealth browser automation"
+    )
+    
     share_browser_process: bool = Field(
         default=True,
         description="Whether to share browser process between requests"

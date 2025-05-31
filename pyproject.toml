@@ -22,7 +22,8 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.0",
-    "browser-use>=0.2.3",
+    "browser-use>=0.2.5",
+    "patchright>=1.0.0",
     "fastapi>=0.68.0",
     "uvicorn>=0.15.0",
     "click>=8.0.0",

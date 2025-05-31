@@ -360,16 +360,27 @@ class Tools:
             tasks = [scheduler.get_task_result(task_id) for task_id in task_ids]
             
             try:
-                # Wait for all results in parallel
-                results = await asyncio.gather(*tasks)
+                # Wait for all results in parallel with error handling
+                results = await asyncio.gather(*tasks, return_exceptions=True)
                 
                 # Combine results
                 combined_results = []
+                all_successful = True
                 for task_id, result in zip(task_ids, results):
-                    if result:
+                    if isinstance(result, Exception):
+                        combined_results.append(f"  Subtask {task_id}: Failed - {str(result)}")
+                        all_successful = False
+                    elif result:
                         combined_results.append(f"  Subtask {task_id}: {result.final_result()}")
                     else:
                         combined_results.append(f"  Subtask {task_id}: No result available")
+                        all_successful = False
+
+                if not all_successful:
+                    return ActionResult(
+                        success=False,
+                        error="Not all subtasks completed successfully:\n" + "\n".join(combined_results)
+                    )
                 
                 return ActionResult(
                     success=True,

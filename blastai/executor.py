@@ -21,6 +21,7 @@ from .config import Settings, Constraints
 from .response import AgentReasoning, AgentHistoryListResponse
 from .utils import estimate_llm_cost, get_base_url_for_provider
 from .models import is_openai_model
+from .resource_factory_utils import cleanup_stealth_profile_dir
 
 class Executor:
     """Wrapper around browser_use Agent for task execution."""
@@ -28,7 +29,8 @@ class Executor:
     def __init__(self, browser_session: BrowserSession, controller: Controller,
                  llm: BaseChatModel, constraints: Constraints, task_id: str,
                  settings: Settings = None, engine_hash: str = None, scheduler = None,
-                 sensitive_data: Optional[Dict[str, str]] = None):
+                 sensitive_data: Optional[Dict[str, str]] = None,
+                 user_data_dir: Optional[str] = None):
         """Initialize executor with browser session, controller, LLM and constraints."""
         self.browser_session = browser_session
         self.llm = llm
@@ -39,6 +41,7 @@ class Executor:
         self.engine_hash = engine_hash
         self.scheduler = scheduler
         self.sensitive_data = sensitive_data
+        self.user_data_dir = user_data_dir  # Store user_data_dir for cleanup
         self.agent: Optional[Agent] = None
         self._paused = False
         self._running = False
@@ -130,7 +133,7 @@ class Executor:
                 else:
                     url = self._get_url_or_search(initial_url)
                     if url:
-                        await self.agent.multi_act([{'open_tab': {'url': url}}])
+                        await self.agent.browser_session.navigate(url)
                     self.agent.add_new_task(task)
                 
                 # Run task with cost tracking if using OpenAI
@@ -255,7 +258,14 @@ class Executor:
             except Exception as e:
                 logger.error(f"Error closing agent: {e}")
             self.agent = None
-            
+
+        # Clean up stealth profile directory if it was a temporary one
+        if self.user_data_dir:
+            try:
+                cleanup_stealth_profile_dir(self.user_data_dir)
+            except Exception as e:
+                logger.error(f"Error cleaning up stealth profile: {e}")
+
         # Clear browser session reference since it's now closed
         self.browser_session = None
         
