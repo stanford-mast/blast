@@ -7,13 +7,13 @@ import threading
 import time
 import yaml
 from pathlib import Path
-from typing import Optional, Union, List, Dict, Any, AsyncIterator, Set, TYPE_CHECKING
+from typing import Literal, Optional, Union, List, Dict, Any, AsyncIterator, Set, Tuple, TYPE_CHECKING
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
 # Import non-browser_use modules first
-from .response import AgentHistoryListResponse, AgentReasoning
+from .response import AgentHistoryListResponse, AgentReasoning, HumanRequest, HumanResponse, StopRequest
 from .config import Settings, Constraints
 from .resource_manager import ResourceManager
 from .scheduler import Scheduler
@@ -177,8 +177,12 @@ class Engine:
             
     async def run(self, task_descriptions: Union[str, List[str]],
                  cache_control: Union[str, List[str]] = "",
-                 stream: bool = False,
-                 previous_response_id: Optional[str] = None) -> Union[AgentHistoryListResponse, AsyncIterator[Union[AgentReasoning, AgentHistoryListResponse]]]:
+                 mode: Literal["block", "stream", "interactive"] = "block",
+                 previous_response_id: Optional[str] = None) -> Union[
+                     AgentHistoryListResponse,  # block mode
+                     AsyncIterator[Union[AgentReasoning, AgentHistoryListResponse]],  # stream mode
+                     Tuple[asyncio.Queue, asyncio.Queue]  # interactive mode
+                 ]:
         """Run one or more tasks and return their results.
         
         Args:
@@ -206,34 +210,53 @@ class Engine:
                 prev_task_id = previous_response_id.split('-')[1]
             if prev_task_id not in self.scheduler.tasks:
                 raise RuntimeError(f"Previous task {prev_task_id} not found")
+            
+        # Create queues if interactive mode
+        interactive_queues = None
+        if mode == "interactive":
+            to_client: asyncio.Queue = asyncio.Queue()
+            from_client: asyncio.Queue = asyncio.Queue()
+            interactive_queues = {
+                'to_client': to_client,
+                'from_client': from_client
+            }
 
         # Schedule task(s)
+        # Disable caching in interactive mode
+        if mode == "interactive":
+            cache_control = "no-cache"
         cache_controls = [cache_control] if isinstance(cache_control, str) else cache_control
         if isinstance(task_descriptions, list):
             # For multiple tasks, schedule them in sequence
             task_ids = []
             current_task_id = prev_task_id
+                
             for i, desc in enumerate(task_descriptions):
-                task_id = self.scheduler.schedule_task(desc, prerequisite_task_id=current_task_id, cache_control=cache_controls[i])
+                task_id = self.scheduler.schedule_task(
+                    desc,
+                    prerequisite_task_id=current_task_id,
+                    cache_control=cache_controls[i],
+                    interactive_queues=interactive_queues
+                )
                 task = self.scheduler.tasks[task_id]
                 logger.debug(f"Task {task_id} scheduled (prerequisite: {current_task_id}, url: {task.initial_url})")
                 task_ids.append(task_id)
                 current_task_id = task_id
             final_task_id = task_ids[-1]
         else:
-            # For single task, let scheduler handle it directly
+            # For single task, let scheduler handle it directly    
             final_task_id = self.scheduler.schedule_task(
                 task_descriptions,
                 prerequisite_task_id=prev_task_id,
-                cache_control=cache_controls[0]
+                cache_control=cache_controls[0],
+                interactive_queues=interactive_queues
             )
             task = self.scheduler.tasks[final_task_id]
             logger.debug(f"Task {final_task_id} scheduled (prerequisite: {prev_task_id}, url: {task.initial_url})")
         
         try:
-            # For non-streaming, wait for all tasks to complete
-            if not stream:
-                # For non-streaming, wait for final result
+            if mode == "block":
+                # For blocking mode, wait for final result
                 final_history = await self.scheduler.get_task_result(final_task_id)
                 if not final_history:
                     logger.error(f"Task {final_task_id} failed in get_task_result")
@@ -247,8 +270,55 @@ class Engine:
                 )
                 return response
             
-            # For streaming, return scheduler's stream directly
-            return self.scheduler.stream_task_events(final_task_id)
+            elif mode == "stream":
+                # For streaming mode, return scheduler's stream directly
+                return self.scheduler.stream_task_events(final_task_id)
+                
+            else:  # interactive mode
+                # Get queues from task state
+                task = self.scheduler.tasks[final_task_id]
+                queues = task.interactive_queues
+                if not queues:
+                    raise RuntimeError("Interactive mode requires queues")
+                    
+                # Start streaming task in background
+                async def stream_to_client():
+                    try:
+                        async for event in self.scheduler.stream_task_events(final_task_id):
+                            await queues['to_client'].put(event)
+                    except Exception as e:
+                        logger.error(f"Error in stream_to_client: {e}")
+                        
+                # Start monitoring client messages in background
+                async def monitor_client_messages():
+                    try:
+                        while True:
+                            # Check if task completed first
+                            task = self.scheduler.tasks[final_task_id]
+                            if task.is_completed:
+                                break
+                                
+                            # Try to get message with timeout
+                            try:
+                                msg = await asyncio.wait_for(queues['from_client'].get(), timeout=0.1)
+                                if isinstance(msg, StopRequest):
+                                    # Get all tasks in dependency chain
+                                    dependency_ids = self.scheduler._get_dependency_ids(final_task_id)
+                                    # End all tasks
+                                    for task_id in dependency_ids:
+                                        await self.resource_manager.end_task(task_id)
+                                    break
+                            except asyncio.TimeoutError:
+                                continue  # No message, check completion again
+                    except Exception as e:
+                        logger.error(f"Error in monitor_client_messages: {e}")
+                
+                # Start background tasks
+                asyncio.create_task(stream_to_client())
+                asyncio.create_task(monitor_client_messages())
+                
+                # Return queues for bidirectional communication
+                return queues['to_client'], queues['from_client']
         except Exception as e:
             # Log full exception details with traceback
             logger.error(f"Task {final_task_id} failed", exc_info=True)

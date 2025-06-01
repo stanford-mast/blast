@@ -104,6 +104,7 @@ class TaskState:
     time_start_exec: Optional[datetime] = None
     time_complete: Optional[datetime] = None
     initial_url: Optional[str] = None
+    interactive_queues: Optional[Dict[str, asyncio.Queue]] = None  # Queues for interactive mode
     
     @property
     def is_completed(self) -> bool:
@@ -178,7 +179,9 @@ class Scheduler:
         self.tasks: Dict[str, TaskState] = {}
         
     def schedule_task(self, description: str, prerequisite_task_id: Optional[str] = None,
-                     parent_task_id: Optional[str] = None, cache_control: str = "") -> str:
+                     parent_task_id: Optional[str] = None, cache_control: str = "",
+                     human_request_queue: Optional[asyncio.Queue] = None,
+                     human_response_queue: Optional[asyncio.Queue] = None) -> str:
         """Schedule a new task.
         
         Creates a new task state and checks for cached results.
@@ -203,7 +206,9 @@ class Scheduler:
             prerequisite_task_id=prerequisite_task_id,
             parent_task_id=parent_task_id,
             cache_options=cache_control,
-            time_schedule=datetime.now()
+            time_schedule=datetime.now(),
+            human_request_queue=human_request_queue,
+            human_response_queue=human_response_queue
         )
         
         # Add task to dictionary first
@@ -221,7 +226,9 @@ class Scheduler:
         return task_id
         
     def schedule_subtask(self, description: str, parent_task_id: str,
-                        cache_control: str = "") -> str:
+                        cache_control: str = "",
+                        human_request_queue: Optional[asyncio.Queue] = None,
+                        human_response_queue: Optional[asyncio.Queue] = None) -> str:
         """Schedule a subtask of an existing task.
         
         Subtasks have a parent-child relationship but can run in parallel.
@@ -243,7 +250,9 @@ class Scheduler:
             description=description,
             parent_task_id=parent_task_id,
             prerequisite_task_id=None,  # Explicitly set no prerequisite
-            cache_control=cache_control
+            cache_control=cache_control,
+            human_request_queue=human_request_queue,
+            human_response_queue=human_response_queue
         )
         return task_id
         
@@ -325,46 +334,46 @@ class Scheduler:
             
         # Track seen reasonings and completed subtasks to avoid duplicates
         seen_reasonings = {}
-        yielded_completed_subtasks = set()
+        yielded_completed_deptasks = set()
         
         while True:
-            # First check subtasks recursively
-            subtask_ids = self._get_subtask_ids(task_id)
-            for subtask_id in subtask_ids:
-                subtask = self.tasks[subtask_id]
+            # First check all tasks in dependency chain
+            dependency_ids = self._get_dependency_ids(task_id)
+            for deptask_id in dependency_ids:
+                deptask = self.tasks[deptask_id]
                 
                 # Handle running subtasks
-                if subtask.executor:
+                if deptask.executor:
                     # Get new reasonings
-                    reasonings = await subtask.executor.get_reasoning()
+                    reasonings = await deptask.executor.get_reasoning()
                     for reasoning in reasonings:
                         key = (reasoning.type, reasoning.thought_type, reasoning.content)
-                        if subtask_id not in seen_reasonings:
-                            seen_reasonings[subtask_id] = set()
-                        if key not in seen_reasonings[subtask_id]:
-                            seen_reasonings[subtask_id].add(key)
+                        if deptask_id not in seen_reasonings:
+                            seen_reasonings[deptask_id] = set()
+                        if key not in seen_reasonings[deptask_id]:
+                            seen_reasonings[deptask_id].add(key)
                             yield reasoning
                             
                     # Check for executor result
-                    if subtask.executor_run_task and subtask.executor_run_task.done():
+                    if deptask.executor_run_task and deptask.executor_run_task.done():
                         try:
-                            result = await subtask.executor_run_task
-                            await self.complete_task(subtask_id, result)
-                            if result and subtask_id not in yielded_completed_subtasks:  # Only yield if there's a valid result
-                                yielded_completed_subtasks.add(subtask_id)
+                            result = await deptask.executor_run_task
+                            await self.complete_task(deptask_id, result)
+                            if result and deptask_id not in yielded_completed_deptasks:  # Only yield if there's a valid result
+                                yielded_completed_deptasks.add(deptask_id)
                                 yield AgentHistoryListResponse.from_history(
                                     history=result,
-                                    task_id=subtask_id
+                                    task_id=deptask_id
                                 )
                         except Exception as e:
-                            logger.error(f"Subtask {subtask_id} failed: {e}", exc_info=True)
+                            logger.error(f"Subtask {deptask_id} failed: {e}", exc_info=True)
                 
-                # Handle cached subtask results
-                elif subtask.is_completed and subtask.result and subtask_id not in yielded_completed_subtasks:  # Only yield if there's a valid result
-                    yielded_completed_subtasks.add(subtask_id)
+                # Handle cached deptask results
+                elif deptask.is_completed and deptask.result and deptask_id not in yielded_completed_deptasks:  # Only yield if there's a valid result
+                    yielded_completed_deptasks.add(deptask_id)
                     yield AgentHistoryListResponse.from_history(
-                        history=subtask.result,
-                        task_id=subtask_id
+                        history=deptask.result,
+                        task_id=deptask_id
                     )
                         
             # Then check main task
@@ -478,6 +487,7 @@ class Scheduler:
             
         task.completed = True
         task.time_complete = datetime.now()
+        
         task.executor_run_task = None  # Clear the run task since it's done
         
         # Set success flag based on result or explicit success parameter
@@ -534,6 +544,50 @@ class Scheduler:
             
         return lineage
         
+    def _get_dependency_ids(self, task_id: str) -> List[str]:
+        """Get IDs of all tasks in dependency chain.
+        
+        This includes:
+        1. All prerequisite tasks recursively
+        2. All subtasks of those tasks
+        
+        Args:
+            task_id: Task ID
+            
+        Returns:
+            List of all dependent task IDs in order:
+            - First prerequisite tasks (oldest to newest)
+            - Then their subtasks (depth-first)
+            - Finally the task itself and its subtasks
+        """
+        visited = set()
+        dependency_ids = []
+        
+        def get_prereqs(tid: str):
+            """Get all prerequisite tasks recursively."""
+            if tid in visited:
+                return
+            visited.add(tid)
+            
+            task = self.tasks.get(tid)
+            if not task:
+                return
+                
+            # First get prerequisites recursively
+            if task.prerequisite_task_id:
+                get_prereqs(task.prerequisite_task_id)
+                
+            # Then add this task and its subtasks
+            dependency_ids.append(tid)
+            subtasks = self._get_subtask_ids(tid)
+            for subtask_id in subtasks:
+                if subtask_id not in visited:
+                    dependency_ids.append(subtask_id)
+                    visited.add(subtask_id)
+                    
+        get_prereqs(task_id)
+        return dependency_ids
+
     def _get_subtask_ids(self, task_id: str) -> List[str]:
         """Get IDs of all subtasks of a task recursively.
         

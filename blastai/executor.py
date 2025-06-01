@@ -30,7 +30,9 @@ class Executor:
                  llm: BaseChatModel, constraints: Constraints, task_id: str,
                  settings: Settings = None, engine_hash: str = None, scheduler = None,
                  sensitive_data: Optional[Dict[str, str]] = None,
-                 user_data_dir: Optional[str] = None):
+                 user_data_dir: Optional[str] = None,
+                 vnc_session: Optional[Any] = None,
+                 live_url: Optional[str] = None):
         """Initialize executor with browser session, controller, LLM and constraints."""
         self.browser_session = browser_session
         self.llm = llm
@@ -42,6 +44,8 @@ class Executor:
         self.scheduler = scheduler
         self.sensitive_data = sensitive_data
         self.user_data_dir = user_data_dir  # Store user_data_dir for cleanup
+        self.vnc_session = vnc_session  # Store VNC session for cleanup
+        self.live_url = live_url  # Store live URL for responses
         self.agent: Optional[Agent] = None
         self._paused = False
         self._running = False
@@ -203,7 +207,8 @@ class Executor:
                 task_id=self.task_id,
                 type="thought",
                 thought_type="goal",
-                content=brain.next_goal
+                content=brain.next_goal,
+                live_url=self.live_url
             ))
             
             # Create separate reasoning for memory if available
@@ -212,7 +217,8 @@ class Executor:
                     task_id=self.task_id,
                     type="thought",
                     thought_type="memory",
-                    content=brain.memory
+                    content=brain.memory,
+                    live_url=self.live_url
                 ))
             
             # Create separate reasoning for screenshot if available
@@ -222,7 +228,8 @@ class Executor:
                     reasonings.append(AgentReasoning(
                         task_id=self.task_id,
                         type="screenshot",
-                        content=state.screenshot
+                        content=state.screenshot,
+                        live_url=self.live_url
                     ))
             except Exception as e:
                 pass
@@ -258,6 +265,14 @@ class Executor:
             except Exception as e:
                 logger.error(f"Error closing agent: {e}")
             self.agent = None
+
+        # Clean up VNC session if it exists
+        if self.vnc_session:
+            try:
+                await self.vnc_session.cleanup()
+            except Exception as e:
+                logger.error(f"Error cleaning up VNC session: {e}")
+            self.vnc_session = None
 
         # Clean up stealth profile directory if it was a temporary one
         if self.user_data_dir:

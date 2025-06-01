@@ -4,13 +4,14 @@ import asyncio
 import json
 import logging
 import time
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Tuple, cast
 from browser_use import Controller, ActionResult
 from browser_use.browser import BrowserSession
 import markdownify
 from langchain_core.prompts import PromptTemplate
 from langchain_core.language_models.chat_models import BaseChatModel
 from .scheduler import Scheduler
+from .response import HumanRequest, HumanResponse
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,9 @@ class Tools:
     """Manages a Controller instance with registered tools."""
     
     def __init__(self, scheduler: Optional[Scheduler] = None, task_id: Optional[str] = None,
-                 resource_manager = None, llm_model: Optional[BaseChatModel] = None):
+                 resource_manager = None, llm_model: Optional[BaseChatModel] = None,
+                 human_request_queue: Optional[asyncio.Queue] = None,
+                 human_response_queue: Optional[asyncio.Queue] = None):
         """Initialize Tools with optional scheduler and task_id.
         
         Args:
@@ -28,6 +31,9 @@ class Tools:
             llm_model: Optional LLM model to use for content extraction
         """
         self.llm_model = llm_model
+        self.human_request_queue = human_request_queue
+        self.human_response_queue = human_response_queue
+        
         # Determine which actions to exclude based on constraints
         exclude_actions = []
         if scheduler and scheduler.constraints.allow_parallelism.get("data", False):
@@ -45,9 +51,11 @@ class Tools:
             if task:
                 self.cache_control = task.cache_options
         
-        # Register subtask tools if scheduler is provided
+        # Register tools based on available functionality
         if scheduler:
             self._register_subtask_tools(scheduler)
+        if human_request_queue and human_response_queue:
+            self._register_human_tools()
 
     async def _get_first_subtask_result(self, scheduler: Scheduler, task_ids: List[str], as_final: bool = False) -> ActionResult:
         """Helper function to get first result from multiple subtasks.
@@ -145,7 +153,9 @@ class Tools:
                 task_id = scheduler.schedule_subtask(
                     description=task,
                     parent_task_id=parent_task_id,
-                    cache_control=self.cache_control  # Inherit cache control from parent task
+                    cache_control=self.cache_control,  # Inherit cache control from parent task
+                    human_request_queue=self.human_request_queue,
+                    human_response_queue=self.human_response_queue
                 )
                 
                 # Set initial URL if provided
@@ -390,4 +400,56 @@ class Tools:
                 return ActionResult(
                     success=False,
                     error=f"Failed to get subtask results: {str(e)}"
+                )
+
+    def _register_human_tools(self):
+        """Register human-in-loop tools."""
+        
+        @self.controller.action("Ask for human assistance with CAPTCHA, 2FA, credentials or other input (✓ enabled)")
+        async def ask_human(prompt: str, allow_takeover: bool = False, browser_session: Optional[BrowserSession] = None) -> ActionResult:
+            """Ask for human assistance with a task.
+            
+            Args:
+                prompt: Question or request for the human
+                allow_takeover: Whether to allow human to take control of browser
+                browser_session: Optional browser session for getting live URL
+                
+            Returns:
+                Human's response
+            """
+            try:
+                # Get live URL if browser session available
+                live_url = None
+                if browser_session:
+                    page = await browser_session.get_current_page()
+                    if page:
+                        live_url = page.url
+
+                # Send request to human
+                request = HumanRequest(
+                    task_id=self.task_id,
+                    prompt=prompt,
+                    allow_takeover=allow_takeover,
+                    live_url=live_url
+                )
+                await self.human_request_queue.put(request)
+
+                # Wait for response
+                response = await self.human_response_queue.get()
+                if not isinstance(response, HumanResponse) or response.task_id != self.task_id:
+                    return ActionResult(
+                        success=False,
+                        error="Invalid response received from human"
+                    )
+
+                return ActionResult(
+                    success=True,
+                    extracted_content=f"Human responded: {response.response}",
+                    include_in_memory=True
+                )
+
+            except Exception as e:
+                return ActionResult(
+                    success=False,
+                    error=f"Failed to get human assistance: {str(e)}"
                 )

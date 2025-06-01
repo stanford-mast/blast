@@ -113,6 +113,11 @@ class Constraints(BaseModel):
         description="Whether to use patchright for stealth browser automation"
     )
     
+    require_human_in_loop: bool = Field(
+        default=True,
+        description="Whether to enable human-in-loop capabilities including VNC access and human assistance"
+    )
+    
     share_browser_process: bool = Field(
         default=True,
         description="Whether to share browser process between requests"

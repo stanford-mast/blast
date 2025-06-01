@@ -234,6 +234,7 @@ class ResourceManager:
                 
         return True
         
+
     async def _request_executor(self, task_id: str) -> Optional[Executor]:
         """Request a new executor if constraints allow."""
         if not self.check_constraints_sat(with_new_executors=1):
@@ -300,17 +301,19 @@ class ResourceManager:
                 sensitive_data=sensitive_data
             )
         
-    async def end_task(self, task_id: str):
+    async def end_task(self, task_id: str, cleanup_executor: bool = True):
         """Force end a task.
         
         This method:
         1. Cancels any running executor task
         2. Marks task as completed but unsuccessful
-        3. Cleans up executor resources
+        3. Optionally cleans up executor resources
         4. Updates cost tracking
         
         Args:
             task_id: Task ID
+            cleanup_executor: Whether to clean up the executor (default: True)
+                            Set to False to keep executor alive for task continuity
         """
         task = self.scheduler.tasks.get(task_id)
         if not task:
@@ -327,15 +330,20 @@ class ResourceManager:
             except asyncio.CancelledError:
                 pass
                 
-        # Clean up executor if present
-        if task.executor:
+        # Clean up executor if present and cleanup_executor is True
+        if task.executor and cleanup_executor:
             await self._evict_executor(task_id)
             
-        # Mark task as completed but unsuccessful using scheduler's method
+        # Mark task as completed but unsuccessful
         await self.scheduler.complete_task(task_id, success=False)
 
     async def _evict_executor(self, task_id: str):
         """Evict an executor and clean up its resources."""
+        # Clear interactive queues from task state
+        task = self.scheduler.tasks.get(task_id)
+        if not task:
+            return
+        task.interactive_queues = None
         task = self.scheduler.tasks.get(task_id)
         if not task or not task.executor:
             return
@@ -383,8 +391,6 @@ class ResourceManager:
                 # Always clear the executor reference
                 task.executor = None
         
-        # Clear executor reference
-        task.executor = None
         
     async def _allocate_resources(self):
         """Background task for allocating resources to tasks."""
@@ -429,8 +435,15 @@ class ResourceManager:
                                 
                                 logger.debug(f"Reusing executor from task {other_task.id} for task {task.id}")
                                 
-                                # Create new Tools instance with resource manager and update executor
-                                tools = Tools(scheduler=self.scheduler, task_id=task.id, resource_manager=self)
+                                # Create new Tools instance with resource manager and queues
+                                queues = task.interactive_queues
+                                tools = Tools(
+                                    scheduler=self.scheduler,
+                                    task_id=task.id,
+                                    resource_manager=self,
+                                    human_request_queue=queues['to_client'] if queues else None,
+                                    human_response_queue=queues['from_client'] if queues else None
+                                )
                                 executor.set_task_id(task.id, tools.controller)
                                 
                                 # Start execution with reused executor
@@ -471,6 +484,17 @@ class ResourceManager:
                             lineage,
                             task.cache_options
                         )
+                        
+                        # Create Tools instance with queues
+                        queues = task.interactive_queues
+                        tools = Tools(
+                            scheduler=self.scheduler,
+                            task_id=task_id,
+                            resource_manager=self,
+                            human_request_queue=queues['to_client'] if queues else None,
+                            human_response_queue=queues['from_client'] if queues else None
+                        )
+                        executor.set_task_id(task.id, tools.controller)
                         
                         # Start execution
                         await self.scheduler.start_task_exec(
