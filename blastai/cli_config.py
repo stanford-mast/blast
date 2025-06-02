@@ -66,33 +66,30 @@ def check_model_api_key(model_name: str, env_path: Optional[Path] = None) -> boo
     Returns:
         True if API key is available, False otherwise
     """
-    # Check if model requires OpenAI API key
-    if is_openai_model(model_name):
-        api_key = os.getenv("OPENAI_API_KEY")
-        if api_key:
-            return True
+    api_key = os.getenv("OPENAI_API_KEY")
+    if api_key:
+        return True
             
-        print(f"OpenAI API key required for {model_name}. [https://platform.openai.com/api-keys]")
-        
-        while True:
-            api_key = input("Enter your OpenAI API key: ").strip()
-            if is_valid_openai_key(api_key):
-                # Save to .env file if path provided
-                if env_path and save_api_key("OPENAI_API_KEY", api_key, env_path):
-                    logger.info("API key saved successfully")
-                    print("\nAPI key saved successfully!")
-                
-                os.environ["OPENAI_API_KEY"] = api_key
-                return True
-            else:
-                logger.warning("Invalid API key format provided")
-                print("\nInvalid API key format. API keys should start with 'sk-' and be at least 40 characters long.")
-                retry = input("Would you like to try again? (y/n): ").lower()
-                if retry != 'y':
-                    return False
+    print(f"API key for model {model_name} is not set. Please enter the API key:")
     
-    # For other models, no API key check needed yet
-    return True
+    while True:
+        api_key = input("Enter your API key: ").strip()
+        if api_key:  # Check if the user entered something
+            # Save to .env file if path provided
+            if env_path and save_api_key("OPENAI_API_KEY", api_key, env_path):
+                logger.info("API key saved successfully")
+                print("\nAPI key saved successfully!")
+            
+            os.environ["OPENAI_API_KEY"] = api_key
+            return True
+        else:
+            logger.warning("No API key provided")
+            print("\nNo API key provided.")
+            retry = input("Would you like to try again? (y/n): ").lower()
+            if retry != 'y':
+                return False
+    
+    return True # Should not be reached if logic is correct
 
 def parse_env_param(env_param: Optional[str]) -> Dict[str, str]:
     """Parse --env parameter value into a dictionary.
@@ -123,21 +120,23 @@ def load_environment(env: Optional[Union[str, Dict[str, str]]] = None) -> Path:
     Returns:
         Path to .env file for saving new variables
     """
-    # 1. Load CLI args (highest priority)
+    # 1. Load .env file (highest priority)
+    env_path = Path(".env")
+    if env_path.exists():
+        load_dotenv(env_path)
+
+    # 2. Load CLI args (lower priority, only if not already set)
     if isinstance(env, str):
         env_vars = parse_env_param(env)
         if env_vars:
             for key, value in env_vars.items():
-                os.environ[key] = value
+                if key not in os.environ:  # Check if variable is not already set
+                    os.environ[key] = value
     elif isinstance(env, dict):
         for key, value in env.items():
-            os.environ[key] = value
+            if key not in os.environ:  # Check if variable is not already set
+                os.environ[key] = value
             
-    # 2. Load .env file (lower priority)
-    env_path = Path(".env")
-    if env_path.exists():
-        load_dotenv(env_path)
-        
     return env_path
 
 async def setup_serving_environment(env: Optional[str] = None, config_path: Optional[str] = None) -> Tuple[Path, Engine]:
