@@ -16,7 +16,7 @@ from .utils import find_local_browser, init_model
 from .resource_factory_utils import (
     get_stealth_profile_dir,
     cleanup_stealth_profile_dir,
-    VNCBrowserSession
+    VNCSession
 )
 
 logger = logging.getLogger(__name__)
@@ -61,22 +61,26 @@ async def create_executor(
         if constraints.require_human_in_loop:
             # Get stealth profile directory if using patchright
             user_data_dir = None
-            if constraints.require_patchright:
-                user_data_dir = get_stealth_profile_dir(task_id)
+            vnc_session = None
+            try:
+                if constraints.require_patchright:
+                    user_data_dir = get_stealth_profile_dir(task_id)
 
-            # Create and start VNC session
-            vnc_session = VNCBrowserSession(
-                user_data_dir=user_data_dir,
-                require_patchright=constraints.require_patchright
-            )
-            result = await vnc_session.start()
-            if result:
-                live_url, page = result
+                # Create and start VNC session
+                vnc_session = VNCSession(
+                    user_data_dir=user_data_dir,
+                    require_patchright=constraints.require_patchright
+                )
+                result = await vnc_session.start()
+                if not result:
+                    raise RuntimeError("Failed to start VNC session")
+                    
+                live_url, browser_session = result
                 logger.info(f"Started VNC session with live URL: {live_url}")
                 
                 # Create executor with VNC session
-                return Executor(
-                    browser_session=BrowserSession(page=page),
+                executor = Executor(
+                    browser_session=browser_session,
                     controller=tools.controller,
                     llm=llm,
                     constraints=constraints,
@@ -86,10 +90,29 @@ async def create_executor(
                     scheduler=scheduler,
                     sensitive_data=sensitive_data,
                     vnc_session=vnc_session,
-                    live_url=live_url
+                    live_url=live_url,
+                    user_data_dir=user_data_dir
                 )
-            else:
-                logger.error("Failed to start VNC session")
+                
+                # Success - don't cleanup resources
+                vnc_session = None
+                user_data_dir = None
+                return executor
+                
+            except Exception as e:
+                logger.error(f"Failed to create VNC executor: {e}")
+                # Clean up VNC session if it exists
+                if vnc_session:
+                    try:
+                        await vnc_session.cleanup()
+                    except Exception as cleanup_error:
+                        logger.error(f"Error cleaning up VNC session: {cleanup_error}")
+                # Clean up user data dir if it exists
+                if user_data_dir:
+                    try:
+                        cleanup_stealth_profile_dir(user_data_dir)
+                    except Exception as cleanup_error:
+                        logger.error(f"Error cleaning up stealth profile: {cleanup_error}")
                 return None
 
         # Otherwise use regular browser session
@@ -151,7 +174,10 @@ async def create_executor(
         
     except Exception as e:
         logger.error(f"Failed to create executor: {e}")
-        # Clean up resources on failure
+        # Clean up resources on failure (non-VNC path only)
         if constraints.require_patchright and not constraints.require_human_in_loop:
-            cleanup_stealth_profile_dir(stealth_dir)
+            try:
+                cleanup_stealth_profile_dir(stealth_dir)
+            except Exception as cleanup_error:
+                logger.error(f"Error cleaning up stealth profile: {cleanup_error}")
         return None

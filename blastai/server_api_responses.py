@@ -37,6 +37,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
     # Process stream updates
     async for update in engine_stream:
         # Get task_id and set response_id on first update
+        # logger.debug(f"Streaming update to client for request {request}: {update}")
         task_id = None
         if isinstance(update, AgentHistoryListResponse):
             task_id = update.task_id
@@ -316,7 +317,7 @@ async def handle_responses(request: ResponseRequest, engine: Engine):
     if request.stream:
         result = await engine.run(
             tasks,
-            stream=True,
+            mode="stream",
             previous_response_id=request.previous_response_id,
             cache_control=request.cache_control
         )
@@ -327,6 +328,7 @@ async def handle_responses(request: ResponseRequest, engine: Engine):
     else:
         result = await engine.run(
             tasks,
+            mode="block",
             previous_response_id=request.previous_response_id,
             cache_control=request.cache_control
         )

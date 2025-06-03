@@ -258,31 +258,49 @@ class Executor:
         return self._history
             
     async def cleanup(self):
-        """Clean up resources properly."""
+        """Clean up resources properly.
+        
+        Cleanup order:
+        1. Close agent (which closes browser session)
+        2. Clean up VNC session (which also cleans up its browser session)
+        3. Clean up user data directory
+        4. Clear all references
+        
+        Each cleanup step is attempted even if previous steps fail.
+        All errors are logged but don't prevent other cleanup steps.
+        """
+        errors = []
+        
+        # Close agent first (this closes the browser session)
         if self.agent:
             try:
                 await self.agent.close()
             except Exception as e:
-                logger.error(f"Error closing agent: {e}")
-            self.agent = None
-
+                errors.append(f"Error closing agent: {e}")
+        
         # Clean up VNC session if it exists
         if self.vnc_session:
             try:
                 await self.vnc_session.cleanup()
             except Exception as e:
-                logger.error(f"Error cleaning up VNC session: {e}")
-            self.vnc_session = None
-
+                errors.append(f"Error cleaning up VNC session: {e}")
+        
         # Clean up stealth profile directory if it was a temporary one
         if self.user_data_dir:
             try:
                 cleanup_stealth_profile_dir(self.user_data_dir)
             except Exception as e:
-                logger.error(f"Error cleaning up stealth profile: {e}")
-
-        # Clear browser session reference since it's now closed
+                errors.append(f"Error cleaning up stealth profile: {e}")
+        
+        # Clear all references
+        self.agent = None
+        self.vnc_session = None
         self.browser_session = None
+        self.user_data_dir = None
+        
+        # Log any errors that occurred during cleanup
+        if errors:
+            logger.error("Errors during executor cleanup:\n" + "\n".join(errors))
         
     def get_total_cost(self) -> float:
         """Get total LLM cost for this executor."""

@@ -180,8 +180,7 @@ class Scheduler:
         
     def schedule_task(self, description: str, prerequisite_task_id: Optional[str] = None,
                      parent_task_id: Optional[str] = None, cache_control: str = "",
-                     human_request_queue: Optional[asyncio.Queue] = None,
-                     human_response_queue: Optional[asyncio.Queue] = None) -> str:
+                     interactive_queues: Optional[Dict[str, asyncio.Queue]] = None) -> str:
         """Schedule a new task.
         
         Creates a new task state and checks for cached results.
@@ -207,8 +206,7 @@ class Scheduler:
             parent_task_id=parent_task_id,
             cache_options=cache_control,
             time_schedule=datetime.now(),
-            human_request_queue=human_request_queue,
-            human_response_queue=human_response_queue
+            interactive_queues=interactive_queues
         )
         
         # Add task to dictionary first
@@ -227,8 +225,7 @@ class Scheduler:
         
     def schedule_subtask(self, description: str, parent_task_id: str,
                         cache_control: str = "",
-                        human_request_queue: Optional[asyncio.Queue] = None,
-                        human_response_queue: Optional[asyncio.Queue] = None) -> str:
+                        interactive_queues: Optional[Dict[str, asyncio.Queue]] = None) -> str:
         """Schedule a subtask of an existing task.
         
         Subtasks have a parent-child relationship but can run in parallel.
@@ -251,8 +248,7 @@ class Scheduler:
             parent_task_id=parent_task_id,
             prerequisite_task_id=None,  # Explicitly set no prerequisite
             cache_control=cache_control,
-            human_request_queue=human_request_queue,
-            human_response_queue=human_response_queue
+            interactive_queues=interactive_queues
         )
         return task_id
         
@@ -317,9 +313,9 @@ class Scheduler:
         """Stream task execution events.
         
         This method yields:
-        1. Reasoning events from subtasks (recursively)
-        2. Results from completed subtasks
-        3. Reasoning events from main task
+        1. Events from uncompleted prerequisite tasks and their subtasks
+        2. Events from the main task's subtasks
+        3. Events from the main task itself
         4. Final result when complete
         
         Args:
@@ -332,48 +328,68 @@ class Scheduler:
         if not task:
             raise ValueError(f"Task {task_id} not found")
             
-        # Track seen reasonings and completed subtasks to avoid duplicates
+        # Track seen reasonings and completed tasks to avoid duplicates
         seen_reasonings = {}
-        yielded_completed_deptasks = set()
+        yielded_completed_tasks = set()
+        
+        # Get uncompleted prerequisite tasks
+        dependency_ids = self._get_dependency_ids(task_id)
+        uncompleted_deps = [dep_id for dep_id in dependency_ids
+                          if not self.tasks[dep_id].is_completed]
         
         while True:
-            # First check all tasks in dependency chain
-            dependency_ids = self._get_dependency_ids(task_id)
-            for deptask_id in dependency_ids:
-                deptask = self.tasks[deptask_id]
+            # Get all task IDs to process in this iteration
+            all_task_ids = set()
+            
+            # Add subtasks from uncompleted prerequisites
+            for dep_id in uncompleted_deps:
+                subtask_ids = self._get_subtask_ids(dep_id)
+                all_task_ids.update(subtask_ids)
+                all_task_ids.add(dep_id)
+            
+            # Add main task's subtasks
+            all_task_ids.update(self._get_subtask_ids(task_id))
+            
+            # Ensure main task is processed last
+            all_task_ids.discard(task_id)
+            ordered_task_ids = list(all_task_ids) + [task_id]
+            
+            # Process each task
+            for current_task_id in ordered_task_ids:
+                current_task = self.tasks[current_task_id]
                 
-                # Handle running subtasks
-                if deptask.executor:
+                # Handle running tasks
+                if current_task.executor and not current_task.is_completed:
                     # Get new reasonings
-                    reasonings = await deptask.executor.get_reasoning()
+                    reasonings = await current_task.executor.get_reasoning()
                     for reasoning in reasonings:
                         key = (reasoning.type, reasoning.thought_type, reasoning.content)
-                        if deptask_id not in seen_reasonings:
-                            seen_reasonings[deptask_id] = set()
-                        if key not in seen_reasonings[deptask_id]:
-                            seen_reasonings[deptask_id].add(key)
+                        if current_task_id not in seen_reasonings:
+                            seen_reasonings[current_task_id] = set()
+                        if key not in seen_reasonings[current_task_id]:
+                            seen_reasonings[current_task_id].add(key)
                             yield reasoning
                             
                     # Check for executor result
-                    if deptask.executor_run_task and deptask.executor_run_task.done():
+                    if current_task.executor_run_task and current_task.executor_run_task.done():
                         try:
-                            result = await deptask.executor_run_task
-                            await self.complete_task(deptask_id, result)
-                            if result and deptask_id not in yielded_completed_deptasks:  # Only yield if there's a valid result
-                                yielded_completed_deptasks.add(deptask_id)
+                            result = await current_task.executor_run_task
+                            await self.complete_task(current_task_id, result)
+                            if result and current_task_id not in yielded_completed_tasks:
+                                yielded_completed_tasks.add(current_task_id)
                                 yield AgentHistoryListResponse.from_history(
                                     history=result,
-                                    task_id=deptask_id
+                                    task_id=current_task_id
                                 )
                         except Exception as e:
-                            logger.error(f"Subtask {deptask_id} failed: {e}", exc_info=True)
+                            logger.error(f"Task {current_task_id} failed: {e}", exc_info=True)
                 
-                # Handle cached deptask results
-                elif deptask.is_completed and deptask.result and deptask_id not in yielded_completed_deptasks:  # Only yield if there's a valid result
-                    yielded_completed_deptasks.add(deptask_id)
+                # Handle newly completed tasks
+                elif current_task.is_completed and current_task.result and current_task_id not in yielded_completed_tasks:
+                    yielded_completed_tasks.add(current_task_id)
                     yield AgentHistoryListResponse.from_history(
-                        history=deptask.result,
-                        task_id=deptask_id
+                        history=current_task.result,
+                        task_id=current_task_id
                     )
                         
             # Then check main task
@@ -388,27 +404,8 @@ class Scheduler:
                         seen_reasonings[task_id].add(key)
                         yield reasoning
                         
-                # Check for executor result
-                if task.executor_run_task and task.executor_run_task.done():
-                    try:
-                        result = await task.executor_run_task
-                        await self.complete_task(task_id, result)
-                        yield AgentHistoryListResponse.from_history(
-                            history=result,
-                            task_id=task_id
-                        )
-                        break
-                    except Exception as e:
-                        logger.error(f"Task {task_id} failed: {e}")
-                        break
-                    
-            # Handle cached main task result
-            elif task.is_completed:
-                if task.result:  # Only yield if there's a valid result
-                    yield AgentHistoryListResponse.from_history(
-                        history=task.result,
-                        task_id=task_id
-                    )
+            # Break if main task is completed
+            if task.is_completed:
                 break
                     
             await asyncio.sleep(0.1)  # Prevent tight loop

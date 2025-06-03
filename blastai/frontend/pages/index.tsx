@@ -124,6 +124,7 @@ export default function Home() {
 
       // Process each event from the stream
       for await (const event of stream as unknown as AsyncIterable<StreamEvent>) {
+        console.log('Received event:', event);
         // Get response ID from created event
         if (event.type === 'response.created' && event.response?.id) {
           responseId = event.response.id;

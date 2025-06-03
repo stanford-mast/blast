@@ -160,7 +160,7 @@ async def handle_chat_completions(request: ChatCompletionRequest, engine: Engine
         
         if request.stream:
             try:
-                result = await engine.run(tasks, cache_control=cache_controls, stream=True)
+                result = await engine.run(tasks, cache_control=cache_controls, mode="stream")
                 return StreamingResponse(
                     format_chat_stream(result, request.model),
                     media_type="text/event-stream"
@@ -173,7 +173,7 @@ async def handle_chat_completions(request: ChatCompletionRequest, engine: Engine
                 raise HTTPException(status_code=500, detail=str(e))
         else:
             try:
-                result = await engine.run(tasks, cache_control=cache_controls)
+                result = await engine.run(tasks, cache_control=cache_controls, mode="block")
                 return JSONResponse({
                     "id": f"chatcmpl-{result.response_id.split('_')[1]}",
                     "object": "chat.completion",

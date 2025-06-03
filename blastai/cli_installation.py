@@ -168,3 +168,209 @@ def install_browsers():
     except Exception as e:
         logger.error(f"Error installing browsers: {e}")
         print("Please run 'python -m playwright install chromium' manually")
+
+
+def _get_novnc_path() -> str:
+    """Get platform-specific path to noVNC files.
+    
+    Returns:
+        Path to noVNC web files directory
+    """
+    if sys.platform == 'darwin':
+        paths = [
+            '/usr/local/share/novnc',  # brew default
+            '/opt/homebrew/share/novnc',  # M1 Mac brew
+        ]
+        for path in paths:
+            if os.path.exists(path):
+                return path
+        raise RuntimeError("noVNC files not found - please reinstall with 'brew install novnc'")
+    else:
+        return '/usr/share/novnc'
+
+
+def check_vnc_installation() -> bool:
+    """Check if VNC dependencies are installed.
+    
+    Returns:
+        bool: True if all required dependencies are installed, False otherwise
+    """
+    try:
+        # Check for required executables
+        required = ['websockify', 'openbox', 'xdotool', 'x11vnc']
+        if sys.platform == 'linux':
+            required.append('Xvfb')
+            
+        for cmd in required:
+            if not shutil.which(cmd):
+                return False
+                
+        # Check noVNC files exist
+        try:
+            _get_novnc_path()
+        except RuntimeError:
+            return False
+            
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error checking VNC installation: {e}")
+        return False
+
+
+def install_vnc_dependencies():
+    """Install required VNC dependencies if not already installed.
+
+    Raises:
+        RuntimeError: If installation fails or platform is not supported
+    """
+    if sys.platform == 'win32':
+        logger.error("VNC support not available on Windows")
+        raise RuntimeError(
+            "VNC support is only available on Linux and MacOS systems. "
+            "For Windows users, please use WSL or a Linux virtual machine."
+        )
+        
+    try:
+        # Check if required packages are installed
+        subprocess.run(
+            "which " + ("Xvfb " if sys.platform == 'linux' else "") + "websockify openbox xdotool x11vnc",
+            shell=True,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        logger.debug("VNC dependencies already installed")
+        return
+    except subprocess.CalledProcessError:
+        pass
+        
+    # Install missing packages based on platform
+    logger.debug("Installing VNC dependencies...")
+    try:
+        if sys.platform == 'darwin':
+            # Check and install XQuartz first
+            if not Path("/opt/X11").exists():
+                logger.debug("Installing XQuartz...")
+                try:
+                    result = subprocess.run(
+                        "brew install --cask xquartz",
+                        shell=True,
+                        check=True,
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.stdout:
+                        logger.debug(f"XQuartz installation output: {result.stdout}")
+                    logger.warning("XQuartz installed - system restart may be required")
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"Failed to install XQuartz: {e}")
+                    if "already installed" in str(e.stderr):
+                        logger.warning("XQuartz appears to be installed but /opt/X11 not found - restart may be required")
+                    else:
+                        raise RuntimeError("Failed to install XQuartz - please install manually via 'brew install --cask xquartz'") from e
+            
+            # Install other dependencies via brew
+            try:
+                result = subprocess.run(
+                    "brew install x11vnc websockify openbox xdotool",
+                    shell=True,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                if result.stdout:
+                    logger.debug(f"Brew installation output: {result.stdout}")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to install dependencies: {e}")
+                # Check if any packages were already installed
+                if "already installed" in str(e.stderr):
+                    logger.debug("Some packages already installed, continuing...")
+                else:
+                    raise RuntimeError("Failed to install dependencies - please install manually via 'brew install x11vnc websockify openbox xdotool'") from e
+            
+        else:  # Linux
+            # Update package lists if needed
+            try:
+                result = subprocess.run(
+                    "find /var/lib/apt/lists -mtime -7 -type f | grep -v 'partial' | wc -l",
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                if int(result.stdout.strip()) == 0:
+                    logger.debug("Running apt-get update...")
+                    try:
+                        result = subprocess.run(
+                            "apt-get update",
+                            shell=True,
+                            check=True,
+                            capture_output=True,
+                            text=True
+                        )
+                        if result.stdout:
+                            logger.debug(f"apt-get update output: {result.stdout}")
+                    except subprocess.CalledProcessError as e:
+                        logger.error(f"apt-get update failed: {e}")
+                        if "Permission denied" in str(e.stderr):
+                            raise RuntimeError("Please run with sudo or as root") from e
+                        raise RuntimeError("Failed to update package lists") from e
+            except (subprocess.CalledProcessError, ValueError) as e:
+                logger.error(f"Failed to check apt lists: {e}")
+                # Try update anyway
+                try:
+                    logger.debug("Running apt-get update...")
+                    result = subprocess.run(
+                        "apt-get update",
+                        shell=True,
+                        check=True,
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.stdout:
+                        logger.debug(f"apt-get update output: {result.stdout}")
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"apt-get update failed: {e}")
+                    if "Permission denied" in str(e.stderr):
+                        raise RuntimeError("Please run with sudo or as root") from e
+                    raise RuntimeError("Failed to update package lists") from e
+            
+            # Install packages
+            try:
+                result = subprocess.run(
+                    "apt-get install -y xvfb x11vnc novnc websockify openbox xdotool",
+                    shell=True,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                if result.stdout:
+                    logger.debug(f"Apt installation output: {result.stdout}")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to install packages: {e}")
+                if "Permission denied" in str(e.stderr):
+                    raise RuntimeError("Please run with sudo or as root") from e
+                elif "Could not get lock" in str(e.stderr):
+                    raise RuntimeError("Another package manager is running. Please wait and try again.") from e
+                else:
+                    raise RuntimeError(
+                        "Failed to install dependencies. Please try manually:\n"
+                        "sudo apt-get update && sudo apt-get install -y xvfb x11vnc novnc websockify openbox xdotool"
+                    ) from e
+                
+        logger.debug("Successfully installed VNC dependencies")
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to install dependencies: {e}")
+        if sys.platform == 'darwin':
+            raise RuntimeError(
+                "Failed to install VNC dependencies. Please try manually:\n"
+                "1. brew install --cask xquartz\n"
+                "2. brew install x11vnc websockify openbox xdotool"
+            ) from e
+        else:
+            raise RuntimeError(
+                "Failed to install VNC dependencies. Please try manually:\n"
+                "sudo apt-get update && sudo apt-get install -y xvfb x11vnc novnc websockify openbox xdotool"
+            ) from e

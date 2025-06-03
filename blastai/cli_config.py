@@ -168,7 +168,10 @@ async def setup_serving_environment(env: Optional[str] = None, config_path: Opti
         sys.exit(1)
     
     # Only install if not already installed
-    from .cli_installation import check_installation_state, install_browsers
+    from .cli_installation import (
+        check_installation_state, install_browsers,
+        check_vnc_installation, install_vnc_dependencies
+    )
     if not check_installation_state():
         try:
             from playwright.sync_api import sync_playwright
@@ -177,5 +180,16 @@ async def setup_serving_environment(env: Optional[str] = None, config_path: Opti
                     install_browsers()
         except Exception:
             install_browsers()
+
+    # Check and install VNC dependencies if human-in-loop is enabled
+    if engine.constraints.require_human_in_loop:
+        try:
+            if not check_vnc_installation():
+                logger.info("Installing VNC dependencies...")
+                install_vnc_dependencies()
+        except Exception as e:
+            logger.error(f"Failed to install VNC dependencies: {e}")
+            print("\nFailed to install VNC dependencies. Please install manually.")
+            sys.exit(1)
         
     return env_path, engine
