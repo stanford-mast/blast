@@ -6,8 +6,9 @@ import shutil
 import subprocess
 import json
 import logging
+import platform
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 from .utils import get_appdata_dir
 
@@ -27,7 +28,7 @@ def check_node_installation() -> Optional[str]:
     if not node_cmd:
         logger.error("Node.js not found")
         # Show installation instructions (essential user guidance)
-        print("""
+        logger.warning("""
 Node.js not found. The web frontend requires Node.js.
 
 To install Node.js:
@@ -42,78 +43,222 @@ Once Node.js is installed, run 'blastai serve' again to use the web frontend
     return node_cmd
 
 def check_npm_installation() -> Optional[str]:
-    """Check if npm is installed and available."""
+    """Check if npm is installed and available, and attempt to install if not found."""
     npm_cmd = find_executable('npm', 'npm.cmd')
-    if not npm_cmd:
-        logger.error("npm not found")
-        # Show installation instructions (essential user guidance)
-        instructions = "\nError: npm not found. The web frontend requires Node.js/npm.\n\nTo install Node.js and npm:\n"
-        
+    if npm_cmd:
+        return npm_cmd
+
+    logger.info("npm not found, attempting to install Node.js and npm...")
+    
+    try:
         if sys.platform == 'win32':
-            instructions += """
-On Windows:
+            # On Windows, show manual installation instructions
+            logger.error("npm not found")
+            logger.warning("""
+Node.js/npm installation required. Please:
 1. Visit https://nodejs.org
 2. Download and run the Windows Installer (.msi)
-3. Follow the installation wizard (this will install both Node.js and npm)
-4. Open a new terminal and run 'npm --version' to verify
-"""
+3. Follow the installation wizard
+4. Restart your terminal and try again
+""")
+            return None
+            
         elif sys.platform == 'darwin':
-            instructions += """
-On macOS:
-Option 1 - Using Homebrew (recommended):
-1. Install Homebrew if not installed:
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-2. Install Node.js (includes npm):
-   brew install node
-
-Option 2 - Manual installation:
+            # On macOS, try using Homebrew
+            try:
+                # Check if Homebrew is installed
+                subprocess.run(['which', 'brew'], check=True, capture_output=True)
+                # Install Node.js (includes npm)
+                subprocess.run(['brew', 'install', 'node'], check=True)
+                npm_cmd = find_executable('npm', 'npm.cmd')
+                if npm_cmd:
+                    logger.info("Successfully installed Node.js and npm")
+                    return npm_cmd
+            except subprocess.CalledProcessError:
+                logger.error("Homebrew not found or installation failed")
+                logger.warning("""
+Failed to install Node.js/npm. Please install manually:
 1. Visit https://nodejs.org
 2. Download and run the macOS Installer (.pkg)
-3. Open a new terminal and run 'npm --version' to verify
-"""
+3. Restart your terminal and try again
+""")
+                return None
+                
         else:  # Linux
-            instructions += """
-On Linux:
-Option 1 - Using package manager (recommended):
+            try:
+                # Try apt-get first (Ubuntu/Debian)
+                try:
+                    subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+                    subprocess.run(['sudo', 'apt-get', 'install', '-y', 'nodejs', 'npm'], check=True)
+                except subprocess.CalledProcessError:
+                    # If apt-get fails, try dnf (Fedora)
+                    subprocess.run(['sudo', 'dnf', 'install', '-y', 'nodejs', 'npm'], check=True)
+                
+                npm_cmd = find_executable('npm', 'npm.cmd')
+                if npm_cmd:
+                    logger.info("Successfully installed Node.js and npm")
+                    return npm_cmd
+                    
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to install Node.js/npm: {e}")
+                logger.warning("""
+Failed to install Node.js/npm automatically. Please install manually:
+
 Ubuntu/Debian:
-1. sudo apt update
-2. sudo apt install nodejs npm
+    sudo apt-get update && sudo apt-get install -y nodejs npm
 
 Fedora:
-sudo dnf install nodejs npm
+    sudo dnf install -y nodejs npm
 
-Option 2 - Using Node Version Manager (nvm):
-1. Install nvm:
-   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-2. Restart your terminal
-3. Install Node.js (includes npm):
-   nvm install --lts
-"""
-        instructions += """
-After installation:
-1. Close and reopen your terminal
-2. Run 'npm --version' to verify npm is installed
-3. Run 'blastai serve' again to start the web frontend
-"""
-        print(instructions)
+Or using nvm (recommended):
+1. curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+2. Restart terminal
+3. nvm install --lts
+""")
+                return None
+                
+    except Exception as e:
+        logger.error(f"Error during Node.js/npm installation: {e}")
         return None
         
     return npm_cmd
 
-def check_installation_state() -> bool:
+def check_installation_state() -> Dict[str, bool]:
     """Check if browsers and dependencies are already installed."""
     state_file = get_appdata_dir() / "installation_state.json"
+    default_state = {
+        "browsers_installed": False,
+        "vnc_installed": False
+    }
     if state_file.exists():
         with open(state_file) as f:
             state = json.load(f)
-            return state.get("browsers_installed", False)
-    return False
+            return {**default_state, **state}
+    return default_state
 
-def save_installation_state():
-    """Save that installation was successful."""
+def save_installation_state(state_updates: Dict[str, bool]):
+    """Save installation state updates."""
     state_file = get_appdata_dir() / "installation_state.json"
+    current_state = check_installation_state()
+    updated_state = {**current_state, **state_updates}
     with open(state_file, "w") as f:
-        json.dump({"browsers_installed": True}, f)
+        json.dump(updated_state, f)
+
+def check_vnc_installation() -> bool:
+    """Check if VNC dependencies are installed."""
+    # Required executables
+    required = ['Xvnc']
+    
+    # Window managers (need at least one)
+    wm_options = ['matchbox-window-manager', 'fluxbox']
+    
+    # Check for required executables
+    missing = []
+    for cmd in required:
+        if not find_executable(cmd):
+            missing.append(cmd)
+            
+    # Check for at least one window manager
+    has_wm = False
+    for wm in wm_options:
+        if find_executable(wm):
+            has_wm = True
+            break
+    if not has_wm:
+        missing.extend(wm_options)
+        
+    # Check for noVNC installation
+    novnc_paths = [
+        "/usr/share/novnc",
+        "/usr/local/share/novnc",
+        str(Path.home() / "noVNC")
+    ]
+    has_novnc = any(Path(p).exists() for p in novnc_paths)
+    if not has_novnc:
+        missing.append("noVNC")
+        
+    # Check for websockify (required by noVNC)
+    if not find_executable('websockify'):
+        missing.append('websockify')
+        
+    return len(missing) == 0
+
+def install_vnc_dependencies() -> bool:
+    """Install VNC and related dependencies."""
+    system = platform.system().lower()
+    logger.info("Installing VNC dependencies...")
+    
+    try:
+        if system == 'darwin':
+            # macOS: Use Homebrew
+            try:
+                subprocess.run(['brew', 'install', 'tigervnc', 'fluxbox', 'websockify'], check=True)
+                # Clone noVNC
+                novnc_dir = Path.home() / "noVNC"
+                if not novnc_dir.exists():
+                    subprocess.run([
+                        'git', 'clone', 'https://github.com/novnc/noVNC.git',
+                        str(novnc_dir)
+                    ], check=True)
+                return True
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to install VNC dependencies via Homebrew: {e}")
+                return False
+                
+        elif system == 'linux':
+            try:
+                # Try apt-get first (Ubuntu/Debian)
+                try:
+                    subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+                    subprocess.run(['sudo', 'apt-get', 'install', '-y',
+                        'tigervnc-standalone-server',
+                        'matchbox-window-manager',
+                        'fluxbox',
+                        'websockify',
+                        'git'
+                    ], check=True)
+                except subprocess.CalledProcessError:
+                    # If apt-get fails, try dnf (Fedora)
+                    subprocess.run(['sudo', 'dnf', 'install', '-y',
+                        'tigervnc-server',
+                        'matchbox-window-manager',
+                        'fluxbox',
+                        'websockify',
+                        'git'
+                    ], check=True)
+                
+                # Clone noVNC
+                novnc_dir = Path.home() / "noVNC"
+                if not novnc_dir.exists():
+                    subprocess.run([
+                        'git', 'clone', 'https://github.com/novnc/noVNC.git',
+                        str(novnc_dir)
+                    ], check=True)
+                return True
+                
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to install VNC dependencies: {e}")
+                logger.warning("""
+Failed to install VNC dependencies automatically. Please install manually:
+
+Ubuntu/Debian:
+    sudo apt-get update && sudo apt-get install -y tigervnc-standalone-server matchbox-window-manager fluxbox websockify git
+
+Fedora:
+    sudo dnf install -y tigervnc-server matchbox-window-manager fluxbox websockify git
+
+Then clone noVNC:
+    git clone https://github.com/novnc/noVNC.git ~/noVNC
+""")
+                return False
+                
+        else:
+            logger.error(f"Unsupported OS for automatic VNC installation: {system}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error during VNC dependency installation: {e}")
+        return False
 
 def install_browsers():
     """Install required browsers and dependencies for Playwright."""
@@ -139,7 +284,8 @@ def install_browsers():
             logger.info("Successfully installed Playwright browsers")
         
         # Only install system dependencies on Linux if not already installed
-        if system == 'linux' and not check_installation_state():
+        state = check_installation_state()
+        if system == 'linux' and not state["browsers_installed"]:
             try:
                 # Try using playwright install-deps first
                 subprocess.run([sys.executable, '-m', 'playwright', 'install-deps'], check=True)
@@ -159,218 +305,12 @@ def install_browsers():
                     ], check=True)
                 except subprocess.CalledProcessError as e:
                     logger.error(f"Error installing system dependencies: {e}")
-                    print("Please run 'sudo apt-get install libnss3 libnspr4 libasound2' manually")
+                    logger.warning("Please run 'sudo apt-get install libnss3 libnspr4 libasound2' manually")
                     return
                 
         # Save successful installation state
-        save_installation_state()
+        save_installation_state({"browsers_installed": True})
         
     except Exception as e:
         logger.error(f"Error installing browsers: {e}")
-        print("Please run 'python -m playwright install chromium' manually")
-
-
-def _get_novnc_path() -> str:
-    """Get platform-specific path to noVNC files.
-    
-    Returns:
-        Path to noVNC web files directory
-    """
-    if sys.platform == 'darwin':
-        paths = [
-            '/usr/local/share/novnc',  # brew default
-            '/opt/homebrew/share/novnc',  # M1 Mac brew
-        ]
-        for path in paths:
-            if os.path.exists(path):
-                return path
-        raise RuntimeError("noVNC files not found - please reinstall with 'brew install novnc'")
-    else:
-        return '/usr/share/novnc'
-
-
-def check_vnc_installation() -> bool:
-    """Check if VNC dependencies are installed.
-    
-    Returns:
-        bool: True if all required dependencies are installed, False otherwise
-    """
-    try:
-        # Check for required executables
-        required = ['websockify', 'openbox', 'xdotool', 'x11vnc']
-        if sys.platform == 'linux':
-            required.append('Xvfb')
-            
-        for cmd in required:
-            if not shutil.which(cmd):
-                return False
-                
-        # Check noVNC files exist
-        try:
-            _get_novnc_path()
-        except RuntimeError:
-            return False
-            
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error checking VNC installation: {e}")
-        return False
-
-
-def install_vnc_dependencies():
-    """Install required VNC dependencies if not already installed.
-
-    Raises:
-        RuntimeError: If installation fails or platform is not supported
-    """
-    if sys.platform == 'win32':
-        logger.error("VNC support not available on Windows")
-        raise RuntimeError(
-            "VNC support is only available on Linux and MacOS systems. "
-            "For Windows users, please use WSL or a Linux virtual machine."
-        )
-        
-    try:
-        # Check if required packages are installed
-        subprocess.run(
-            "which " + ("Xvfb " if sys.platform == 'linux' else "") + "websockify openbox xdotool x11vnc",
-            shell=True,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        logger.debug("VNC dependencies already installed")
-        return
-    except subprocess.CalledProcessError:
-        pass
-        
-    # Install missing packages based on platform
-    logger.debug("Installing VNC dependencies...")
-    try:
-        if sys.platform == 'darwin':
-            # Check and install XQuartz first
-            if not Path("/opt/X11").exists():
-                logger.debug("Installing XQuartz...")
-                try:
-                    result = subprocess.run(
-                        "brew install --cask xquartz",
-                        shell=True,
-                        check=True,
-                        capture_output=True,
-                        text=True
-                    )
-                    if result.stdout:
-                        logger.debug(f"XQuartz installation output: {result.stdout}")
-                    logger.warning("XQuartz installed - system restart may be required")
-                except subprocess.CalledProcessError as e:
-                    logger.error(f"Failed to install XQuartz: {e}")
-                    if "already installed" in str(e.stderr):
-                        logger.warning("XQuartz appears to be installed but /opt/X11 not found - restart may be required")
-                    else:
-                        raise RuntimeError("Failed to install XQuartz - please install manually via 'brew install --cask xquartz'") from e
-            
-            # Install other dependencies via brew
-            try:
-                result = subprocess.run(
-                    "brew install x11vnc websockify openbox xdotool",
-                    shell=True,
-                    check=True,
-                    capture_output=True,
-                    text=True
-                )
-                if result.stdout:
-                    logger.debug(f"Brew installation output: {result.stdout}")
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to install dependencies: {e}")
-                # Check if any packages were already installed
-                if "already installed" in str(e.stderr):
-                    logger.debug("Some packages already installed, continuing...")
-                else:
-                    raise RuntimeError("Failed to install dependencies - please install manually via 'brew install x11vnc websockify openbox xdotool'") from e
-            
-        else:  # Linux
-            # Update package lists if needed
-            try:
-                result = subprocess.run(
-                    "find /var/lib/apt/lists -mtime -7 -type f | grep -v 'partial' | wc -l",
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-                if int(result.stdout.strip()) == 0:
-                    logger.debug("Running apt-get update...")
-                    try:
-                        result = subprocess.run(
-                            "apt-get update",
-                            shell=True,
-                            check=True,
-                            capture_output=True,
-                            text=True
-                        )
-                        if result.stdout:
-                            logger.debug(f"apt-get update output: {result.stdout}")
-                    except subprocess.CalledProcessError as e:
-                        logger.error(f"apt-get update failed: {e}")
-                        if "Permission denied" in str(e.stderr):
-                            raise RuntimeError("Please run with sudo or as root") from e
-                        raise RuntimeError("Failed to update package lists") from e
-            except (subprocess.CalledProcessError, ValueError) as e:
-                logger.error(f"Failed to check apt lists: {e}")
-                # Try update anyway
-                try:
-                    logger.debug("Running apt-get update...")
-                    result = subprocess.run(
-                        "apt-get update",
-                        shell=True,
-                        check=True,
-                        capture_output=True,
-                        text=True
-                    )
-                    if result.stdout:
-                        logger.debug(f"apt-get update output: {result.stdout}")
-                except subprocess.CalledProcessError as e:
-                    logger.error(f"apt-get update failed: {e}")
-                    if "Permission denied" in str(e.stderr):
-                        raise RuntimeError("Please run with sudo or as root") from e
-                    raise RuntimeError("Failed to update package lists") from e
-            
-            # Install packages
-            try:
-                result = subprocess.run(
-                    "apt-get install -y xvfb x11vnc novnc websockify openbox xdotool",
-                    shell=True,
-                    check=True,
-                    capture_output=True,
-                    text=True
-                )
-                if result.stdout:
-                    logger.debug(f"Apt installation output: {result.stdout}")
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to install packages: {e}")
-                if "Permission denied" in str(e.stderr):
-                    raise RuntimeError("Please run with sudo or as root") from e
-                elif "Could not get lock" in str(e.stderr):
-                    raise RuntimeError("Another package manager is running. Please wait and try again.") from e
-                else:
-                    raise RuntimeError(
-                        "Failed to install dependencies. Please try manually:\n"
-                        "sudo apt-get update && sudo apt-get install -y xvfb x11vnc novnc websockify openbox xdotool"
-                    ) from e
-                
-        logger.debug("Successfully installed VNC dependencies")
-        
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to install dependencies: {e}")
-        if sys.platform == 'darwin':
-            raise RuntimeError(
-                "Failed to install VNC dependencies. Please try manually:\n"
-                "1. brew install --cask xquartz\n"
-                "2. brew install x11vnc websockify openbox xdotool"
-            ) from e
-        else:
-            raise RuntimeError(
-                "Failed to install VNC dependencies. Please try manually:\n"
-                "sudo apt-get update && sudo apt-get install -y xvfb x11vnc novnc websockify openbox xdotool"
-            ) from e
+        logger.warning("Please run 'python -m playwright install chromium' manually")

@@ -84,8 +84,9 @@ def update_metrics_display(metrics=None, force_clear=False):
 async def display_metrics(client: httpx.AsyncClient, server_port: int):
     """Display and update metrics every second."""
     try:
+        global _metrics_display
         # Initialize metrics display but don't print yet
-        display = get_metrics_display()
+        _metrics_display = get_metrics_display()
         
         # Wait briefly for server to start
         await asyncio.sleep(0.5)
@@ -93,7 +94,7 @@ async def display_metrics(client: httpx.AsyncClient, server_port: int):
         # Print initial metrics after panel (just one newline)
         print("\n")  # Single line after panel
         print(format_metrics(None))  # Print initial empty metrics
-        display.initialized = True  # Mark as initialized for future updates
+        _metrics_display.initialized = True  # Mark as initialized for future updates
         
         retries = 0
         max_retries = 3
@@ -116,10 +117,12 @@ async def display_metrics(client: httpx.AsyncClient, server_port: int):
                 retries = 0
                 
                 # Always update display on first successful metrics fetch
-                if display.last_metrics is None:
-                    update_metrics_display(metrics)
-                # Then only update when metrics change
-                elif metrics != display.last_metrics:
+                # Format current metrics
+                current_formatted = format_metrics(metrics)
+                last_formatted = format_metrics(_metrics_display.last_metrics)
+                
+                # Update if first time or if formatted output differs
+                if _metrics_display.last_metrics is None or current_formatted != last_formatted:
                     update_metrics_display(metrics)
                 
                 await asyncio.sleep(1.0)  # Update every second
@@ -127,16 +130,18 @@ async def display_metrics(client: httpx.AsyncClient, server_port: int):
             except Exception as e:
                 retries += 1
                 if retries > max_retries:
-                    logger.error(f"Failed to fetch metrics after {max_retries} retries: {e}")
+                    # Don't log error, just break - server might not be ready
                     break
-                    
-                logger.debug(f"Error fetching metrics (attempt {retries}/{max_retries}): {e}")
+                
+                # Only log connection errors, not display errors
+                if "Connection refused" in str(e):
+                    logger.debug(f"Server not ready (attempt {retries}/{max_retries})")
                 await asyncio.sleep(retry_delay)  # Wait before retrying
                 
     except asyncio.CancelledError:
         # Just reset display state without clearing screen
-        display = get_metrics_display()
-        display.reset()
+        _metrics_display = get_metrics_display()
+        _metrics_display.reset()
 
 async def run_server_and_frontend(
     server,

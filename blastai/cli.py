@@ -12,10 +12,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-# Set up logging before other imports
 from .config import Settings
 from .logging_setup import setup_logging
-setup_logging(Settings())
 
 import rich_click as click
 from rich.console import Console

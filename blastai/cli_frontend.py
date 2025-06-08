@@ -135,6 +135,8 @@ async def run_web_frontend(server_port: int, web_port: int):
         while True:
             await asyncio.sleep(1)
     except asyncio.CancelledError:
+        web_logger.debug("Web frontend shutdown initiated")
+        
         # Clean up process first
         process.terminate()
         try:
@@ -155,8 +157,8 @@ async def run_web_frontend(server_port: int, web_port: int):
         # Wait briefly for output thread
         output_thread.join(timeout=0.5)
         
-        # Now we can raise
-        raise
+        # Don't re-raise, just return
+        return
     finally:
         # Final cleanup attempt
         if process.poll() is None:

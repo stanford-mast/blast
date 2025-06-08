@@ -1,395 +1,28 @@
-"""Utilities for resource factory operations."""
+"""Utilities for BLAST resource factory including VNC support."""
 
 import asyncio
-import logging
 import os
+import re
 import shutil
+import socket
 import subprocess
 import sys
-import time
+import platform
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple, Union
 
-from browser_use.browser import BrowserSession, BrowserProfile
+from browser_use import BrowserSession, BrowserProfile
 from patchright.async_api import async_playwright as async_patchright
-from playwright.async_api import async_playwright
 
-from .cli_installation import _get_novnc_path
-from .vnc_utils import (
-    _vnc_lock, _active_displays,
-    _check_port_in_use, _find_available_display,
-    _configure_xstartup, _configure_openbox,
-    _kill_port_process
-)
-
+import logging
 logger = logging.getLogger(__name__)
 
-class VNCSession:
-    """Manages a VNC session with browser control for human-in-loop automation.
-    
-    Uses X11 displays in range 1-20. For each display N:
-    - VNC server runs on port 5900 + N
-    - noVNC websocket proxy runs on port 6080 + N
-    """
-    
-    def __init__(self, display_no: Optional[int] = None, geometry: str = "1280x720",
-                 user_data_dir: Optional[str] = None, require_patchright: bool = True,
-                 initial_url: str = "https://google.com"):
-        """Initialize VNC session.
-        
-        Args:
-            display_no: Optional display number (auto-assigned if None)
-            geometry: Screen resolution (width x height)
-            user_data_dir: Optional browser profile directory
-            require_patchright: Whether to use patchright for stealth
-            initial_url: Initial URL to load
-            
-        Raises:
-            RuntimeError: If display number is unavailable or setup fails
-        """
-        try:
-            # Check platform support first
-            if sys.platform == 'win32':
-                logger.error("VNC support not available on Windows")
-                raise RuntimeError(
-                    "VNC support is only available on Linux and MacOS systems. "
-                    "For Windows users, please use WSL or a Linux virtual machine."
-                )
-            
-            # Find first available display number if not specified
-            if display_no is None:
-                display_no = _find_available_display()
-                if display_no is None:
-                    raise RuntimeError("No available display numbers")
-            elif display_no in _active_displays or _check_port_in_use(5900 + display_no) or _check_port_in_use(6080 + display_no):
-                raise RuntimeError(f"Display :{display_no} or its ports are already in use")
-            else:
-                _active_displays.add(display_no)
-            
-            self.display_no = display_no
-            self.geometry = geometry
-            self.vnc_port = 5900 + display_no
-            self.http_port = 6080 + display_no
-            self.web_proc = None
-            self.browser_session = None
-            self.user_data_dir = user_data_dir
-            self.require_patchright = require_patchright
-            self.initial_url = initial_url
-            
-            # Set up VNC environment
-            try:
-                # Configure VNC and window manager
-                _configure_xstartup(self.display_no)
-                _configure_openbox(self.display_no)
-            except Exception as e:
-                _active_displays.remove(display_no)
-                raise RuntimeError(f"Failed to set up VNC environment: {e}") from e
-                
-        except Exception as e:
-            logger.error(f"Failed to initialize VNC session: {e}")
-            raise
-        
-        
-    async def start(self) -> Optional[Tuple[str, BrowserSession]]:
-        """Start VNC session and browser session.
-        
-        Returns:
-            Optional[Tuple[str, BrowserSession]]: Tuple of (live_url, browser_session) or None if failed
-            
-        Raises:
-            RuntimeError: If no display is available or VNC server fails to start
-        """
-        try:
-            # Start VNC server with synchronized operations
-            with _vnc_lock:
-                # Start Xvfb
-                logger.debug(f"Starting Xvfb on display :{self.display_no}")
-                # On MacOS, XQuartz provides the X server
-                if sys.platform == 'darwin':
-                    xvfb_cmd = f"Xvfb :{self.display_no} -screen 0 {self.geometry}x24 -retro"
-                else:
-                    xvfb_cmd = f"Xvfb :{self.display_no} -screen 0 {self.geometry}x24"
-                self.xvfb_proc = subprocess.Popen(
-                    xvfb_cmd,
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=os.environ.copy(),
-                    text=True
-                )
-                
-                # Wait for Xvfb to start
-                max_attempts = 10
-                for attempt in range(max_attempts):
-                    if self.xvfb_proc.poll() is not None:
-                        stdout, stderr = self.xvfb_proc.communicate()
-                        logger.error(f"Xvfb failed to start. stdout: {stdout}, stderr: {stderr}")
-                        raise RuntimeError("Xvfb process terminated unexpectedly")
-                        
-                    try:
-                        result = subprocess.run(
-                            f"{'xdpyinfo' if sys.platform == 'linux' else '/opt/X11/bin/xdpyinfo'} -display :{self.display_no}",
-                            shell=True,
-                            check=True,
-                            capture_output=True,
-                            text=True
-                        )
-                        # logger.debug(f"Xvfb check output: {result.stdout}")
-                        break
-                    except subprocess.CalledProcessError as e:
-                        logger.debug(f"Waiting for Xvfb, attempt {attempt + 1}: {e.stderr}")
-                        if attempt == max_attempts - 1:
-                            raise RuntimeError("Failed to start Xvfb")
-                        time.sleep(0.5)
-                
-                # Set display environment variable
-                os.environ["DISPLAY"] = f":{self.display_no}"
-                
-                # Start VNC server
-                logger.debug(f"Starting VNC server on display :{self.display_no}")
-                # On MacOS, x11vnc needs additional options for XQuartz
-                if sys.platform == 'darwin':
-                    vnc_cmd = f"x11vnc -display :{self.display_no} -geometry {self.geometry} -forever -shared -rfbport {self.vnc_port} -nopw -listen localhost -xkb -noxrecord -noxfixes -noxdamage"
-                else:
-                    vnc_cmd = f"x11vnc -display :{self.display_no} -geometry {self.geometry} -forever -shared -rfbport {self.vnc_port} -nopw -listen localhost"
-                self.vnc_proc = subprocess.Popen(
-                    vnc_cmd,
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=os.environ.copy(),
-                    text=True
-                )
-                
-                # Check VNC server started
-                if self.vnc_proc.poll() is not None:
-                    stdout, stderr = self.vnc_proc.communicate()
-                    logger.error(f"VNC server failed to start. stdout: {stdout}, stderr: {stderr}")
-                    raise RuntimeError("VNC server process terminated unexpectedly")
-                    
-                logger.debug("VNC server started successfully")
-                
-                # Wait for VNC server
-                max_attempts = 10
-                for attempt in range(max_attempts):
-                    if _check_port_in_use(self.vnc_port):
-                        break
-                    if attempt == max_attempts - 1:
-                        raise RuntimeError("Failed to start VNC server")
-                    time.sleep(0.5)
-                
-                # Start noVNC proxy
-                logger.debug(f"Starting noVNC proxy on port {self.http_port}")
-                # Start noVNC proxy with output logging
-                logger.debug(f"Starting noVNC proxy on port {self.http_port}")
-                self.web_proc = subprocess.Popen(
-                    f"websockify --web {_get_novnc_path()} {self.http_port} localhost:{self.vnc_port}",
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=os.environ.copy(),
-                    text=True
-                )
-                
-                # Check if process started successfully
-                if self.web_proc.poll() is not None:
-                    stdout, stderr = self.web_proc.communicate()
-                    logger.error(f"noVNC proxy failed to start. stdout: {stdout}, stderr: {stderr}")
-                    raise RuntimeError("noVNC proxy process terminated unexpectedly")
-                
-                logger.debug("noVNC proxy process started")
-                
-                # Wait for proxy port to be available
-                max_attempts = 10
-                for attempt in range(max_attempts):
-                    if _check_port_in_use(self.http_port):
-                        logger.debug("noVNC proxy port is ready")
-                        break
-                        
-                    # Check if process died while waiting
-                    if self.web_proc.poll() is not None:
-                        stdout, stderr = self.web_proc.communicate()
-                        logger.error(f"noVNC proxy terminated while waiting. stdout: {stdout}, stderr: {stderr}")
-                        raise RuntimeError("noVNC proxy process terminated while waiting for port")
-                        
-                    if attempt == max_attempts - 1:
-                        logger.error("Timed out waiting for noVNC proxy port")
-                        raise RuntimeError("Failed to start noVNC proxy (port timeout)")
-                        
-                    logger.debug(f"Waiting for noVNC proxy port, attempt {attempt + 1}")
-                    time.sleep(0.5)
-                
-                # Get live URL
-                live_url = f"http://localhost:{self.http_port}/vnc.html"
-            
-            # Parse geometry into width/height
-            width, height = map(int, self.geometry.split('x'))
-            
-            # Create browser profile with all settings
-            browser_profile = BrowserProfile(
-                headless=False,  # Must be windowed mode for VNC
-                user_data_dir=self.user_data_dir or f'/tmp/playwright_{self.display_no}',
-                window_size={"width": width, "height": height},  # Match VNC geometry
-                viewport=None,  # Let window size control viewport
-                no_viewport=True,  # Disable fixed viewport in windowed mode
-                keep_alive=True,  # Keep browser alive between tasks
-                args=[
-                    f'--app={self.initial_url}',
-                    '--disable-infobars',
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-features=TranslateUI,OverlayScrollbar,ExperimentalFullscreenExitUI',
-                    '--kiosk',
-                    '--start-fullscreen',
-                    '--start-maximized',
-                    '--disable-translate',
-                    '--disable-dev-shm-usage'
-                ],
-                ignore_default_args=['--enable-automation'],
-                env={"DISPLAY": os.environ["DISPLAY"]},
-                disable_security=False,
-                deterministic_rendering=False
-            )
-            
-            # Create browser session
-            self.browser_session = BrowserSession(
-                browser_profile=browser_profile,
-                playwright=await (async_patchright().start() if self.require_patchright else async_playwright().start())
-            )
-            
-            # Start browser session
-            await self.browser_session.start()
-            
-            # Create and navigate initial page
-            page = await self.browser_session.get_current_page()
-            await page.goto(self.initial_url)
-            
-            # Ensure fullscreen
-            result = subprocess.run(
-                f"xdotool search --{'class' if sys.platform == 'linux' else 'name'} " +
-                ('chromium' if sys.platform == 'linux' else 'chromium') +
-                " windowactivate --sync key F11",
-                shell=True,
-                capture_output=True,
-                text=True,
-                env=os.environ.copy()
-            )
-            if result.stdout:
-                logger.debug(f"Xdotool output: {result.stdout}")
-            if result.stderr:
-                logger.debug(f"Xdotool error: {result.stderr}")
-            
-            return live_url, self.browser_session
-            
-        except Exception as e:
-            logger.error(f"Failed to start VNC session: {e}")
-            await self.cleanup()
-            return None
-        
-    async def cleanup(self):
-        """Clean up VNC session and browser session.
-        
-        Ensures all resources are properly cleaned up, including:
-        - Browser session
-        - VNC server
-        - Port bindings
-        - Web process
-        - Display number
-        - Config files
-        """
-        errors = []
-        
-        # Close browser session first
-        if self.browser_session:
-            try:
-                await self.browser_session.stop()
-            except Exception as e:
-                errors.append(f"Failed to stop browser session: {e}")
-            self.browser_session = None
-        
-        # Clean up VNC resources
-        with _vnc_lock:
-            try:
-                # Kill Xvfb and VNC server
-                try:
-                    result = subprocess.run(
-                        "pkill -f " + ("'Xvfb.*:" if sys.platform == 'linux' else "'X.*:") + f"{self.display_no}'",
-                        shell=True,
-                        check=True,
-                        capture_output=True,
-                        text=True
-                    )
-                    logger.debug(f"Xvfb cleanup output: {result.stdout}")
-                except subprocess.CalledProcessError as e:
-                    errors.append(f"Failed to kill Xvfb: {e}")
-                    
-                try:
-                    result = subprocess.run(
-                        f"pkill -f 'x11vnc.*:{self.vnc_port}'",
-                        shell=True,
-                        check=True,
-                        capture_output=True,
-                        text=True
-                    )
-                    logger.debug(f"VNC server cleanup output: {result.stdout}")
-                except subprocess.CalledProcessError as e:
-                    errors.append(f"Failed to kill VNC server: {e}")
-            except subprocess.CalledProcessError as e:
-                errors.append(f"Failed to kill VNC server: {e}")
-                
-            # Kill ports
-            for port in (self.vnc_port, self.http_port):
-                try:
-                    if _check_port_in_use(port):
-                        _kill_port_process(port)
-                except subprocess.CalledProcessError as e:
-                    errors.append(f"Failed to kill port {port}: {e}")
-                    
-            # Kill web process
-            if self.web_proc:
-                try:
-                    self.web_proc.terminate()
-                    self.web_proc.wait(timeout=5)
-                except Exception as e:
-                    errors.append(f"Failed to terminate web process: {e}")
-                    try:
-                        self.web_proc.kill()
-                    except Exception:
-                        pass
-                self.web_proc = None
-                
-            # Clean up config files
-            try:
-                # Clean up display-specific xstartup
-                xstartup_path = Path.home() / ".vnc" / f"xstartup.{self.display_no}"
-                if xstartup_path.exists():
-                    xstartup_path.unlink()
-                    
-                # Clean up default symlink if it points to our file
-                default_path = Path.home() / ".vnc" / "xstartup"
-                if default_path.is_symlink():
-                    target = default_path.resolve()
-                    if str(target).endswith(f"xstartup.{self.display_no}"):
-                        default_path.unlink()
-            except Exception as e:
-                errors.append(f"Failed to clean up xstartup: {e}")
-                
-            # Always remove from active displays
-            if self.display_no in _active_displays:
-                _active_displays.remove(self.display_no)
-        
-        if errors:
-            logger.error("Errors during VNC cleanup:\n" + "\n".join(errors))
+# Global set to track allocated display numbers
+allocated_displays = set()
 
 def get_stealth_profile_dir(task_id: str) -> str:
-    """Get a unique stealth profile directory path for a task.
-    
-    Args:
-        task_id: Task ID to create profile for
-        
-    Returns:
-        Path to stealth profile directory (will be created if doesn't exist)
-    """
-    # Get base and task-specific paths
+    """Get a unique stealth profile directory path for a task."""
     base_stealth_dir = os.path.expanduser('~/.config/browseruse/profiles/stealth')
     stealth_dir = os.path.expanduser(f'~/.config/browseruse/profiles/stealth_{task_id}')
     
@@ -411,11 +44,7 @@ def get_stealth_profile_dir(task_id: str) -> str:
     return stealth_dir
 
 def cleanup_stealth_profile_dir(profile_dir: str) -> None:
-    """Safely clean up a stealth profile directory.
-    
-    Args:
-        profile_dir: Path to profile directory to clean up
-    """
+    """Safely clean up a stealth profile directory."""
     try:
         if not profile_dir or 'stealth_' not in profile_dir:
             return
@@ -426,3 +55,391 @@ def cleanup_stealth_profile_dir(profile_dir: str) -> None:
             logger.debug(f"Cleaned up stealth profile: {profile_path}")
     except Exception as e:
         logger.error(f"Error cleaning up stealth profile: {e}")
+
+async def find_free_display() -> Tuple[int, asyncio.subprocess.Process]:
+    """Find a free display number and start Xvnc on it."""
+    home = Path(os.environ["HOME"])
+    vnc_dir = home / ".vnc"
+    vnc_dir.mkdir(exist_ok=True)
+
+    for n in range(1, 100):
+        # Skip if display is already allocated
+        if n in allocated_displays:
+            continue
+
+        # Kill any existing Xvnc
+        # Redirect vncserver output to logger
+        result = subprocess.run(
+            ["vncserver", "-kill", f":{n}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding='utf-8'
+        )
+        if result.stdout:
+            logger.debug(result.stdout.strip())
+        if result.stderr:
+            logger.debug(result.stderr.strip())
+        # Remove leftover files
+        for suffix in [f"X{n}.sock", f"{home.name}:{n}.pid", f"{home.name}:{n}.log"]:
+            try:
+                (vnc_dir / suffix).unlink(missing_ok=True)
+            except PermissionError:
+                pass
+
+        # Try starting Xvnc
+        try:
+            xvnc_proc = await start_xvnc(n)
+            allocated_displays.add(n)  # Mark display as allocated
+            return n, xvnc_proc
+        except Exception as e:
+            logger.debug(f"Display :{n} failed: {e}")
+            continue
+
+    raise RuntimeError("No free display found")
+
+async def start_xvnc(display: int) -> asyncio.subprocess.Process:
+    """Launch Xvnc on the specified display."""
+    cmd = [
+        "Xvnc",
+        f":{display}",
+        "-geometry", "1280x720",
+        "-depth", "24",
+        "-SecurityTypes", "None"
+    ]
+    logger.debug(f"[Xvnc] {' '.join(cmd)}")
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    # Poll for success
+    for _ in range(10):
+        await asyncio.sleep(0.1)
+        if proc.returncode not in (None, 0):
+            raise RuntimeError(f"Xvnc exited with code {proc.returncode}")
+    return proc
+
+async def start_window_manager(display: int) -> asyncio.subprocess.Process:
+    """Start window manager on the given display."""
+    system = platform.system()
+    env = os.environ.copy()
+    env["DISPLAY"] = f":{display}"
+    
+    if system == "Linux":
+        # Use matchbox-window-manager to remove all decorations
+        wm_cmd = ["matchbox-window-manager", "-use_titlebar", "no"]
+        logger.debug(f"[WM] Running (Linux): {' '.join(wm_cmd)}")
+        proc = await asyncio.create_subprocess_exec(
+            *wm_cmd,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await asyncio.sleep(0.5)
+        return proc
+    
+    elif system == "Darwin":
+        # On macOS, matchbox isn't available. Fall back to fluxbox
+        wm_cmd = ["fluxbox", "-display", f":{display}"]
+        logger.debug(f"[WM] Running (macOS fallback): {' '.join(wm_cmd)}")
+        proc = await asyncio.create_subprocess_exec(
+            *wm_cmd,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await asyncio.sleep(0.5)
+        return proc
+    
+    else:
+        # If some other OS, just attempt fluxbox
+        wm_cmd = ["fluxbox", "-display", f":{display}"]
+        logger.debug(f"[WM] Running (fallback): {' '.join(wm_cmd)}")
+        proc = await asyncio.create_subprocess_exec(
+            *wm_cmd,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await asyncio.sleep(0.5)
+        return proc
+
+async def find_free_http_port(start: int = 6080, end: int = 6099) -> int:
+    """Find a free HTTP port in the given range."""
+    for port in range(start, end + 1):
+        with socket.socket() as sock:
+            try:
+                sock.bind(("0.0.0.0", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No free HTTP port between {start} and {end}")
+
+async def setup_novnc_session(display: int) -> Path:
+    """Create a session-specific noVNC directory with a patched vnc.html"""
+    base_dir = Path.home() / "noVNC"
+    session_dir = Path.home() / f"noVNC_session_{display}"
+    
+    # Copy the entire noVNC directory for this session
+    if not session_dir.exists():
+        shutil.copytree(base_dir, session_dir)
+        
+    # Patch the UI in this session's copy
+    html_path = session_dir / "vnc.html"
+    patch_version = "v0.1.22"
+
+    html = html_path.read_text()
+
+    # Remove any existing patches
+    while True:
+        new_html = re.sub(
+            r"<!-- custom patch v0\.\d+\.\d+ -->\s*(<style>.*?</style>\s*)?(<script>.*?</script>\s*)?",
+            "",
+            html,
+            flags=re.DOTALL
+        )
+        if new_html == html:
+            break
+        html = new_html
+
+    if f"<!-- custom patch {patch_version} -->" in html:
+        logger.debug(f"noVNC UI already patched with {patch_version}.")
+        return session_dir
+
+    # Create new patch with both CSS and JS
+    patch = f"""<!-- custom patch {patch_version} -->
+<style>
+    #noVNC_control_bar_anchor,
+    #noVNC_control_bar,
+    #noVNC_status,
+    #noVNC_connect_dlg,
+    #noVNC_control_bar_hint,
+    #noVNC_transition,
+    #noVNC_bell,
+    #noVNC_fallback_error,
+    #noVNC_hint_anchor,
+    #noVNC_center {{
+        display: none !important;
+    }}
+</style>
+<script>
+window.addEventListener('load', function () {{
+    const style = document.createElement('style');
+    style.textContent = `
+        #noVNC_control_bar_anchor,
+        #noVNC_control_bar,
+        #noVNC_status,
+        #noVNC_connect_dlg,
+        #noVNC_control_bar_hint,
+        #noVNC_transition,
+        #noVNC_bell,
+        #noVNC_fallback_error,
+        #noVNC_hint_anchor,
+        #noVNC_center {{
+            display: none !important;
+        }}
+    `;
+    document.head.appendChild(style);
+    const button = document.querySelector("#noVNC_connect_button");
+    if (button) button.click();
+}});
+</script>"""
+
+    patched = html.replace("</head>", patch + "\n</head>")
+    html_path.write_text(patched)
+
+    logger.debug(f"Patched {html_path} with {patch_version}")
+    return session_dir
+
+async def start_novnc(display: int) -> Tuple[asyncio.subprocess.Process, int, Path]:
+    """Start noVNC proxy for the given display."""
+    vnc_port = 5900 + display
+    http_base = 6080  # Base HTTP port
+    initial_port = http_base + (display - 1)  # Offset by display number
+    
+    # Setup a session-specific noVNC directory
+    novnc_dir = await setup_novnc_session(display)
+    proxy = novnc_dir / "utils" / "novnc_proxy"
+
+    port = await find_free_http_port(initial_port, initial_port + 4)  # Smaller range per display
+    cmd = ["bash", str(proxy), "--vnc", f"localhost:{vnc_port}", "--web", str(novnc_dir), "--listen", str(port)]
+    logger.debug(f"[noVNC] {' '.join(cmd)}")
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    await asyncio.sleep(0.5)
+    return proc, port, novnc_dir
+
+class VNCSession:
+    """Manages a VNC session with browser integration."""
+    
+    def __init__(self, display: int, xvnc_proc: asyncio.subprocess.Process,
+                 wm_proc: asyncio.subprocess.Process, novnc_proc: asyncio.subprocess.Process,
+                 novnc_port: int, browser_session: BrowserSession, page: any,
+                 stealth: bool = False, novnc_dir: Optional[Path] = None):
+        """Initialize VNC session with all components."""
+        self.display = display
+        self.xvnc_proc = xvnc_proc
+        self.wm_proc = wm_proc
+        self.novnc_proc = novnc_proc
+        self.novnc_port = novnc_port
+        self.browser_session = browser_session
+        self.page = page
+        self.stealth = stealth
+        self.novnc_dir = novnc_dir
+        self.stealth_dir = get_stealth_profile_dir(f"vnc_{display}") if stealth else None
+
+    async def get_browser_session(self) -> BrowserSession:
+        """Get the browser session associated with this VNC session."""
+        if not self.browser_session:
+            raise RuntimeError("Browser session not initialized")
+        return self.browser_session
+
+    async def cleanup(self) -> None:
+        """Clean up all resources associated with the VNC session."""
+        # Close browser session
+        if self.browser_session:
+            try:
+                await self.browser_session.close()
+            except Exception as e:
+                logger.error(f"Error closing browser session: {e}")
+
+        # Terminate subprocesses
+        for name, proc in [
+            ("noVNC proxy", self.novnc_proc),
+            ("window manager", self.wm_proc),
+            ("Xvnc", self.xvnc_proc)
+        ]:
+            if proc:
+                logger.debug(f"Terminating {name} (PID {proc.pid})...")
+                try:
+                    proc.terminate()
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"Error terminating {name}: {e}")
+
+        # Kill vncserver
+        logger.debug(f"Killing vncserver on :{self.display}...")
+        result = subprocess.run(
+            ["vncserver", "-kill", f":{self.display}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding='utf-8'
+        )
+        if result.stdout:
+            logger.debug(result.stdout.strip())
+        if result.stderr:
+            logger.debug(result.stderr.strip())
+
+        # Remove display from allocated set
+        allocated_displays.remove(self.display)
+
+        # Clean up session-specific noVNC directory
+        if self.novnc_dir and self.novnc_dir.exists():
+            shutil.rmtree(self.novnc_dir)
+
+        # Clean up stealth profile if used
+        if self.stealth_dir:
+            cleanup_stealth_profile_dir(self.stealth_dir)
+
+    def get_novnc_url(self) -> str:
+        """Get the URL for accessing the noVNC web interface."""
+        return f"http://localhost:{self.novnc_port}/vnc.html?autoconnect=true"
+
+    async def __aenter__(self) -> 'VNCSession':
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit."""
+        await self.cleanup()
+
+async def launch_vnc_session(target_url: str, stealth: bool = False) -> VNCSession:
+    """Launch a complete VNC session with browser."""
+    # 1) Find a free display, start Xvnc on it
+    display, xvnc_proc = await find_free_display()
+    logger.debug(f"Using display :{display} (Xvnc PID {xvnc_proc.pid})")
+
+    try:
+        # 2) Start window manager
+        wm_proc = await start_window_manager(display)
+
+        # 3) Start noVNC
+        novnc_proc, novnc_port, novnc_dir = await start_novnc(display)
+        logger.debug(f"noVNC URL: http://localhost:{novnc_port}/vnc.html?autoconnect=true")
+
+        # 4) Set up browser environment
+        env = os.environ.copy()
+        env["DISPLAY"] = f":{display}"
+        env["GOOGLE_API_KEY"] = "no"
+        env["GOOGLE_DEFAULT_CLIENT_ID"] = "no"
+        env["GOOGLE_DEFAULT_CLIENT_SECRET"] = "no"
+
+        # 5) Configure browser
+        browser_args = {
+            'headless': False,
+            'highlight_elements': False,  # Disable element highlighting
+            'keep_alive': True,  # Keep browser alive between tasks
+            'env': env,
+            'args': [
+                "--disable-gpu",
+                f"--app={target_url}",
+                "--window-size=1280,720",
+                "--window-position=0,0",
+                "--disable-infobars",
+                "--class=BorderlessChromium",
+                "--disable-features=AutomationControlled",
+                '--start-fullscreen',
+                '--start-maximized',
+                '--disable-translate',
+                '--disable-dev-shm-usage'
+            ],
+            'ignore_default_args': ["--enable-automation", "--no-sandbox"],
+        }
+
+        if stealth:
+            # Use patchright and stealth profile
+            playwright = await async_patchright().start()
+            browser_args['playwright'] = playwright
+            stealth_dir = get_stealth_profile_dir(f"vnc_{display}")
+            browser_args['user_data_dir'] = stealth_dir
+            browser_args['disable_security'] = False
+            browser_args['deterministic_rendering'] = False
+        else:
+            # Use regular temporary profile
+            browser_args['user_data_dir'] = tempfile.mkdtemp(prefix="pw-user-data-")
+
+        # 6) Launch browser session
+        browser_profile = BrowserProfile(**browser_args)
+        browser_session = BrowserSession(browser_profile=browser_profile)
+        await browser_session.start()
+
+        # 7) Set up page
+        page = await browser_session.get_current_page()
+        await page.goto(target_url)
+        await page.wait_for_load_state("domcontentloaded")
+        await page.keyboard.press("F11")
+
+        # 8) Create and return session
+        return VNCSession(
+            display=display,
+            xvnc_proc=xvnc_proc,
+            wm_proc=wm_proc,
+            novnc_proc=novnc_proc,
+            novnc_port=novnc_port,
+            browser_session=browser_session,
+            page=page,
+            stealth=stealth,
+            novnc_dir=novnc_dir
+        )
+
+    except Exception as e:
+        # Clean up on failure
+        if display in allocated_displays:
+            allocated_displays.remove(display)
+        raise RuntimeError(f"Failed to launch VNC session: {e}") from e

@@ -16,6 +16,7 @@ class LogRedirect:
     def __init__(self, log_file: Path, original_stream: TextIO):
         self.log_file = log_file
         self.original_stream = original_stream
+        self.server_started = False
         
     def write(self, text: str):
         # Handle ANSI escape sequences and metrics display
@@ -31,16 +32,46 @@ class LogRedirect:
         )
         is_panel = any(x in text for x in ['Engine: http://', 'Web: http://'])
         is_shutdown = 'Shutting down' in text
+        is_cli_output = (
+            'Usage:' in text or
+            'Commands:' in text or
+            'Options:' in text or
+            'Error:' in text or
+            '🚀  Browser-LLM' in text or
+            'Support' in text or
+            'Version:' in text
+        )
+        
+        # Detect warning messages
+        is_warning = (
+            'Warning:' in text or
+            'DeprecationWarning:' in text or
+            text.lstrip().startswith('Warning:') or
+            text.lstrip().startswith('DeprecationWarning:')
+        )
 
-        display = get_metrics_display()
-        # Allow through:
+        # Mark server as started when we see the panel
+        if is_panel:
+            self.server_started = True
+
+        # Before server starts, allow CLI output through
+        if not self.server_started:
+            # Before server starts, allow CLI output but redirect warnings
+            if is_warning:
+                with open(self.log_file, 'a') as f:
+                    f.write(f"{text}\n")
+            else:
+                self.original_stream.write(text)
+            return
+            
+        # After server starts, allow through:
         # 1. Initial panel
         # 2. Metrics updates (both header and content) and their ANSI control sequences
         # 3. Shutdown message
         if (is_panel or is_shutdown or
             is_metrics or  # Metrics header
-            (is_metrics_content and display.initialized) or  # Metrics content after initialization
-            (is_ansi and display.initialized)):  # ANSI codes for metrics updates
+            (is_metrics_content and get_metrics_display().initialized) or  # Metrics content after initialization
+            (is_ansi and get_metrics_display().initialized)):  # ANSI codes for metrics updates
             self.original_stream.write(text)
         elif text.strip():  # Skip empty lines for log file
             with open(self.log_file, 'a') as f:

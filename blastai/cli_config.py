@@ -153,19 +153,24 @@ async def setup_serving_environment(env: Optional[str] = None, config_path: Opti
     # Load environment variables first
     env_path = load_environment(env)
     
-    # Create engine with config
-    engine = await Engine.create(config_path=config_path)
+    # Load config to get model names without creating engine
+    config = Engine.load_config(config_path)
+    model_name = config['constraints']['llm_model']
+    model_name_mini = config['constraints'].get('llm_model_mini')
     
-    # Check for required API keys
-    if not check_model_api_key(engine.constraints.llm_model, env_path):
+    # Check for required API keys before initializing engine
+    if not check_model_api_key(model_name, env_path):
         logger.error("Required API key not found")
         print("\nRequired API key not found. Exiting.")
         sys.exit(1)
         
-    if engine.constraints.llm_model_mini and not check_model_api_key(engine.constraints.llm_model_mini, env_path):
+    if model_name_mini and not check_model_api_key(model_name_mini, env_path):
         logger.error("Required API key not found for mini model")
         print("\nRequired API key not found for mini model. Exiting.")
         sys.exit(1)
+        
+    # Now create the actual engine with API keys in place
+    engine = await Engine.create(config_path=config_path)
     
     # Only install if not already installed
     from .cli_installation import (
