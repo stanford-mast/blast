@@ -110,20 +110,28 @@ def check_and_install_dependencies():
     # 7) Ensure noVNC is present
     ensure_noVNC()
 
+# Global set to track allocated display numbers
+allocated_displays = set()
+
 # ─── Helper: find a free display & start Xvnc ─────────────────────────────────
 
 async def find_free_display():
     """
     Iterate through display numbers 1..99. For each:
-      1. Kill any existing Xvnc (vncserver) on :N.
-      2. Remove stale ~/.vnc/X<N>.* files.
-      3. Attempt to start Xvnc :N. If it stays alive for ~1s, return (N, proc).
+      1. Skip if display is already allocated to a running session
+      2. Kill any existing Xvnc (vncserver) on :N.
+      3. Remove stale ~/.vnc/X<N>.* files.
+      4. Attempt to start Xvnc :N. If it stays alive for ~1s, return (N, proc).
     """
     home = Path(os.environ["HOME"])
     vnc_dir = home / ".vnc"
     vnc_dir.mkdir(exist_ok=True)
 
     for n in range(1, 100):
+        # Skip if display is already allocated
+        if n in allocated_displays:
+            continue
+
         # 1) Kill any existing Xvnc on :N
         subprocess.run(
             ["vncserver", "-kill", f":{n}"],
@@ -140,6 +148,7 @@ async def find_free_display():
         # 3) Start Xvnc :N
         try:
             xvnc_proc = await start_xvnc(n)
+            allocated_displays.add(n)  # Mark display as allocated
             return n, xvnc_proc
         except Exception as e:
             print(f"[Display :{n}] Xvnc failed: {e}")
@@ -216,8 +225,7 @@ async def start_window_manager(display: int):
 
 async def find_free_http_port(start: int = 6080, end: int = 6099):
     """
-    Return first free TCP port in [start..end]. If in use by novnc_proxy,
-    kill that process and re-check.
+    Return first free TCP port in [start..end].
     """
     for port in range(start, end + 1):
         with socket.socket() as sock:
@@ -225,30 +233,23 @@ async def find_free_http_port(start: int = 6080, end: int = 6099):
                 sock.bind(("0.0.0.0", port))
                 return port
             except OSError:
-                # Kill any novnc_proxy listening on that port
-                subprocess.run(
-                    ["pkill", "-f", f"novnc_proxy.*--listen {port}"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                # Re-check
-                try:
-                    sock.bind(("0.0.0.0", port))
-                    return port
-                except OSError:
-                    continue
-    raise RuntimeError("No free HTTP port between 6080 and 6099")
+                continue
+    raise RuntimeError(f"No free HTTP port between {start} and {end}")
 
 
-async def patch_novnc_ui():
-    """Patch noVNC's HTML to hide UI elements and auto-connect"""
-    noVNC_dir = Path.home() / "noVNC"
-    html_path = noVNC_dir / "vnc.html"
+async def setup_novnc_session(display: int) -> Path:
+    """Create a session-specific noVNC directory with a patched vnc.html"""
+    base_dir = Path.home() / "noVNC"
+    session_dir = Path.home() / f"noVNC_session_{display}"
+    
+    # Copy the entire noVNC directory for this session
+    if not session_dir.exists():
+        import shutil
+        shutil.copytree(base_dir, session_dir)
+        
+    # Patch the UI in this session's copy
+    html_path = session_dir / "vnc.html"
     patch_version = "v0.1.22"
-
-    if not html_path.exists():
-        print("\u26a0\ufe0f noVNC HTML not found!")
-        return
 
     html = html_path.read_text()
 
@@ -266,7 +267,7 @@ async def patch_novnc_ui():
 
     if f"<!-- custom patch {patch_version} -->" in html:
         print(f"\u2705 noVNC UI already patched with {patch_version}.")
-        return
+        return session_dir
 
     # Create new patch with both CSS and JS
     patch = f"""<!-- custom patch {patch_version} -->
@@ -311,24 +312,23 @@ window.addEventListener('load', function () {{
     html_path.write_text(patched)
 
     print(f"\u2705 Patched {html_path} with {patch_version}")
+    return session_dir
 
-async def start_novnc(display: int, initial_port: int = 6080):
+async def start_novnc(display: int):
     """
     Launch noVNC's novnc_proxy, forwarding VNC (5900+display) → HTTP.
     Returns (proc, http_port).
     """
     vnc_port = 5900 + display
-    noVNC_dir = Path.home() / "noVNC"
-    proxy = noVNC_dir / "utils" / "novnc_proxy"
+    http_base = 6080  # Base HTTP port
+    initial_port = http_base + (display - 1)  # Offset by display number
+    
+    # Setup a session-specific noVNC directory
+    novnc_dir = await setup_novnc_session(display)
+    proxy = novnc_dir / "utils" / "novnc_proxy"
 
-    if not proxy.exists():
-        raise FileNotFoundError(f"novnc_proxy not found at {proxy}")
-
-    # Patch noVNC UI before starting proxy
-    await patch_novnc_ui()
-
-    port = await find_free_http_port(initial_port, initial_port + 19)
-    cmd = ["bash", str(proxy), "--vnc", f"localhost:{vnc_port}", "--web", str(noVNC_dir), "--listen", str(port)]
+    port = await find_free_http_port(initial_port, initial_port + 4)  # Smaller range per display
+    cmd = ["bash", str(proxy), "--vnc", f"localhost:{vnc_port}", "--web", str(novnc_dir), "--listen", str(port)]
     print(f"[noVNC] {' '.join(cmd)}")
     proc = await asyncio.create_subprocess_exec(*cmd)
     await asyncio.sleep(0.5)
@@ -390,57 +390,32 @@ async def start_playwright(display: int, url: str):
     return playwright, context
 
 
-# ─── Main: orchestrate everything ─────────────────────────────────────────────
+class VNCSession:
+    def __init__(self, display, xvnc_proc, flux_proc, novnc_proc, novnc_port, playwright, browser):
+        self.display = display
+        self.xvnc_proc = xvnc_proc
+        self.flux_proc = flux_proc
+        self.novnc_proc = novnc_proc
+        self.novnc_port = novnc_port
+        self.playwright = playwright
+        self.browser = browser
+        self.novnc_dir = Path.home() / f"noVNC_session_{display}"
 
-async def main():
-    # 1) Check/install dependencies
-    check_and_install_dependencies()
-
-    display = None
-    xvnc_proc = None
-    flux_proc = None
-    novnc_proc = None
-    playwright = None
-    browser = None
-
-    try:
-        # 2) Find a free display, start Xvnc on it
-        display, xvnc_proc = await find_free_display()
-        print(f"Using display :{display} (Xvnc PID {xvnc_proc.pid})")
-
-        # 3) Start fluxbox
-        flux_proc = await start_window_manager(display)
-
-        # 4) Start noVNC to proxy VNC → HTTP
-        novnc_proc, novnc_port = await start_novnc(display)
-        print(
-            f"noVNC URL → "
-            f"http://localhost:{novnc_port}/vnc.html?host=localhost&port={novnc_port}&autoconnect=true"
-        )
-
-        # 5) Launch Playwright→Chromium inside DISPLAY=:N
-        playwright, browser = await start_playwright(display, "https://w3schools.com")
-
-        # 6) Block until Ctrl+C
-        await asyncio.Event().wait()
-
-    except KeyboardInterrupt:
-        print("\nCaught Ctrl+C → cleaning up…")
-
-    finally:
-        # 7) Cleanup: close Playwright
-        if browser and playwright:
+    async def cleanup(self):
+        """Cleanup all processes associated with this VNC session"""
+        # Close Playwright
+        if self.browser and self.playwright:
             try:
-                await browser.close()
-                await playwright.stop()
+                await self.browser.close()
+                await self.playwright.stop()
             except Exception:
                 pass
 
-        # 8) Terminate subprocesses (reverse order)
+        # Terminate subprocesses
         for name, proc in [
-            ("noVNC proxy", novnc_proc),
-            ("fluxbox", flux_proc),
-            ("Xvnc", xvnc_proc)
+            ("noVNC proxy", self.novnc_proc),
+            ("fluxbox", self.flux_proc),
+            ("Xvnc", self.xvnc_proc)
         ]:
             if proc:
                 print(f"Terminating {name} (PID {proc.pid})…")
@@ -450,17 +425,75 @@ async def main():
                 except Exception:
                     pass
 
-        # 9) Kill vncserver on that display to clean up ~/.vnc
-        if display is not None:
-            print(f"Killing vncserver on :{display}…")
-            subprocess.run(
-                ["vncserver", "-kill", f":{display}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+        # Kill vncserver
+        print(f"Killing vncserver on :{self.display}…")
+        subprocess.run(
+            ["vncserver", "-kill", f":{self.display}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
 
-        print("Cleanup complete. Exiting.")
+        # Remove display from allocated set
+        allocated_displays.remove(self.display)
 
+        # Clean up session-specific noVNC directory
+        import shutil
+        if self.novnc_dir.exists():
+            shutil.rmtree(self.novnc_dir)
+
+async def launch_session(target_url: str) -> VNCSession:
+    """Launch a VNC session with browser on a free display"""
+    # 1) Find a free display, start Xvnc on it
+    display, xvnc_proc = await find_free_display()
+    print(f"Using display :{display} (Xvnc PID {xvnc_proc.pid})")
+
+    # 2) Start fluxbox
+    flux_proc = await start_window_manager(display)
+
+    # 3) Start noVNC to proxy VNC → HTTP
+    novnc_proc, novnc_port = await start_novnc(display)
+    print(
+        f"noVNC URL → "
+        f"http://localhost:{novnc_port}/vnc.html?host=localhost&port={novnc_port}&autoconnect=true"
+    )
+
+    # 4) Launch Playwright→Chromium inside DISPLAY=:N
+    playwright, browser = await start_playwright(display, target_url)
+
+    return VNCSession(
+        display=display,
+        xvnc_proc=xvnc_proc,
+        flux_proc=flux_proc,
+        novnc_proc=novnc_proc,
+        novnc_port=novnc_port,
+        playwright=playwright,
+        browser=browser
+    )
+
+async def main():
+    # Check/install dependencies
+    check_and_install_dependencies()
+
+    sessions = []
+    try:
+        # Launch multiple sessions with different URLs
+        sessions.append(await launch_session("https://example.com"))
+        sessions.append(await launch_session("https://w3schools.com"))
+        
+        print("\nAll sessions are now running!")
+        print("Press Ctrl+C to terminate all sessions")
+        
+        # Block until Ctrl+C
+        await asyncio.Event().wait()
+
+    except KeyboardInterrupt:
+        print("\nCaught Ctrl+C → cleaning up…")
+
+    finally:
+        # Cleanup all sessions
+        for session in sessions:
+            await session.cleanup()
+        print("All sessions cleaned up. Exiting.")
 
 if __name__ == "__main__":
     asyncio.run(main())
