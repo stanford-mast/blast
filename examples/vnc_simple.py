@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import asyncio
 import os
+import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -238,9 +240,81 @@ async def find_free_http_port(start: int = 6080, end: int = 6099):
     raise RuntimeError("No free HTTP port between 6080 and 6099")
 
 
+async def patch_novnc_ui():
+    """Patch noVNC's HTML to hide UI elements and auto-connect"""
+    noVNC_dir = Path.home() / "noVNC"
+    html_path = noVNC_dir / "vnc.html"
+    patch_version = "v0.1.22"
+
+    if not html_path.exists():
+        print("\u26a0\ufe0f noVNC HTML not found!")
+        return
+
+    html = html_path.read_text()
+
+    # Remove any existing patches
+    while True:
+        new_html = re.sub(
+            r"<!-- custom patch v0\.\d+\.\d+ -->\s*(<style>.*?</style>\s*)?(<script>.*?</script>\s*)?",
+            "",
+            html,
+            flags=re.DOTALL
+        )
+        if new_html == html:
+            break
+        html = new_html
+
+    if f"<!-- custom patch {patch_version} -->" in html:
+        print(f"\u2705 noVNC UI already patched with {patch_version}.")
+        return
+
+    # Create new patch with both CSS and JS
+    patch = f"""<!-- custom patch {patch_version} -->
+<style>
+    #noVNC_control_bar_anchor,
+    #noVNC_control_bar,
+    #noVNC_status,
+    #noVNC_connect_dlg,
+    #noVNC_control_bar_hint,
+    #noVNC_transition,
+    #noVNC_bell,
+    #noVNC_fallback_error,
+    #noVNC_hint_anchor,
+    #noVNC_center {{
+        display: none !important;
+    }}
+</style>
+<script>
+window.addEventListener('load', function () {{
+    const style = document.createElement('style');
+    style.textContent = `
+        #noVNC_control_bar_anchor,
+        #noVNC_control_bar,
+        #noVNC_status,
+        #noVNC_connect_dlg,
+        #noVNC_control_bar_hint,
+        #noVNC_transition,
+        #noVNC_bell,
+        #noVNC_fallback_error,
+        #noVNC_hint_anchor,
+        #noVNC_center {{
+            display: none !important;
+        }}
+    `;
+    document.head.appendChild(style);
+    const button = document.querySelector("#noVNC_connect_button");
+    if (button) button.click();
+}});
+</script>"""
+
+    patched = html.replace("</head>", patch + "\n</head>")
+    html_path.write_text(patched)
+
+    print(f"\u2705 Patched {html_path} with {patch_version}")
+
 async def start_novnc(display: int, initial_port: int = 6080):
     """
-    Launch noVNC’s novnc_proxy, forwarding VNC (5900+display) → HTTP.
+    Launch noVNC's novnc_proxy, forwarding VNC (5900+display) → HTTP.
     Returns (proc, http_port).
     """
     vnc_port = 5900 + display
@@ -250,8 +324,11 @@ async def start_novnc(display: int, initial_port: int = 6080):
     if not proxy.exists():
         raise FileNotFoundError(f"novnc_proxy not found at {proxy}")
 
+    # Patch noVNC UI before starting proxy
+    await patch_novnc_ui()
+
     port = await find_free_http_port(initial_port, initial_port + 19)
-    cmd = ["bash", str(proxy), "--vnc", f"localhost:{vnc_port}", "--listen", str(port)]
+    cmd = ["bash", str(proxy), "--vnc", f"localhost:{vnc_port}", "--web", str(noVNC_dir), "--listen", str(port)]
     print(f"[noVNC] {' '.join(cmd)}")
     proc = await asyncio.create_subprocess_exec(*cmd)
     await asyncio.sleep(0.5)
