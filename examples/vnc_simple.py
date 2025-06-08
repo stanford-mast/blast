@@ -3,6 +3,7 @@ import asyncio
 import os
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -10,7 +11,43 @@ import platform
 import tempfile
 from pathlib import Path
 from shutil import which
-from playwright.async_api import async_playwright
+from browser_use import BrowserSession, BrowserProfile
+from patchright.async_api import async_playwright as async_patchright
+
+def get_stealth_profile_dir(task_id: str) -> str:
+    """Get a unique stealth profile directory path for a task."""
+    # Get base and task-specific paths
+    base_stealth_dir = os.path.expanduser('~/.config/browseruse/profiles/stealth')
+    stealth_dir = os.path.expanduser(f'~/.config/browseruse/profiles/stealth_{task_id}')
+    
+    base_stealth_path = Path(base_stealth_dir)
+    stealth_dir_path = Path(stealth_dir)
+    
+    # Ensure base directory exists
+    if not base_stealth_path.exists():
+        return base_stealth_dir
+    
+    # Create task-specific directory
+    if stealth_dir_path.exists():
+        shutil.rmtree(stealth_dir)
+    if base_stealth_path.exists():
+        shutil.copytree(base_stealth_dir, stealth_dir)
+    else:
+        stealth_dir_path.mkdir(parents=True, exist_ok=True)
+    
+    return stealth_dir
+
+def cleanup_stealth_profile_dir(profile_dir: str) -> None:
+    """Safely clean up a stealth profile directory."""
+    try:
+        if not profile_dir or 'stealth_' not in profile_dir:
+            return
+            
+        profile_path = Path(os.path.expanduser(profile_dir))
+        if profile_path.exists():
+            shutil.rmtree(profile_path)
+    except Exception as e:
+        print(f"Error cleaning up stealth profile: {e}")
 
 # ─── Helper: detect OS and install missing dependencies ───────────────────────
 
@@ -336,78 +373,84 @@ async def start_novnc(display: int):
 
 # ─── Helper: start Playwright Chromium ────────────────────────────────────────
 
-async def start_playwright(display: int, url: str):
+async def start_playwright(display: int, url: str, stealth: bool = False):
+    """Launch a browser session using browser_use with the same configuration"""
+    # Set exact same environment variables
     os.environ["GOOGLE_API_KEY"] = "no"
     os.environ["GOOGLE_DEFAULT_CLIENT_ID"] = "no"
     os.environ["GOOGLE_DEFAULT_CLIENT_SECRET"] = "no"
     env = os.environ.copy()
     env["DISPLAY"] = f":{display}"
 
-    # 1) Make a temporary directory for Chromium’s user data (so it’s a persistent context)
-    user_data_dir = tempfile.mkdtemp(prefix="pw-user-data-")
-
-    # 2) Launch a persistent context. Chromium will open the --app=<URL> automatically in this context.
-    playwright = await async_playwright().start()
-    context = await playwright.chromium.launch_persistent_context(
-        user_data_dir=user_data_dir,
-        headless=False,
-        env=env,
-        args=[
+    # Set up browser args
+    browser_args = {
+        'headless': False,
+        'env': env,
+        'args': [
             "--disable-gpu",
-
-            # Open directly in “app” mode (no tabs, no address bar)
-            "--app=" + url,
-
-            # Force it to fill the entire VNC desktop (1280×720):
+            f"--app={url}",
             "--window-size=1280,720",
             "--window-position=0,0",
-
             "--disable-infobars",
             "--class=BorderlessChromium",
-            # "--disable-blink-features=AutomationControlled",
             "--disable-features=AutomationControlled",
             '--start-fullscreen',
             '--start-maximized',
             '--disable-translate',
             '--disable-dev-shm-usage'
         ],
-        ignore_default_args=["--enable-automation", "--no-sandbox"],
-    )
+        'ignore_default_args': ["--enable-automation", "--no-sandbox"],
+    }
 
-
-    # 3) Now that it’s persistent, the “app” page already exists in context.pages
-    #    If it’s not there for some reason, do a fallback new_page()
-    if context.pages:
-        page = context.pages[0]
+    if stealth:
+        # Use patchright and stealth profile for stealth mode
+        playwright = await async_patchright().start()
+        browser_args['playwright'] = playwright
+        
+        # Get stealth profile directory
+        stealth_dir = get_stealth_profile_dir(f"vnc_{display}")
+        browser_args['user_data_dir'] = stealth_dir
+        browser_args['disable_security'] = False
+        browser_args['deterministic_rendering'] = False
     else:
-        page = await context.new_page()
-        await page.goto(url)
+        # Use regular temporary profile
+        browser_args['user_data_dir'] = tempfile.mkdtemp(prefix="pw-user-data-")
 
-    # 4) Wait for the DOM to be ready before sending F11
+    # Create browser profile and session
+    browser_profile = BrowserProfile(**browser_args)
+    browser_session = BrowserSession(browser_profile=browser_profile)
+    await browser_session.start()
+
+    # Get the current page and navigate
+    page = await browser_session.get_current_page()
+    await page.goto(url)
+
+    # Wait for load and press F11 for fullscreen
     await page.wait_for_load_state("domcontentloaded")
     await page.keyboard.press("F11")
 
-    return playwright, context
+    return browser_session, page
 
 
 class VNCSession:
-    def __init__(self, display, xvnc_proc, flux_proc, novnc_proc, novnc_port, playwright, browser):
+    def __init__(self, display, xvnc_proc, flux_proc, novnc_proc, novnc_port, browser_session, page, stealth=False):
         self.display = display
         self.xvnc_proc = xvnc_proc
         self.flux_proc = flux_proc
         self.novnc_proc = novnc_proc
         self.novnc_port = novnc_port
-        self.playwright = playwright
-        self.browser = browser
+        self.browser_session = browser_session
+        self.page = page
+        self.stealth = stealth
         self.novnc_dir = Path.home() / f"noVNC_session_{display}"
+        self.stealth_dir = get_stealth_profile_dir(f"vnc_{display}") if stealth else None
 
     async def cleanup(self):
         """Cleanup all processes associated with this VNC session"""
-        # Close Playwright
-        if self.browser and self.playwright:
+        # Close browser session
+        if self.browser_session:
             try:
-                await self.browser.close()
-                await self.playwright.stop()
+                await self.browser_session.close()
             except Exception:
                 pass
 
@@ -437,11 +480,14 @@ class VNCSession:
         allocated_displays.remove(self.display)
 
         # Clean up session-specific noVNC directory
-        import shutil
         if self.novnc_dir.exists():
             shutil.rmtree(self.novnc_dir)
 
-async def launch_session(target_url: str) -> VNCSession:
+        # Clean up stealth profile if used
+        if self.stealth_dir:
+            cleanup_stealth_profile_dir(self.stealth_dir)
+
+async def launch_session(target_url: str, stealth: bool = False) -> VNCSession:
     """Launch a VNC session with browser on a free display"""
     # 1) Find a free display, start Xvnc on it
     display, xvnc_proc = await find_free_display()
@@ -457,8 +503,8 @@ async def launch_session(target_url: str) -> VNCSession:
         f"http://localhost:{novnc_port}/vnc.html?host=localhost&port={novnc_port}&autoconnect=true"
     )
 
-    # 4) Launch Playwright→Chromium inside DISPLAY=:N
-    playwright, browser = await start_playwright(display, target_url)
+    # 4) Launch Playwright→Chromium inside DISPLAY=:N with optional stealth mode
+    browser_session, page = await start_playwright(display, target_url, stealth)
 
     return VNCSession(
         display=display,
@@ -466,8 +512,9 @@ async def launch_session(target_url: str) -> VNCSession:
         flux_proc=flux_proc,
         novnc_proc=novnc_proc,
         novnc_port=novnc_port,
-        playwright=playwright,
-        browser=browser
+        browser_session=browser_session,
+        page=page,
+        stealth=stealth
     )
 
 async def main():
@@ -477,7 +524,7 @@ async def main():
     sessions = []
     try:
         # Launch multiple sessions with different URLs
-        sessions.append(await launch_session("https://example.com"))
+        sessions.append(await launch_session("https://example.com", stealth=True))
         sessions.append(await launch_session("https://w3schools.com"))
         
         print("\nAll sessions are now running!")
