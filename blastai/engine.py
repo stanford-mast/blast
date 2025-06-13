@@ -13,7 +13,7 @@ from uuid import uuid4
 logger = logging.getLogger(__name__)
 
 # Import non-browser_use modules first
-from .response import AgentHistoryListResponse, AgentReasoning, HumanRequest, HumanResponse, StopRequest
+from .response import AgentHistoryListResponse, AgentReasoning, HumanRequest, HumanResponse, StopRequest, AgentScheduled
 from .config import Settings, Constraints
 from .resource_manager import ResourceManager
 from .scheduler import Scheduler
@@ -222,9 +222,9 @@ class Engine:
             }
 
         # Schedule task(s)
-        # Disable caching in interactive mode
+        # Disable caching and force new plan in interactive mode
         if mode == "interactive":
-            cache_control = "no-cache"
+            cache_control = "no-cache,no-cache-plan"
         cache_controls = [cache_control] if isinstance(cache_control, str) else cache_control
         if isinstance(task_descriptions, list):
             # For multiple tasks, schedule them in sequence
@@ -280,7 +280,15 @@ class Engine:
                 queues = task.interactive_queues
                 if not queues:
                     raise RuntimeError("Interactive mode requires queues")
-                    
+                
+                # Send immediate task scheduled notification with task ID
+                await queues['to_client'].put(
+                    AgentScheduled(
+                        task_id=final_task_id,
+                        description=task.description
+                    )
+                )
+                
                 # Start streaming task in background
                 async def stream_to_client():
                     try:

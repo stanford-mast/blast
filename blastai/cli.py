@@ -3,7 +3,7 @@
 # Set environment variables before any imports
 import os
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
-os.environ["PYTHONWARNINGS"] = "ignore::ResourceWarning"
+os.environ["PYTHONWARNINGS"] = "ignore::ResourceWarning,ignore::DeprecationWarning"
 os.environ["BROWSER_USE_LOGGING_LEVEL"] = "error"  # Default to error level
 
 import sys

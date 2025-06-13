@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import platform
+import time
 import tempfile
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -35,9 +36,21 @@ def get_stealth_profile_dir(task_id: str) -> str:
     
     # Create task-specific directory
     if stealth_dir_path.exists():
-        shutil.rmtree(stealth_dir)
+        try:
+            shutil.rmtree(stealth_dir)
+        except OSError as e:
+            logger.warning(f"Failed to remove existing stealth directory: {e}")
+            # Try to create a unique directory instead
+            stealth_dir = os.path.expanduser(f'~/.config/browseruse/profiles/stealth_{task_id}_{int(time.time())}')
+            stealth_dir_path = Path(stealth_dir)
+    
     if base_stealth_path.exists():
-        shutil.copytree(base_stealth_dir, stealth_dir)
+        try:
+            shutil.copytree(base_stealth_dir, stealth_dir)
+        except OSError as e:
+            logger.warning(f"Failed to copy stealth directory: {e}")
+            # Just create an empty directory
+            stealth_dir_path.mkdir(parents=True, exist_ok=True)
     else:
         stealth_dir_path.mkdir(parents=True, exist_ok=True)
     
@@ -264,14 +277,26 @@ async def start_novnc(display: int) -> Tuple[asyncio.subprocess.Process, int, Pa
     proxy = novnc_dir / "utils" / "novnc_proxy"
 
     port = await find_free_http_port(initial_port, initial_port + 4)  # Smaller range per display
-    cmd = ["bash", str(proxy), "--vnc", f"localhost:{vnc_port}", "--web", str(novnc_dir), "--listen", str(port)]
+    
+    # Add heartbeat parameter to prevent WebSocket connection from timing out
+    cmd = [
+        "bash", str(proxy),
+        "--vnc", f"localhost:{vnc_port}",
+        "--web", str(novnc_dir),
+        "--listen", str(port),
+        "--heartbeat", "60"  # Send a ping every 60 seconds (1 minute) to keep connection alive
+    ]
+    
     logger.debug(f"[noVNC] {' '.join(cmd)}")
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )
-    await asyncio.sleep(0.5)
+    
+    # Wait a bit longer to ensure the proxy is fully started
+    await asyncio.sleep(1.0)
+    
     return proc, port, novnc_dir
 
 class VNCSession:
@@ -417,6 +442,21 @@ async def launch_vnc_session(target_url: str, stealth: bool = False) -> VNCSessi
         # 6) Launch browser session
         browser_profile = BrowserProfile(**browser_args)
         browser_session = BrowserSession(browser_profile=browser_profile)
+        
+        # Ensure the Default directory is empty or doesn't exist before starting
+        if stealth:
+            default_dir = Path(stealth_dir) / "Default"
+            if default_dir.exists():
+                try:
+                    # Try to remove the Default directory if it exists
+                    shutil.rmtree(str(default_dir))
+                except OSError as e:
+                    logger.warning(f"Failed to clean up Default directory: {e}")
+                    # Create a new unique stealth directory
+                    new_stealth_dir = get_stealth_profile_dir(f"vnc_{display}_{int(time.time())}")
+                    browser_args['user_data_dir'] = new_stealth_dir
+                    browser_profile = BrowserProfile(**browser_args)
+                    browser_session = BrowserSession(browser_profile=browser_profile)
         await browser_session.start()
 
         # 7) Set up page

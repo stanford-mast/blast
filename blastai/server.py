@@ -7,13 +7,20 @@ os.environ["ANONYMIZED_TELEMETRY"] = "false"
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import Optional
-from fastapi import FastAPI, HTTPException
+from typing import Optional, Dict
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .server_api_chat_completions import ChatCompletionRequest, handle_chat_completions
 from .server_api_responses import ResponseRequest, handle_responses, handle_delete_response
+from .server_api_realtime import (
+    RealtimeConnection,
+    handle_realtime_connection,
+    TaskRequest,
+    RealtimeMessage,
+    MessageType
+)
 from .engine import Engine
 
 # Get logger for this module
@@ -21,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 # Global engine instance
 _engine: Optional[Engine] = None
+
+# Active WebSocket connections
+_websocket_connections: Dict[str, RealtimeConnection] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -159,3 +169,16 @@ async def delete_response(response_id: str):
     """Delete a response and its associated task from cache."""
     engine = await get_engine()
     return await handle_delete_response(response_id, engine)
+
+@app.websocket("/realtime")
+async def realtime_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for realtime task execution.
+    
+    Enables:
+    - Interactive task execution
+    - Task stopping
+    - Human-in-the-loop communication
+    - Task chaining with prerequisites
+    """
+    engine = await get_engine()
+    await handle_realtime_connection(websocket, engine, _websocket_connections)

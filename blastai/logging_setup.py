@@ -68,10 +68,19 @@ class LogRedirect:
         # 1. Initial panel
         # 2. Metrics updates (both header and content) and their ANSI control sequences
         # 3. Shutdown message
-        if (is_panel or is_shutdown or
-            is_metrics or  # Metrics header
-            (is_metrics_content and get_metrics_display().initialized) or  # Metrics content after initialization
-            (is_ansi and get_metrics_display().initialized)):  # ANSI codes for metrics updates
+        # Check for Pydantic deprecation warnings
+        is_pydantic_warning = (
+            'PydanticDeprecatedSince20' in text
+        )
+        
+        if is_pydantic_warning:
+            # Always redirect Pydantic warnings to log file
+            with open(self.log_file, 'a') as f:
+                f.write(f"{text}\n")
+        elif (is_panel or is_shutdown or
+              is_metrics or  # Metrics header
+              (is_metrics_content and get_metrics_display().initialized) or  # Metrics content after initialization
+              (is_ansi and get_metrics_display().initialized)):  # ANSI codes for metrics updates
             self.original_stream.write(text)
         elif text.strip():  # Skip empty lines for log file
             with open(self.log_file, 'a') as f:

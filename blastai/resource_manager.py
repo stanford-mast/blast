@@ -72,9 +72,7 @@ class ResourceManager:
         self.engine_hash = engine_hash
         self.cache_manager = cache_manager
         
-        # Shared browser instance when share_browser_process is enabled
-        self._shared_browser = None
-        self._shared_browser_users = 0
+        # We don't use shared browser process to avoid VNC session management complexity
         
         self._allocate_task = None
         self._monitor_task = None
@@ -117,15 +115,7 @@ class ResourceManager:
                 except asyncio.CancelledError:
                     pass
                     
-            # Cleanup shared browser if it exists
-            if self._shared_browser:
-                try:
-                    await self._shared_browser.close()
-                    self._shared_browser = None
-                    self._shared_browser_users = 0
-                    logger.debug("Cleaned up shared browser instance during stop")
-                except Exception as e:
-                    logger.error(f"Error cleaning up shared browser: {e}")
+            # No shared browser cleanup needed
                     
     def _get_total_memory_usage(self) -> float:
         """Get total memory usage for all browser processes created since engine start.
@@ -268,38 +258,16 @@ class ResourceManager:
         secrets = self._secrets_manager.get_secrets()
         sensitive_data = secrets if secrets else None
 
-        # Create executor using factory
-        if self.constraints.share_browser_process and self._shared_browser is None:
-            # Create shared browser session if it doesn't exist
-            self._shared_browser = await create_executor(
-                task_id=task_id,
-                constraints=self.constraints,
-                settings=self.settings,
-                scheduler=self.scheduler,
-                resource_manager=self,
-                engine_hash=self.engine_hash,
-                sensitive_data=sensitive_data
-            )
-            if not self._shared_browser:
-                return None
-            self._shared_browser_users = 0
-
-        if self.constraints.share_browser_process:
-            # Use shared browser session
-            executor = self._shared_browser
-            self._shared_browser_users += 1
-            return executor
-        else:
-            # Create new executor
-            return await create_executor(
-                task_id=task_id,
-                constraints=self.constraints,
-                settings=self.settings,
-                scheduler=self.scheduler,
-                resource_manager=self,
-                engine_hash=self.engine_hash,
-                sensitive_data=sensitive_data
-            )
+        # Create new executor (no shared browser process)
+        return await create_executor(
+            task_id=task_id,
+            constraints=self.constraints,
+            settings=self.settings,
+            scheduler=self.scheduler,
+            resource_manager=self,
+            engine_hash=self.engine_hash,
+            sensitive_data=sensitive_data
+        )
         
     async def end_task(self, task_id: str, cleanup_executor: bool = True):
         """Force end a task.
@@ -359,37 +327,20 @@ class ResourceManager:
         # Add cost to evicted total
         self._total_cost_evicted_executors += task.executor.get_total_cost()
         
-        # Clean up executor
-        if task.executor.browser_session:
+        # Store a reference to the executor before clearing it
+        executor = task.executor
+        
+        # Clear the executor reference from the task
+        task.executor = None
+        
+        # Clean up executor using its cleanup method which properly handles VNC sessions
+        if executor:
             try:
-                if self.constraints.share_browser_process and task.executor.browser_session == self._shared_browser:
-                    # Only cleanup page when using shared browser session
-                    current_page = await task.executor.browser_session.get_current_page()
-                    if current_page and not current_page.is_closed():
-                        await current_page.close()
-                    self._shared_browser_users -= 1
-                    logger.debug(f"Cleaned up shared browser page (remaining users: {self._shared_browser_users})")
-                    
-                    # Cleanup shared browser if no more users
-                    if self._shared_browser_users == 0:
-                        await self._shared_browser.close()
-                        self._shared_browser = None
-                        logger.debug("Cleaned up shared browser instance")
-                else:
-                    # Full cleanup for non-shared browser sessions
-                    try:
-                        # Clean up stealth profile directory if it was a temporary one
-                        if task.executor.user_data_dir:
-                            cleanup_stealth_profile_dir(task.executor.user_data_dir)
-                    except Exception as cleanup_error:
-                        logger.error(f"Error cleaning up stealth profile: {cleanup_error}")
-                    finally:
-                        await task.executor.browser_session.close()
+                # This will properly clean up the VNC session, browser session, and stealth profile
+                await executor.cleanup()
+                logger.debug(f"Cleaned up executor resources for task {task_id}")
             except Exception as e:
-                logger.error(f"Error cleaning up browser session: {e}")
-            finally:
-                # Always clear the executor reference
-                task.executor = None
+                logger.error(f"Error during executor cleanup: {e}")
         
         
     async def _allocate_resources(self):

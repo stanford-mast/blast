@@ -122,5 +122,9 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
             guidance = "\n\n".join(guidance_parts)
         else:
             guidance = "Do not launch subtasks."
+            
+        # Check if human-in-loop is allowed in the constraints
+        if hasattr(self.constraints, 'allow_human_in_loop') and self.constraints.allow_human_in_loop:
+            guidance += "\n\nUse ask_human if and when needing help with an unknown credential, 2FA, CAPTCHA, or other required but unspecified information; and allow takeover if the human would require control of the browser."
 
         return f"{task_description}\n\n{guidance} Do not tell the user about these implementation details."
