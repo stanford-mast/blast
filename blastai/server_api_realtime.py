@@ -15,6 +15,7 @@ The API uses JSON messages with a standard format:
 """
 
 import asyncio
+import json
 import logging
 from typing import Dict, Any, Optional, ClassVar
 from fastapi import WebSocket, WebSocketDisconnect
@@ -291,10 +292,13 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
     connection = RealtimeConnection(websocket, connection_id)
     connections[connection_id] = connection
     
+    # No ping handler
+    
     try:
         while True:
             # Receive message from client
             raw_message = await websocket.receive_text()
+            
             message = RealtimeMessage.model_validate_json(raw_message)
             
             try:
@@ -305,21 +309,26 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
                     # Handle new task request
                     task_request = TaskRequest.model_validate(message.data)
                     
-                    # Run task in interactive mode
-                    to_client_queue, from_client_queue = await engine.run(
-                        task_descriptions=task_request.description,
-                        mode="interactive",  # This automatically disables caching
-                        previous_response_id=task_request.prerequisite_task_id
-                    )
-                    
-                    # Update connection state
-                    connection.queues = {
-                        "to_client": to_client_queue,
-                        "from_client": from_client_queue
-                    }
-                    
-                    # Start forwarding in background
-                    asyncio.create_task(connection.forward_engine_events())
+                    try:
+                        # Run task in interactive mode
+                        to_client_queue, from_client_queue = await engine.run(
+                            task_descriptions=task_request.description,
+                            mode="interactive",  # This automatically disables caching
+                            previous_response_id=task_request.prerequisite_task_id,
+                            initial_url=task_request.initial_url  # Pass the initial URL to the engine
+                        )
+                        
+                        # Update connection state
+                        connection.queues = {
+                            "to_client": to_client_queue,
+                            "from_client": from_client_queue
+                        }
+                        
+                        # Start forwarding in background
+                        asyncio.create_task(connection.forward_engine_events())
+                    except Exception as e:
+                        logger.error(f"Error executing task: {str(e)}")
+                        raise
                     
                 elif message.type == MessageType.STOP:
                     # Forward stop request to engine

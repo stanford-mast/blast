@@ -180,7 +180,8 @@ class Scheduler:
         
     def schedule_task(self, description: str, prerequisite_task_id: Optional[str] = None,
                      parent_task_id: Optional[str] = None, cache_control: str = "",
-                     interactive_queues: Optional[Dict[str, asyncio.Queue]] = None) -> str:
+                     interactive_queues: Optional[Dict[str, asyncio.Queue]] = None,
+                     initial_url: Optional[str] = None) -> str:
         """Schedule a new task.
         
         Creates a new task state and checks for cached results.
@@ -206,7 +207,8 @@ class Scheduler:
             parent_task_id=parent_task_id,
             cache_options=cache_control,
             time_schedule=datetime.now(),
-            interactive_queues=interactive_queues
+            interactive_queues=interactive_queues,
+            initial_url=initial_url
         )
         
         # Add task to dictionary first
@@ -225,7 +227,8 @@ class Scheduler:
         
     def schedule_subtask(self, description: str, parent_task_id: str,
                         cache_control: str = "",
-                        interactive_queues: Optional[Dict[str, asyncio.Queue]] = None) -> str:
+                        interactive_queues: Optional[Dict[str, asyncio.Queue]] = None,
+                        initial_url: Optional[str] = None) -> str:
         """Schedule a subtask of an existing task.
         
         Subtasks have a parent-child relationship but can run in parallel.
@@ -248,7 +251,8 @@ class Scheduler:
             parent_task_id=parent_task_id,
             prerequisite_task_id=None,  # Explicitly set no prerequisite
             cache_control=cache_control,
-            interactive_queues=interactive_queues
+            interactive_queues=interactive_queues,
+            initial_url=initial_url
         )
         return task_id
         

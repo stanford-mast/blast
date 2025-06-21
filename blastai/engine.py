@@ -178,7 +178,8 @@ class Engine:
     async def run(self, task_descriptions: Union[str, List[str]],
                  cache_control: Union[str, List[str]] = "",
                  mode: Literal["block", "stream", "interactive"] = "block",
-                 previous_response_id: Optional[str] = None) -> Union[
+                 previous_response_id: Optional[str] = None,
+                 initial_url: Optional[str] = None) -> Union[
                      AgentHistoryListResponse,  # block mode
                      AsyncIterator[Union[AgentReasoning, AgentHistoryListResponse]],  # stream mode
                      Tuple[asyncio.Queue, asyncio.Queue]  # interactive mode
@@ -236,7 +237,8 @@ class Engine:
                     desc,
                     prerequisite_task_id=current_task_id,
                     cache_control=cache_controls[i],
-                    interactive_queues=interactive_queues
+                    interactive_queues=interactive_queues,
+                    initial_url=initial_url if i == 0 else None  # Only pass initial_url for the first task
                 )
                 task = self.scheduler.tasks[task_id]
                 logger.debug(f"Task {task_id} scheduled (prerequisite: {current_task_id}, url: {task.initial_url})")
@@ -244,12 +246,13 @@ class Engine:
                 current_task_id = task_id
             final_task_id = task_ids[-1]
         else:
-            # For single task, let scheduler handle it directly    
+            # For single task, let scheduler handle it directly
             final_task_id = self.scheduler.schedule_task(
                 task_descriptions,
                 prerequisite_task_id=prev_task_id,
                 cache_control=cache_controls[0],
-                interactive_queues=interactive_queues
+                interactive_queues=interactive_queues,
+                initial_url=initial_url
             )
             task = self.scheduler.tasks[final_task_id]
             logger.debug(f"Task {final_task_id} scheduled (prerequisite: {prev_task_id}, url: {task.initial_url})")

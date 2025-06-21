@@ -4,3 +4,6 @@
 [submodule "playwright-computer-use"]
 	path = playwright-computer-use
 	url = git@github.com:invariantlabs-ai/playwright-computer-use.git
+[submodule "workflow-use"]
+	path = workflow-use
+	url = git@github.com:browser-use/workflow-use.git

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+import random
 from pathlib import Path
 from typing import List, Optional, Union, AsyncIterator, Dict, Any, cast
 from datetime import datetime
@@ -211,28 +212,28 @@ class Executor:
                 live_url=self.live_url
             ))
             
-            # Create separate reasoning for memory if available
-            if hasattr(brain, 'memory') and brain.memory:
+        # Create separate reasoning for memory if available
+        if hasattr(brain, 'memory') and brain.memory:
+            reasonings.append(AgentReasoning(
+                task_id=self.task_id,
+                type="thought",
+                thought_type="memory",
+                content=brain.memory,
+                live_url=self.live_url
+            ))
+        
+        # Create separate reasoning for screenshot if available
+        try:
+            state = await self.browser_session.get_state_summary(cache_clickable_elements_hashes=True)
+            if state and state.screenshot:
                 reasonings.append(AgentReasoning(
                     task_id=self.task_id,
-                    type="thought",
-                    thought_type="memory",
-                    content=brain.memory,
+                    type="screenshot",
+                    content=state.screenshot,
                     live_url=self.live_url
                 ))
-            
-            # Create separate reasoning for screenshot if available
-            try:
-                state = await self.browser_session.get_state_summary(cache_clickable_elements_hashes=True)
-                if state and state.screenshot:
-                    reasonings.append(AgentReasoning(
-                        task_id=self.task_id,
-                        type="screenshot",
-                        content=state.screenshot,
-                        live_url=self.live_url
-                    ))
-            except Exception as e:
-                pass
+        except Exception as e:
+            pass
             
         return reasonings
     
