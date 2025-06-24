@@ -10,6 +10,8 @@ from browser_use.browser import BrowserSession
 from patchright.async_api import async_playwright as async_patchright
 from langchain_core.language_models.chat_models import BaseChatModel
 
+# Import moved to line 27
+
 from .config import Settings, Constraints
 from .tools import Tools
 from .utils import find_local_browser, init_model
@@ -20,6 +22,10 @@ from .resource_factory_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Apply all browser session patches
+from .browser_session_patch import apply_all_patches
+apply_all_patches()
 
 async def create_executor(
     task_id: str,

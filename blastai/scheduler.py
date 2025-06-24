@@ -453,9 +453,41 @@ class Scheduler:
                 if not parent:
                     break
                 current_id = parent.parent_task_id
+            
+            # Collect previous task information
+            previous_tasks = []
+            current_id = task.prerequisite_task_id
+            
+            # Recursively collect all prerequisite tasks and their prerequisites
+            def collect_prerequisites(task_id):
+                if not task_id:
+                    return []
                 
+                prereq_task = self.tasks.get(task_id)
+                if not prereq_task:
+                    return []
+                
+                # Recursively get prerequisites of this prerequisite
+                prereq_list = collect_prerequisites(prereq_task.prerequisite_task_id)
+                
+                # Add this prerequisite to the list if it has a result
+                if prereq_task.result:
+                    final_response = prereq_task.result.final_result()
+                    if final_response:
+                        prereq_list.append((prereq_task.description, final_response))
+                
+                return prereq_list
+            
+            # Collect all prerequisite tasks
+            previous_tasks = collect_prerequisites(task.prerequisite_task_id)
+            
             # Get plan from planner
-            plan = await self.planner.plan(task.description, subtask_depth=depth)
+            plan = await self.planner.plan(
+                task.description,
+                subtask_depth=depth,
+                previous_tasks=previous_tasks,
+                initial_url=task.initial_url
+            )
             logger.debug(f"Planned task {task_id} to '{task.description}' with '{plan}'")
             
             # Start execution coroutine

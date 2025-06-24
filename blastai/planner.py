@@ -1,7 +1,8 @@
 """Task planning for BLAST."""
 
 import logging
-from typing import Optional
+import re
+from typing import List, Optional, Tuple
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .config import Constraints
@@ -74,57 +75,132 @@ Example 10:
 Task: Find the top 8 biotech companies and for each CEO find the undergraduate university they attended  
 Plan: search for list of top 8 biotech companies --> get list of CEOs from that list /* CEO names usually listed alongside company details */ --> launch_subtask(find undergraduate university of $CEO, initial search for $CEO) for $CEO in <list of 8 CEOs> /* parallelize each CEO lookup */ --> get_subtask_results to summarize each CEO's alma mater"""
         
-    async def plan(self, task_description: str, subtask_depth: int = 0) -> str:
+    async def _generate_context_summary(self, previous_tasks: List[Tuple[str, str]]) -> Optional[str]:
+        """Generate a summary of previous tasks.
+        
+        Args:
+            previous_tasks: List of tuples (task_description, final_response) from previous tasks
+            
+        Returns:
+            A 1-2 sentence summary starting with "The previous task was to", or None if generation fails
+        """
+        if not previous_tasks:
+            return None
+            
+        # Take the last 3 tasks at most
+        recent_tasks = previous_tasks[-3:]
+        
+        # Create a prompt for the LLM to generate a summary
+        summary_prompt = "Generate a 1-2 sentence summary of the previous task that starts with 'The previous task was to', including the most recent results or any follow-up questions or clarifications. Here are the details:\n\n"
+        
+        for i, (prev_task, prev_result) in enumerate(recent_tasks):
+            summary_prompt += f"Task {i+1}: {prev_task}\n"
+            summary_prompt += f"Result {i+1}: {prev_result}\n\n"
+        
+        # Get summary from LLM
+        messages = [
+            SystemMessage(content="You are a helpful assistant that summarizes previous tasks concisely."),
+            HumanMessage(content=summary_prompt)
+        ]
+        
+        try:
+            response = await self.llm.ainvoke(messages)
+            summary = response.content.strip()
+            
+            # Extract the part starting with "The previous task was to"
+            match = re.search(r'The previous task was to.*', summary, re.DOTALL)
+            if match:
+                return match.group(0)
+            return summary
+        except Exception as e:
+            logger.warning(f"Failed to generate previous task summary: {e}")
+            return None
+    
+    async def _generate_tool_use_annotations(self, context_task_description: str) -> Optional[str]:
+        """Generate tool use annotations for the task.
+        
+        Args:
+            context_task_description: The task description with context
+            
+        Returns:
+            A plan for tool use, or None if generation fails
+        """
+        try:
+            messages = [
+                SystemMessage(content=self.system_prompt),
+                HumanMessage(content=f"Generate a plan for this task: {context_task_description}")
+            ]
+            response = await self.llm.ainvoke(messages)
+            plan = response.content.replace("Plan:", "").strip()
+            plan_lines = plan.split('\n')
+            plan_summary = ' '.join(plan_lines[:2]) if len(plan_lines) > 2 else plan
+            return f"Execute: {plan_summary}"
+        except Exception as e:
+            logger.warning(f"Failed to generate tool use annotations: {e}")
+            return None
+    
+    async def plan(
+        self,
+        task_description: str,
+        subtask_depth: int = 0,
+        initial_url: Optional[str] = None,
+        previous_tasks: List[Tuple[str, str]] = None
+    ) -> str:
         """Generate a plan for task execution.
         
         Args:
-            task_description: Description of the task to plan
-            subtask_depth: Current depth in subtask tree (0 for root tasks)
-            
-        Returns:
-            Brief plan focusing on subtask management
+            task_description: The task to plan
+            subtask_depth: Current depth of subtask nesting
+            initial_url: Optional URL where the task is being launched from
+            previous_tasks: List of tuples (task_description, final_response) from previous tasks
         """
-        # Check if we're at max depth
-        if subtask_depth >= self.constraints.max_parallelism_nesting_depth:
-            guidance = "Do not launch subtasks"
-            return f"{task_description}\n{guidance}"
-
-        # Build guidance based on allowed parallelism types
-        parallelism = self.constraints.allow_parallelism
-        guidance_parts = []
-
-        # First check first_of_n
-        if parallelism.get("first_of_n", False) and subtask_depth < self.constraints.max_parallelism_nesting_depth:
-            guidance_parts.append(
-                f"Execute launch_subtask(task=\"{task_description}\", num_copies=3) --> then get_first_subtask_result with the returned subtask IDs"
+        # Build task context string
+        if initial_url:
+            context_task_description = (
+                f"{task_description}\n\nThis task is being launched from {initial_url}"
             )
-
-        # Add task parallelism if allowed
-        if parallelism.get("task", False):
-            messages = [
-                SystemMessage(content=self.system_prompt),
-                HumanMessage(content=f"Generate a plan for this task: {task_description}")
-            ]
-            response = await self.llm.ainvoke(messages)
-            plan = response.content.replace('Plan:', '').strip()
-            if len(plan.split('\n')) > 2:
-                plan = ' '.join(plan.split('\n')[:2])
-            guidance_parts.append('Execute: ' + plan)
-
-        # Add data parallelism if allowed
-        if parallelism.get("data", False):
-            guidance_parts.append(
-                "Use extract_content_fast instead of extract_content."
-            )
-
-        # Combine guidance or use default
-        if guidance_parts:
-            guidance = "\n\n".join(guidance_parts)
         else:
-            guidance = "Do not launch subtasks."
-            
-        # Check if human-in-loop is allowed in the constraints
-        if hasattr(self.constraints, 'require_human_in_loop') and self.constraints.require_human_in_loop:
-            guidance += "\n\nUse ask_human if and when needing help with an unknown credential, 2FA, CAPTCHA, or other required but unspecified information; and allow takeover if the human would require control of the browser."
+            context_task_description = task_description
 
-        return f"{task_description}\n\n{guidance} Do not tell the user about these implementation details."
+        guidance_parts = []
+        
+        # Generate summary of previous tasks if available
+        if previous_tasks and len(previous_tasks) > 0:
+            previous_task_summary = await self._generate_context_summary(previous_tasks)
+            if previous_task_summary:
+                guidance_parts.append(previous_task_summary)
+
+        if subtask_depth >= self.constraints.max_parallelism_nesting_depth:
+            # At max depth, only show this guidance (do not include others)
+            guidance_parts.append("Do not launch subtasks.")
+        else:
+            parallelism = self.constraints.allow_parallelism
+
+            if parallelism.get("first_of_n", False):
+                guidance_parts.append(
+                    f'Execute launch_subtask(task="{task_description}", num_copies=3) '
+                    "--> then get_first_subtask_result with the returned subtask IDs"
+                )
+
+            if parallelism.get("task", False):
+                tool_annotation = await self._generate_tool_use_annotations(context_task_description)
+                if tool_annotation:
+                    guidance_parts.append(tool_annotation)
+
+            if parallelism.get("data", False):
+                guidance_parts.append(
+                    "Use extract_content_fast instead of extract_content."
+                )
+
+            if not guidance_parts:
+                guidance_parts.append("Do not launch subtasks.")
+
+            if getattr(self.constraints, "require_human_in_loop", False):
+                guidance_parts.append(
+                    "Use ask_human if and when needing help with an unknown credential, 2FA, CAPTCHA, or other required but unspecified information; "
+                    "and allow takeover if the human would require control of the browser."
+                )
+
+        full_guidance = "\n\n".join(guidance_parts) + " Do not tell the user about these implementation details."
+
+        return f"{context_task_description}\n\n{full_guidance}"

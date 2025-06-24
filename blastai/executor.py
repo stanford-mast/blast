@@ -123,7 +123,7 @@ class Executor:
                     initial_actions = None
                     url = self._get_url_or_search(initial_url)
                     if url:
-                        initial_actions = [{'open_tab': {'url': url}}]
+                        initial_actions = [{'go_to_url': {'url': url}}]
                         
                     logger.debug(f"Creating new agent for task: {task} with sensitive data: {self.sensitive_data}")
                     self.agent = Agent(
@@ -136,9 +136,51 @@ class Executor:
                         sensitive_data=self.sensitive_data
                     )
                 else:
+                    # For follow-up tasks, we need to clear any initial_actions
+                    # to prevent them from being executed again
+                    self.agent.initial_actions = None
+                    
+                    # Get the current page URL from the browser session
+                    # This ensures we're working with the tab the user is currently on
+                    current_page = await self.agent.browser_session.get_current_page()
+                    current_url = current_page.url if current_page else None
+                    
+                    # Only navigate to URL if explicitly provided for this task
+                    # Otherwise, we'll use the current page that the user is on
+                    # Only navigate to URL if explicitly provided for this task
+                    # Otherwise, we'll use the current page that the user is on
                     url = self._get_url_or_search(initial_url)
                     if url:
+                        # Instead of opening a new tab, navigate the current page to the URL
+                        # This ensures we stay on the tab the user switched to
+                        logger.debug(f"Navigating current page to URL: {url}")
                         await self.agent.browser_session.navigate(url)
+                    elif current_url:
+                        # Log that we're using the current page that the user switched to
+                        logger.debug(f"Using current page URL for task: {current_url}")
+                    
+                    # Reinitialize the EventBus to ensure it's properly set up for the new task
+                    # This prevents the "EventBus._start() must be called before _run_loop_step()" error
+                    if hasattr(self.agent, 'eventbus') and self.agent.eventbus:
+                        # Create a new EventBus with the same configuration
+                        wal_path = self.agent.eventbus.wal_path
+                        name = self.agent.eventbus.name
+                        parallel_handlers = self.agent.eventbus.parallel_handlers
+                        
+                        # Create a new EventBus instance
+                        from bubus import EventBus
+                        self.agent.eventbus = EventBus(name=name, wal_path=wal_path, parallel_handlers=parallel_handlers)
+                        
+                        # Explicitly call _start() to ensure the EventBus is properly initialized
+                        # This ensures event_queue, runloop_lock, and on_idle are set up
+                        self.agent.eventbus._start()
+                        
+                        # Register any existing handlers
+                        if hasattr(self.agent, 'cloud_sync') and self.agent.cloud_sync:
+                            self.agent.eventbus.on('*', self.agent.cloud_sync.handle_event)
+                    
+                    # Update the agent's task property directly before calling add_new_task
+                    self.agent.task = task
                     self.agent.add_new_task(task)
                 
                 # Run task with cost tracking if using OpenAI

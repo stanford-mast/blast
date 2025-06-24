@@ -204,13 +204,19 @@ class Engine:
         # Extract previous task ID from response ID if provided
         prev_task_id = None
         if previous_response_id:
-            # Response ID format: "resp_<task_id>" or "chatcmpl-<task_id>"
+            # Response ID format: "resp_<task_id>" or "chatcmpl-<task_id>" or direct task ID
             if previous_response_id.startswith("resp_"):
                 prev_task_id = previous_response_id.split('_')[1]
             elif previous_response_id.startswith("chatcmpl-"):
                 prev_task_id = previous_response_id.split('-')[1]
+            else:
+                # Assume it's a direct task ID
+                prev_task_id = previous_response_id
+                
+            # Check if task exists
             if prev_task_id not in self.scheduler.tasks:
-                raise RuntimeError(f"Previous task {prev_task_id} not found")
+                logger.warning(f"Previous task {prev_task_id} not found")
+                prev_task_id = None
             
         # Create queues if interactive mode
         interactive_queues = None
