@@ -140,6 +140,12 @@ class Executor:
                     # to prevent them from being executed again
                     self.agent.initial_actions = None
                     
+                    # Reset agent's stopped state if it was previously stopped
+                    # This ensures the agent can run again after being stopped
+                    if hasattr(self.agent, 'state') and hasattr(self.agent.state, 'stopped') and self.agent.state.stopped:
+                        logger.debug(f"Resetting stopped state for agent in task: {task}")
+                        self.agent.state.stopped = False
+                    
                     # Get the current page URL from the browser session
                     # This ensures we're working with the tab the user is currently on
                     current_page = await self.agent.browser_session.get_current_page()

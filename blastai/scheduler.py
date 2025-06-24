@@ -105,6 +105,8 @@ class TaskState:
     time_complete: Optional[datetime] = None
     initial_url: Optional[str] = None
     interactive_queues: Optional[Dict[str, asyncio.Queue]] = None  # Queues for interactive mode
+    # TODO: Add stopped so that any stopped tasks or human-intervened tasks can only
+    # permit executor reuse if there is a prerequisite task, can't be lineage based
     
     @property
     def is_completed(self) -> bool:
@@ -644,6 +646,42 @@ class Scheduler:
             subtask_ids.extend(self._get_subtask_ids(subtask_id))
             
         return subtask_ids
+        
+    def _get_prereq_ids(self, task_id: str, running_only: bool = False) -> List[str]:
+        """Get IDs of all prerequisite tasks recursively.
+        
+        This method returns all prerequisite tasks at any depth in the prerequisite chain.
+        
+        Args:
+            task_id: Task ID
+            running_only: If True, only return running prerequisites
+            
+        Returns:
+            List of all prerequisite task IDs
+        """
+        prereq_ids = []
+        visited = set()
+        
+        def collect_prereqs(tid: str):
+            if tid in visited:
+                return
+            visited.add(tid)
+            
+            task = self.tasks.get(tid)
+            if not task:
+                return
+                
+            if task.prerequisite_task_id:
+                prereq_task = self.tasks.get(task.prerequisite_task_id)
+                if prereq_task:
+                    # Only include if not filtering or if running and filtering
+                    if not running_only or prereq_task.is_running:
+                        prereq_ids.append(task.prerequisite_task_id)
+                    # Always recurse regardless of running status
+                    collect_prereqs(task.prerequisite_task_id)
+        
+        collect_prereqs(task_id)
+        return prereq_ids
         
     def priority_sort(self, task_ids: List[str]) -> List[TaskPriorityGroup]:
         """Sort tasks by priority.

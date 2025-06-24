@@ -235,18 +235,17 @@ class RealtimeConnection:
                     try:
                         result_message = RealtimeMessage.from_task_result(event)
                         await self.websocket.send_json(result_message.model_dump())
-                        # Task completed, clear state
+                        # Task completed, but don't clear queues - just mark task as completed
+                        logger.info(f"Task {self.current_task_id} completed, preserving connection state")
                         self.current_task_id = None
-                        self.queues = None
                         break
                     except Exception as e:
                         logger.error(f"Error sending task result: {e}")
                         await self.websocket.send_json(
                             RealtimeMessage.error(f"Error processing task result: {str(e)}").model_dump()
                         )
-                        # Still clear state on error
+                        # Still mark task as completed on error
                         self.current_task_id = None
-                        self.queues = None
                         break
                     
                 elif isinstance(event, HumanRequest):
@@ -263,11 +262,17 @@ class RealtimeConnection:
         if self.current_task_id and self.queues:
             # Send stop request to current task
             try:
+                logger.info(f"Sending stop request during cleanup for task {self.current_task_id}")
                 await self.queues["from_client"].put(StopRequest(type="stop"))
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Error sending stop request during cleanup: {e}")
+            
+            # Don't set queues to None - this allows the connection to be reused
+            # when the client reconnects
+            logger.info(f"Preserving connection state for task {self.current_task_id}")
+            
+            # Just mark the task as completed
             self.current_task_id = None
-            self.queues = None
 
 async def handle_realtime_connection(websocket: WebSocket, engine: Engine, connections: Dict[str, RealtimeConnection]):
     """Handle a realtime WebSocket connection.
@@ -334,26 +339,51 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
                     # Forward stop request to engine
                     if connection.queues:
                         try:
+                            # Store task ID before sending stop request
+                            task_id = connection.current_task_id
+                            logger.info(f"Processing stop request for task {task_id}")
+                            
                             # Send stop request to engine
                             await connection.queues["from_client"].put(
                                 StopRequest(type="stop")
                             )
                             
-                            # Send confirmation back to client
-                            await websocket.send_json(
-                                RealtimeMessage.error("Task stopped by user").model_dump()
-                            )
+                            # Wait a short time for the stop request to be processed
+                            await asyncio.sleep(0.2)
                             
-                            # Clear connection state
-                            task_id = connection.current_task_id
-                            logger.info(f"Stop request processed for task {task_id}")
-                            connection.current_task_id = None
-                            connection.queues = None
+                            try:
+                                # Send confirmation back to client
+                                await websocket.send_json(
+                                    RealtimeMessage.error("Task stopped by user").model_dump()
+                                )
+                                
+                                # Log stop request but don't clear connection state
+                                # This allows the connection to be reused if the executor is preserved
+                                logger.info(f"Stop request processed for task {task_id}, connection state preserved")
+                                
+                                # Mark the task as completed but preserve the queues
+                                connection.current_task_id = None
+                            except RuntimeError as e:
+                                # Handle case where websocket is closed before we can send confirmation
+                                if "websocket.close" in str(e):
+                                    logger.warning(f"WebSocket closed before stop confirmation could be sent for task {task_id}")
+                                    # Still mark the task as completed
+                                    connection.current_task_id = None
+                                else:
+                                    raise
+                            
                         except Exception as e:
                             logger.error(f"Error processing stop request: {e}")
-                            await websocket.send_json(
-                                RealtimeMessage.error(f"Error stopping task: {str(e)}").model_dump()
-                            )
+                            try:
+                                await websocket.send_json(
+                                    RealtimeMessage.error(f"Error stopping task: {str(e)}").model_dump()
+                                )
+                            except RuntimeError as ws_err:
+                                # Handle case where websocket is closed before we can send error
+                                if "websocket.close" in str(ws_err):
+                                    logger.warning(f"WebSocket closed before error could be sent: {e}")
+                                else:
+                                    raise
                         
                 elif message.type == MessageType.HUMAN_RESPONSE:
                     # Forward human response to engine

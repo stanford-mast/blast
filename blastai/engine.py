@@ -321,9 +321,19 @@ class Engine:
                                 if isinstance(msg, StopRequest):
                                     # Get all tasks in dependency chain
                                     dependency_ids = self.scheduler._get_dependency_ids(final_task_id)
-                                    # End all tasks
+                                    
+                                    # Process each task in the dependency chain
                                     for task_id in dependency_ids:
-                                        await self.resource_manager.end_task(task_id)
+                                        task = self.scheduler.tasks.get(task_id)
+                                        if not task or task.is_completed:
+                                            continue  # Skip if task doesn't exist or is already completed
+
+                                        # End the task - preserve executor if it has running prerequisites
+                                        # Otherwise clean up the executor
+                                        cleanup_executor = len(self.scheduler._get_prereq_ids(task_id, running_only=True)) > 0
+                                        logger.debug(f"Ending task {task_id} with cleanup_executor={cleanup_executor}")
+                                        await self.resource_manager.end_task(task_id, cleanup_executor=cleanup_executor)
+                                    
                                     break
                             except asyncio.TimeoutError:
                                 continue  # No message, check completion again

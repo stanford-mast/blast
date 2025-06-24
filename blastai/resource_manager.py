@@ -273,10 +273,11 @@ class ResourceManager:
         """Force end a task.
         
         This method:
-        1. Cancels any running executor task
-        2. Marks task as completed but unsuccessful
-        3. Optionally cleans up executor resources
-        4. Updates cost tracking
+        1. Stops the agent if present
+        2. Cancels any running executor task
+        3. Marks task as completed but unsuccessful
+        4. Optionally cleans up executor resources
+        5. Updates cost tracking
         
         Args:
             task_id: Task ID
@@ -289,9 +290,15 @@ class ResourceManager:
             
         if task.is_completed:
             return  # Already completed
+        
+        # Stop the agent first if present
+        if task.executor and hasattr(task.executor, 'agent') and task.executor.agent:
+            logger.debug(f"Stopping agent for task {task_id}")
+            task.executor.agent.stop()
             
         # Cancel executor run task if running
         if task.executor_run_task and not task.executor_run_task.done():
+            logger.debug(f"Canceling executor_run_task for task {task_id}")
             task.executor_run_task.cancel()
             try:
                 await task.executor_run_task
@@ -300,7 +307,10 @@ class ResourceManager:
                 
         # Clean up executor if present and cleanup_executor is True
         if task.executor and cleanup_executor:
+            logger.debug(f"Cleaning up executor for task {task_id}")
             await self._evict_executor(task_id)
+        elif task.executor and not cleanup_executor:
+            logger.debug(f"Preserving executor for task {task_id} for future reuse")
             
         # Mark task as completed but unsuccessful
         await self.scheduler.complete_task(task_id, success=False)
