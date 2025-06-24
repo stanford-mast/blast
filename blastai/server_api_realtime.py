@@ -17,7 +17,8 @@ The API uses JSON messages with a standard format:
 import asyncio
 import json
 import logging
-from typing import Dict, Any, Optional, ClassVar
+import time
+from typing import Dict, Any, Optional, ClassVar, List
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
@@ -44,6 +45,8 @@ class MessageType(str):
     TASK_RESULT = "task_result"  # Task completion result
     HUMAN_REQUEST = "human_request"  # Request for human input
     ERROR = "error"  # Error message
+    HEARTBEAT = "heartbeat"  # Client heartbeat to keep connection alive
+    HEARTBEAT_RESPONSE = "heartbeat_response"  # Server response to heartbeat
 
 class TaskRequest(BaseModel):
     """Request to run a new task.
@@ -79,7 +82,9 @@ class RealtimeMessage(BaseModel):
         MessageType.AGENT_REASONING,
         MessageType.TASK_RESULT,
         MessageType.HUMAN_REQUEST,
-        MessageType.ERROR
+        MessageType.ERROR,
+        MessageType.HEARTBEAT,
+        MessageType.HEARTBEAT_RESPONSE
     }
 
     @classmethod
@@ -153,6 +158,17 @@ class RealtimeMessage(BaseModel):
             data={"error": error}
         )
 
+    @classmethod
+    def heartbeat_response(cls, session_id: str) -> "RealtimeMessage":
+        """Create heartbeat response message."""
+        return cls(
+            type=MessageType.HEARTBEAT_RESPONSE,
+            data={
+                "timestamp": int(asyncio.get_event_loop().time() * 1000),
+                "session_id": session_id
+            }
+        )
+
     def validate_type(self) -> None:
         """Validate message type."""
         if self.type not in self.VALID_TYPES:
@@ -185,6 +201,8 @@ class RealtimeConnection:
         self.connection_id = connection_id
         self.current_task_id: Optional[str] = None
         self.queues: Optional[Dict[str, asyncio.Queue]] = None
+        self.session_id: Optional[str] = None
+        self.last_heartbeat: Optional[float] = None
         
     async def forward_engine_events(self):
         """Forward events from engine to WebSocket.
@@ -274,6 +292,79 @@ class RealtimeConnection:
             # Just mark the task as completed
             self.current_task_id = None
 
+# Dictionary to track connections by session ID
+_session_connections: Dict[str, str] = {}  # Maps session_id to connection_id
+
+# Heartbeat timeout in seconds
+HEARTBEAT_TIMEOUT = 120  # 2 minutes
+
+async def cleanup_stale_connections(connections: Dict[str, RealtimeConnection]):
+    """Background task to clean up stale connections.
+    
+    This task runs periodically and removes connections that haven't
+    received a heartbeat in HEARTBEAT_TIMEOUT seconds.
+    
+    Args:
+        connections: Dictionary of active connections
+    """
+    while True:
+        try:
+            # Wait for a while before checking
+            await asyncio.sleep(60)  # Check every minute
+            
+            current_time = asyncio.get_event_loop().time()
+            stale_connections: List[str] = []
+            
+            # Find stale connections
+            for conn_id, conn in connections.items():
+                if conn.last_heartbeat:
+                    time_since_heartbeat = current_time - conn.last_heartbeat
+                    if time_since_heartbeat > HEARTBEAT_TIMEOUT:
+                        logger.info(f"Connection {conn_id} is stale (no heartbeat for {time_since_heartbeat:.1f}s)")
+                        stale_connections.append(conn_id)
+                else:
+                    # No heartbeat recorded, check if it's been a while since creation
+                    stale_connections.append(conn_id)
+            
+            # Clean up stale connections
+            for conn_id in stale_connections:
+                if conn_id in connections:
+                    conn = connections[conn_id]
+                    
+                    # Clean up session tracking
+                    if conn.session_id and conn.session_id in _session_connections:
+                        del _session_connections[conn.session_id]
+                        
+                    # Clean up connection
+                    await conn.cleanup()
+                    del connections[conn_id]
+                    
+                    logger.info(f"Cleaned up stale connection {conn_id}")
+        
+        except Exception as e:
+            logger.error(f"Error in cleanup_stale_connections: {e}")
+
+async def find_existing_session(session_id: str, connections: Dict[str, RealtimeConnection]) -> Optional[RealtimeConnection]:
+    """Find an existing connection by session ID.
+    
+    Args:
+        session_id: The session ID to look for
+        connections: Dictionary of active connections
+        
+    Returns:
+        The existing connection if found, None otherwise
+    """
+    if not session_id or session_id not in _session_connections:
+        return None
+        
+    connection_id = _session_connections[session_id]
+    if connection_id not in connections:
+        # Clean up stale session tracking
+        del _session_connections[session_id]
+        return None
+        
+    return connections[connection_id]
+
 async def handle_realtime_connection(websocket: WebSocket, engine: Engine, connections: Dict[str, RealtimeConnection]):
     """Handle a realtime WebSocket connection.
     
@@ -297,7 +388,11 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
     connection = RealtimeConnection(websocket, connection_id)
     connections[connection_id] = connection
     
-    # No ping handler
+    # Set last heartbeat time to now
+    connection.last_heartbeat = asyncio.get_event_loop().time()
+    
+    # Flag to track if this is the first message
+    is_first_message = True
     
     try:
         while True:
@@ -305,6 +400,37 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
             raw_message = await websocket.receive_text()
             
             message = RealtimeMessage.model_validate_json(raw_message)
+            
+            # Check for session ID in the first message
+            if is_first_message:
+                is_first_message = False
+                
+                # Try to extract session ID from any message type
+                session_id = None
+                if hasattr(message.data, 'get'):
+                    session_id = message.data.get('session_id')
+                
+                if session_id:
+                    logger.info(f"First message contains session ID: {session_id}")
+                    
+                    # Check if this is a reconnection
+                    existing_connection = await find_existing_session(session_id, connections)
+                    if existing_connection:
+                        logger.info(f"Reconnecting session {session_id} to connection {connection_id}")
+                        
+                        # Update the connection with the existing session's state
+                        connection.session_id = session_id
+                        connection.current_task_id = existing_connection.current_task_id
+                        connection.queues = existing_connection.queues
+                        
+                        # Update session tracking
+                        _session_connections[session_id] = connection_id
+                        
+                        # Clean up the old connection
+                        old_connection_id = existing_connection.connection_id
+                        if old_connection_id in connections and old_connection_id != connection_id:
+                            del connections[old_connection_id]
+                            logger.info(f"Cleaned up old connection {old_connection_id}")
             
             try:
                 # Validate message type
@@ -395,6 +521,36 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
                                 response=response_data["response"]
                             )
                         )
+                
+                elif message.type == MessageType.HEARTBEAT:
+                    # Handle heartbeat message
+                    try:
+                        # Extract session ID from heartbeat message
+                        heartbeat_data = message.data
+                        session_id = heartbeat_data.get("session_id")
+                        
+                        if session_id:
+                            # Update connection's session ID if not already set
+                            if not connection.session_id:
+                                connection.session_id = session_id
+                                logger.info(f"Connection {connection_id} associated with session {session_id}")
+                                
+                                # Update session tracking
+                                _session_connections[session_id] = connection_id
+                            
+                            # Update last heartbeat time
+                            connection.last_heartbeat = asyncio.get_event_loop().time()
+                            
+                            # Send heartbeat response
+                            await websocket.send_json(
+                                RealtimeMessage.heartbeat_response(session_id).model_dump()
+                            )
+                            
+                            logger.debug(f"Heartbeat received and acknowledged for session {session_id}")
+                        else:
+                            logger.warning("Received heartbeat without session_id")
+                    except Exception as e:
+                        logger.error(f"Error handling heartbeat: {e}")
                         
             except ValueError as e:
                 # Handle validation errors
@@ -407,10 +563,40 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
                 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected: {connection_id}")
-        # Clean up connection
-        await connection.cleanup()
-        if connection_id in connections:
-            del connections[connection_id]
+        
+        # If this connection has a session ID, preserve it for potential reconnection
+        if connection.session_id:
+            logger.info(f"Preserving connection state for session {connection.session_id}")
+            # Don't delete the connection from connections dict yet
+            # It will be cleaned up by a background task if no reconnection happens
+            
+            # Just clean up the task
+            await connection.cleanup()
+            
+            # Start a background task to clean up the connection if no reconnection happens
+            # within a reasonable time (e.g., 2 minutes)
+            async def delayed_cleanup():
+                await asyncio.sleep(120)  # 2 minutes
+                if connection_id in connections:
+                    # Check if there have been any heartbeats recently
+                    if connection.last_heartbeat:
+                        time_since_heartbeat = asyncio.get_event_loop().time() - connection.last_heartbeat
+                        if time_since_heartbeat > 120:  # 2 minutes
+                            logger.info(f"No reconnection for session {connection.session_id} after 2 minutes, cleaning up")
+                            if connection_id in connections:
+                                del connections[connection_id]
+                            # Clean up session tracking
+                            if connection.session_id in _session_connections:
+                                del _session_connections[connection.session_id]
+            
+            # Start the delayed cleanup task
+            asyncio.create_task(delayed_cleanup())
+        else:
+            # No session ID, clean up immediately
+            logger.info(f"No session ID, cleaning up connection {connection_id}")
+            await connection.cleanup()
+            if connection_id in connections:
+                del connections[connection_id]
             
     except Exception as e:
         logger.error(f"Error in WebSocket connection: {e}")
@@ -420,8 +606,16 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
             pass
         # Ensure cleanup
         await connection.cleanup()
-            
-    finally:
-        # Final cleanup
+        
+        # Clean up connection from tracking
         if connection_id in connections:
             del connections[connection_id]
+            
+        # Clean up session tracking if needed
+        if connection.session_id and connection.session_id in _session_connections:
+            del _session_connections[connection.session_id]
+            
+    finally:
+        # We don't automatically delete the connection here anymore
+        # It's either already deleted or preserved for reconnection
+        pass

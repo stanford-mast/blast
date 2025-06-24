@@ -17,6 +17,7 @@ from .server_api_responses import ResponseRequest, handle_responses, handle_dele
 from .server_api_realtime import (
     RealtimeConnection,
     handle_realtime_connection,
+    cleanup_stale_connections,
     TaskRequest,
     RealtimeMessage,
     MessageType
@@ -37,6 +38,7 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI application."""
     global _engine
     shutdown_event = asyncio.Event()
+    cleanup_task = None
     
     # Define shutdown handler first
     async def handle_shutdown():
@@ -45,6 +47,16 @@ async def lifespan(app: FastAPI):
                 await asyncio.wait_for(_engine.stop(), timeout=30.0)
             except Exception as e:
                 logger.error(f"Error stopping engine: {e}")
+        
+        # Cancel cleanup task if running
+        if cleanup_task and not cleanup_task.done():
+            logger.info("Cancelling connection cleanup task")
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
+            
         shutdown_event.set()
     
     try:
@@ -52,6 +64,10 @@ async def lifespan(app: FastAPI):
         if not _engine:
             _engine = await Engine.create()
             logger.info("Engine started successfully")
+        
+        # Start connection cleanup task
+        cleanup_task = asyncio.create_task(cleanup_stale_connections(_websocket_connections))
+        logger.info("Started connection cleanup task")
         
         # Store shutdown handler
         app.state.handle_shutdown = handle_shutdown
