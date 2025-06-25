@@ -383,42 +383,54 @@ class ResourceManager:
                     task = self.scheduler.tasks[task_id]
                     task_lineage = self.scheduler.get_lineage(task_id)
                     
-                    # Look for completed tasks with executors
-                    for other_task in self.scheduler.tasks.values():
-                        if other_task.is_completed and other_task.executor:
-                            other_lineage = self.scheduler.get_lineage(other_task.id)
+                    # Sort completed tasks with executors by priority
+                    def task_priority(t):
+                        # Skip tasks that don't meet basic criteria
+                        if not t.is_completed or not t.executor:
+                            return 999  # Low priority
                             
-                            if (len(task_lineage) == len(other_lineage) + 1 and
-                                task_lineage[:-1] == other_lineage):
-                                # Actually reuse the executor
-                                executor = other_task.executor
-                                other_task.executor = None  # Remove reference from old task
-                                
-                                logger.debug(f"Reusing executor from task {other_task.id} for task {task.id}")
-                                
-                                # Create new Tools instance with resource manager and queues
-                                queues = task.interactive_queues
-                                tools = Tools(
-                                    scheduler=self.scheduler,
-                                    task_id=task.id,
-                                    resource_manager=self,
-                                    human_request_queue=queues['to_client'] if queues else None,
-                                    human_response_queue=queues['from_client'] if queues else None
-                                )
-                                executor.set_task_id(task.id, tools.controller)
-                                
-                                # Start execution with reused executor
-                                cached_plan = self.cache_manager.get_plan(
-                                    task_lineage,
-                                    task.cache_options
-                                )
-                                await self.scheduler.start_task_exec(
-                                    task_id,
-                                    executor,
-                                    cached_plan
-                                )
-                                ready_tasks.remove(task_id)
-                                break
+                        # Check if lineage matches
+                        other_lineage = self.scheduler.get_lineage(t.id)
+                        if not (len(task_lineage) == len(other_lineage) + 1 and task_lineage[:-1] == other_lineage):
+                            return 999  # Low priority
+                            
+                        # Priority: is it the prerequisite task?
+                        return 0 if t.id == task.prerequisite_task_id else 1
+                    
+                    sorted_tasks = sorted(self.scheduler.tasks.values(), key=task_priority)
+                    
+                    # Use the first suitable task (if any)
+                    if sorted_tasks and task_priority(sorted_tasks[0]) < 999:
+                        other_task = sorted_tasks[0]
+                        
+                        # Reuse the executor
+                        executor = other_task.executor
+                        other_task.executor = None  # Remove reference from old task
+                        
+                        logger.debug(f"Reusing executor from task {other_task.id} for task {task.id}")
+                        
+                        # Create new Tools instance with resource manager and queues
+                        queues = task.interactive_queues
+                        tools = Tools(
+                            scheduler=self.scheduler,
+                            task_id=task.id,
+                            resource_manager=self,
+                            human_request_queue=queues['to_client'] if queues else None,
+                            human_response_queue=queues['from_client'] if queues else None
+                        )
+                        executor.set_task_id(task.id, tools.controller)
+                        
+                        # Start execution with reused executor
+                        cached_plan = self.cache_manager.get_plan(
+                            task_lineage,
+                            task.cache_options
+                        )
+                        await self.scheduler.start_task_exec(
+                            task_id,
+                            executor,
+                            cached_plan
+                        )
+                        ready_tasks.remove(task_id)
                                 
                 # Sort remaining tasks by priority
                 priority_groups = self.scheduler.priority_sort(ready_tasks)
