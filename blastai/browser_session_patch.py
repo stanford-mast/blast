@@ -3,16 +3,18 @@
 import logging
 from functools import wraps
 
-from browser_use.browser import BrowserSession
-
+# Don't import BrowserSession yet
 logger = logging.getLogger(__name__)
 
 def apply_all_patches():
     """Apply all browser session patches."""
-    patch_take_screenshot()
+    # Import BrowserSession only when needed
+    from browser_use.browser import BrowserSession
+    
+    patch_take_screenshot(BrowserSession)
     logger.info("BrowserSession patches applied")
 
-def patch_take_screenshot():
+def patch_take_screenshot(BrowserSession):
     """
     Patch take_screenshot to handle timeouts better while preserving visual quality.
     """
@@ -123,3 +125,4 @@ def patch_take_screenshot():
 
     # Replace the method
     BrowserSession.take_screenshot = patched_take_screenshot
+    return patched_take_screenshot

@@ -4,12 +4,86 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import Optional, TextIO, List, Dict, Any, Tuple
 
 from .config import Settings
 
-# Import metrics display from cli_process
-from .cli_process import get_metrics_display
+# We'll use a lazy import for metrics display to avoid circular imports
+_metrics_display = None
+
+def get_metrics_display():
+    """Lazy import of get_metrics_display to avoid circular imports."""
+    global _metrics_display
+    if _metrics_display is None:
+        # Only import when needed
+        from .cli_process import get_metrics_display as _get_metrics_display
+        _metrics_display = _get_metrics_display()
+    return _metrics_display
+
+# Global buffer to store early logs before we know the engine hash
+_early_logs: List[Tuple[str, str, int, str]] = []  # (logger_name, level, timestamp, message)
+_early_logging_configured = False
+
+class EarlyLogHandler(logging.Handler):
+    """Handler that captures logs before proper logging is set up."""
+    def emit(self, record):
+        global _early_logs
+        _early_logs.append((
+            record.name,
+            record.levelname,
+            record.created,
+            self.format(record)
+        ))
+
+def capture_early_logs():
+    """Set up minimal logging to capture logs before proper logging is set up."""
+    global _early_logging_configured
+    if _early_logging_configured:
+        return
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)  # Capture everything
+    
+    # Clear any existing handlers
+    root_logger.handlers.clear()
+    
+    # Add handler to capture logs
+    handler = EarlyLogHandler()
+    formatter = logging.Formatter(
+        '%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    handler.setFormatter(formatter)
+    root_logger.addHandler(handler)
+    
+    _early_logging_configured = True
+    
+    # Set up stdout/stderr redirection to capture prints
+    sys.stdout = EarlyStdoutRedirect(sys.__stdout__)
+    sys.stderr = EarlyStdoutRedirect(sys.__stderr__)
+
+class EarlyStdoutRedirect:
+    """Capture stdout/stderr before proper logging is set up."""
+    def __init__(self, original_stream: TextIO):
+        self.original_stream = original_stream
+        
+    def write(self, text: str):
+        # Always write to console for early logs
+        self.original_stream.write(text)
+        
+        # Also capture for later writing to log file
+        if text.strip():
+            global _early_logs
+            _early_logs.append((
+                "stdout" if self.original_stream is sys.__stdout__ else "stderr",
+                "INFO",
+                0,  # No timestamp
+                text.rstrip()
+            ))
+    
+    def flush(self):
+        self.original_stream.flush()
 
 class LogRedirect:
     """Redirect stdout/stderr to log files while allowing specific prints through."""
@@ -79,8 +153,8 @@ class LogRedirect:
                 f.write(f"{text}\n")
         elif (is_panel or is_shutdown or
               is_metrics or  # Metrics header
-              (is_metrics_content and get_metrics_display().initialized) or  # Metrics content after initialization
-              (is_ansi and get_metrics_display().initialized)):  # ANSI codes for metrics updates
+              (is_metrics_content and get_metrics_display() and get_metrics_display().initialized) or  # Metrics content after initialization
+              (is_ansi and get_metrics_display() and get_metrics_display().initialized)):  # ANSI codes for metrics updates
             self.original_stream.write(text)
         elif text.strip():  # Skip empty lines for log file
             with open(self.log_file, 'a') as f:
@@ -101,6 +175,15 @@ def setup_logging(settings: Optional[Settings] = None, engine_hash: Optional[str
     # Set up log files
     engine_log = logs_dir / f"{engine_hash or 'default'}.engine.log"
     web_log = logs_dir / f"{engine_hash or 'default'}.web.log"
+    
+    # Process any early logs if we have an engine hash
+    global _early_logs
+    if engine_hash and _early_logs:
+        with open(engine_log, 'a') as f:
+            for logger_name, level, timestamp, message in _early_logs:
+                f.write(f"{message}\n")
+        # Clear early logs after processing
+        _early_logs = []
     
     # Redirect stdout/stderr to engine.log
     sys.stdout = LogRedirect(engine_log, sys.__stdout__)

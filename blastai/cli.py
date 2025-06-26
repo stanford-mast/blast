@@ -6,13 +6,15 @@ os.environ["ANONYMIZED_TELEMETRY"] = "false"
 os.environ["PYTHONWARNINGS"] = "ignore::ResourceWarning,ignore::DeprecationWarning"
 os.environ["BROWSER_USE_LOGGING_LEVEL"] = "error"  # Default to error level
 
+# Add environment variable to disable browser-use's own logging setup
+os.environ["BROWSER_USE_DISABLE_LOGGING"] = "true"
+
 import sys
 import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
 
-from .config import Settings
 from .logging_setup import setup_logging
 
 import rich_click as click
@@ -24,7 +26,6 @@ from .cli_process import (
     find_available_port,
     run_server_and_frontend
 )
-from .logging_setup import should_show_metrics
 
 # Configure rich-click
 click.rich_click.USE_RICH_MARKUP = True

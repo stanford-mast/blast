@@ -8,7 +8,6 @@ from typing import Optional, Dict, Any
 from browser_use import Agent
 from browser_use.browser import BrowserSession
 from patchright.async_api import async_playwright as async_patchright
-from langchain_core.language_models.chat_models import BaseChatModel
 
 # Import moved to line 27
 
@@ -23,9 +22,9 @@ from .resource_factory_utils import (
 
 logger = logging.getLogger(__name__)
 
-# Apply all browser session patches
+# Import but don't apply patches yet
 from .browser_session_patch import apply_all_patches
-apply_all_patches()
+_patches_applied = False
 
 async def create_executor(
     task_id: str,
@@ -51,6 +50,12 @@ async def create_executor(
         New Executor instance or None if creation fails
     """
     from .executor import Executor  # Import here to avoid circular import
+    
+    # Apply patches if not already applied
+    global _patches_applied
+    if not _patches_applied:
+        apply_all_patches()
+        _patches_applied = True
     
     try:
         # Create Tools instance first since we need it for both paths

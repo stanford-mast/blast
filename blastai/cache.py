@@ -5,7 +5,6 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
-from browser_use import Agent
 
 from .utils import init_model
 from browser_use.agent.views import AgentHistoryList
@@ -63,12 +62,10 @@ class CacheManager:
             # Create fresh Tools instance for dummy agent with LLM
             tools = Tools(scheduler=scheduler, resource_manager=None, llm_model=llm)  # No resource manager needed for cache
             
-            # Create dummy agent with tools controller
-            self._dummy_agent = Agent(
-                task="dummy",
-                llm=llm,
-                controller=tools.controller
-            )
+            # Delay creating the dummy agent until it's actually needed
+            self._dummy_agent = None
+            self._dummy_llm = llm
+            self._dummy_controller = tools.controller
             
     def _load_history_with_output_model(self, cache_file: Path) -> Optional[AgentHistoryList]:
         """Load history from file with proper output model that includes custom actions.
@@ -80,6 +77,15 @@ class CacheManager:
             Loaded history if successful, None otherwise
         """
         try:
+            # Create the dummy agent only when needed
+            if not self._dummy_agent and hasattr(self, '_dummy_llm') and hasattr(self, '_dummy_controller'):
+                from browser_use import Agent
+                self._dummy_agent = Agent(
+                    task="dummy",
+                    llm=self._dummy_llm,
+                    controller=self._dummy_controller
+                )
+            
             if not self._dummy_agent:
                 raise ValueError("Cache manager not loaded - call load() first")
                 

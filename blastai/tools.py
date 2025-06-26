@@ -8,8 +8,8 @@ from typing import Dict, Optional, Any, List, Tuple, cast
 from browser_use import Controller, ActionResult
 from browser_use.browser import BrowserSession
 import markdownify
-from langchain_core.prompts import PromptTemplate
-from langchain_core.language_models.chat_models import BaseChatModel
+from browser_use.llm.base import BaseChatModel
+from browser_use.llm.messages import UserMessage, SystemMessage
 from .scheduler import Scheduler
 from .response import HumanRequest, HumanResponse
 
@@ -197,48 +197,67 @@ class Tools:
                 )
             return await self._get_first_subtask_result(scheduler, task_ids, as_final=False)
 
-        @self.controller.action("Extract page content to retrieve specific information from the page, e.g. all company names, a specific description, all information about, links with companies in structured format or simply links")
-        async def extract_content_fast(goal: str, should_strip_link_urls: bool = False, browser_session: BrowserSession = None, page_extraction_llm: Optional[BaseChatModel] = None) -> ActionResult:
-            """Extract content by splitting into chunks and processing in parallel."""
+        @self.controller.action("""Extract structured, semantic data (e.g. product description, price, all information about XYZ) from the current webpage based on a textual query.
+Only use this for extracting info from a single product/article page, not for entire listings or search results pages.
+""")
+        async def extract_structured_content_fast(query: str, browser_session: BrowserSession = None, page_extraction_llm=None) -> ActionResult:
+            """Extract structured content by splitting into chunks and processing in parallel."""
             if not browser_session:
                 return ActionResult(success=False, error="Browser session required")
 
             try:
                 # Record overall start time
                 overall_start = time.time()
-
+                
                 # Get raw content
                 page = await browser_session.get_current_page()
                 content_start = time.time()
                 
-                strip = ['a', 'img'] if should_strip_link_urls else []
-                content = markdownify.markdownify(await page.content(), strip=strip)
+                # Determine if we should include links based on query
+                strip = []
+                include_links = False
+                lower_query = query.lower()
+                url_keywords = ['url', 'links']
+                if any(keyword in lower_query for keyword in url_keywords):
+                    include_links = True
 
+                if not include_links:
+                    strip = ['a', 'img']
+                
+                # Get page content
+                content = markdownify.markdownify(await page.content(), strip=strip)
+                
                 # Add iframe content
                 for iframe in page.frames:
+                    try:
+                        await iframe.wait_for_load_state(timeout=5000)  # extra on top of already loaded page
+                    except Exception as e:
+                        pass
+
                     if iframe.url != page.url and not iframe.url.startswith('data:'):
                         content += f'\n\nIFRAME {iframe.url}:\n'
-                        content += markdownify.markdownify(await iframe.content())
+                        try:
+                            iframe_html = await iframe.content()
+                            iframe_markdown = markdownify.markdownify(iframe_html, strip=strip)
+                            content += iframe_markdown
+                        except Exception as e:
+                            logger.debug(f'Error extracting iframe content from within page {page.url}: {type(e).__name__}: {e}')
                 
                 content_time = time.time() - content_start
                 total_chars = len(content)
-
-                # Get LLM instance ID
-                llm_id = id(page_extraction_llm)
-
-                # # First try with whole content (commented out for performance)
-                # prompt = 'Your task is to extract the content of the page. You will be given a page and a goal and you should extract all relevant information around this goal from the page. If the goal is vague, summarize the page. Respond in json format. Extraction goal: {goal}, Page: {page}'
-                # template = PromptTemplate(input_variables=['goal', 'page'], template=prompt)
                 
-                # # Time single LLM call
-                # single_start = time.time()
-                # single_output = await page_extraction_llm.ainvoke(template.format(goal=goal, page=content))
-                # single_time = time.time() - single_start
-
-                # Now try with parallel chunks
+                # Limit content size if needed
+                max_chars = 40000
+                if len(content) > max_chars:
+                    content = (
+                        content[: max_chars // 2]
+                        + '\n... left out the middle because it was too long ...\n'
+                        + content[-max_chars // 2 :]
+                    )
+                
+                # Split content into chunks for parallel processing
                 chunk_start = time.time()
                 chunk_size = max(total_chars // 8, 3000)  # At least 3000 chars per chunk
-                # Split content into chunks
                 chunks = []
                 current_chunk = []
                 current_size = 0
@@ -256,33 +275,34 @@ class Tools:
                 if current_chunk:
                     chunks.append('\n'.join(current_chunk))
                 chunk_time = time.time() - chunk_start
-
+                
                 # Process chunks in parallel
                 parallel_start = time.time()
-                chunk_prompt = 'Your task is to extract the content of this chunk of text. You will be given a chunk and a goal and you should extract all relevant information around this goal from the chunk. If the goal is vague, summarize the chunk. Respond in json format. Extraction goal: {goal}, Chunk: {chunk}'
-                chunk_template = PromptTemplate(input_variables=['goal', 'chunk'], template=chunk_prompt)
+                
+                # Structured data extraction prompt
+                chunk_prompt = """You convert websites into structured information. Extract information from this webpage chunk based on the query. Focus only on content relevant to the query. If
+1. The query is vague
+2. Does not make sense for the page
+3. Some/all of the information is not available
 
-                # Use provided model or fallback to page_extraction_llm
+Explain the content of the chunk and that the requested information is not available in the chunk. Respond in JSON format.\nQuery: {query}\n Website chunk:\n{chunk}"""
+                
+                # Use provided model or fallback
                 extraction_model = self.llm_model or page_extraction_llm
                 if not extraction_model:
                     return ActionResult(success=False, error="No LLM model available for extraction")
-                    
-                parallel_results = await extraction_model.abatch([
-                    chunk_template.format(goal=goal, chunk=chunk) for chunk in chunks
-                ])
-                parallel_time = time.time() - parallel_start
-
-                # Log timing comparison
-                overall_time = time.time() - overall_start
-                start_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(overall_start))
-                end_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(overall_start + overall_time))
                 
-                # logger.debug(
-                #     f"extract_content_fast [{start_time} -> {end_time}] Content ({total_chars} chars): {content_time:.2f}s, "
-                #     f"Single LLM ({llm_id}): {single_time:.2f}s, Chunking ({len(chunks)} chunks): {chunk_time:.2f}s, "
-                #     f"Parallel LLM: {parallel_time:.2f}s, Total: {overall_time:.2f}s"
-                # )
-
+                # Create user messages for each chunk
+                user_messages = []
+                for chunk in chunks:
+                    formatted_prompt = chunk_prompt.format(query=query, chunk=chunk)
+                    user_messages.append([UserMessage(content=formatted_prompt)])
+                
+                # Process all chunks in parallel using asyncio.gather
+                tasks = [extraction_model.ainvoke(message) for message in user_messages]
+                parallel_results = await asyncio.gather(*tasks)
+                parallel_time = time.time() - parallel_start
+                
                 # Helper function to merge JSON objects
                 def merge_json(d1: dict, d2: dict) -> dict:
                     result = d1.copy()
@@ -301,50 +321,61 @@ class Tools:
                         else:
                             result[k] = v
                     return result
-
+                
                 # Process and merge results
                 merged_json = {}
                 text_results = []
-
-                # # Try to parse single output as JSON
-                # try:
-                #     single_json = json.loads(single_output.content)
-                #     merged_json = single_json
-                # except json.JSONDecodeError:
-                #     text_results.append("Full page analysis:")
-                #     text_results.append(single_output.content)
-
-                # Process and merge parallel results
+                
                 for i, result in enumerate(parallel_results):
                     try:
-                        chunk_json = json.loads(result.content)
+                        chunk_json = json.loads(result.completion)
                         merged_json = merge_json(merged_json, chunk_json)
                     except json.JSONDecodeError:
-                        text_results.append(result.content)
-
-                # Build final output
-                output_parts = []
+                        text_results.append(result.completion)
+                
+                # Format the final extracted content
+                extracted_content = f'Page Link: {page.url}\nQuery: {query}\nExtracted Content:\n'
+                
                 if merged_json:
-                    output_parts.append("")
-                    output_parts.append(json.dumps(merged_json, indent=2))
+                    extracted_content += json.dumps(merged_json, indent=2)
+                
                 if text_results:
-                    if output_parts:
-                        output_parts.append("\n")
-                    output_parts.extend(text_results)
-
-                msg = "📄 Extracted from page:\n" + "\n".join(output_parts) + "\n"
-                return ActionResult(extracted_content=msg, include_in_memory=True)
+                    extracted_content += "\n\nAdditional extracted content:\n" + "\n".join(text_results)
+                
+                # Determine memory handling based on content size
+                MAX_MEMORY_SIZE = 600
+                if len(extracted_content) < MAX_MEMORY_SIZE:
+                    memory = extracted_content
+                    include_extracted_content_only_once = False
+                else:
+                    # Find lines until MAX_MEMORY_SIZE
+                    lines = extracted_content.splitlines()
+                    display = ''
+                    display_lines_count = 0
+                    for line in lines:
+                        if len(display) + len(line) < MAX_MEMORY_SIZE:
+                            display += line + '\n'
+                            display_lines_count += 1
+                        else:
+                            break
+                    memory = f'Extracted content from {page.url}\n<query>{query}\n</query>\n<extracted_content>\n{display}{len(lines) - display_lines_count} more lines...\n</extracted_content>'
+                    include_extracted_content_only_once = True
+                
+                # Log timing info
+                overall_time = time.time() - overall_start
+                logger.info(f'📄 Extracted structured content in {overall_time:.2f}s (content: {content_time:.2f}s, chunking: {chunk_time:.2f}s, parallel processing: {parallel_time:.2f}s)')
+                
+                return ActionResult(
+                    extracted_content=extracted_content,
+                    include_extracted_content_only_once=include_extracted_content_only_once,
+                    long_term_memory=memory,
+                )
                 
             except Exception as e:
-                # Log timing info even on failure
-                error_time = time.time() - overall_start
-                logger.error(
-                    f"Failed after {error_time:.2f}s: {str(e)}\n"
-                    f"Content extraction: {content_time:.2f}s"
-                )
+                logger.error(f'Error extracting structured content: {e}')
                 return ActionResult(
                     success=False,
-                    error=f"Failed to extract content: {str(e)}"
+                    error=f"Failed to extract structured content: {str(e)}"
                 )
 
         @self.controller.action("Get result(s) of subtask(s)")

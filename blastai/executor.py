@@ -10,11 +10,9 @@ from datetime import datetime
 from urllib.parse import urlparse, quote_plus
 
 from browser_use import Agent, Controller
-from browser_use.agent.views import AgentHistoryList, ActionModel
+from browser_use.agent.views import AgentHistoryList
 from browser_use.browser import BrowserSession
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain.chat_models import init_chat_model
-from langchain_community.callbacks import get_openai_callback
+from browser_use.llm.base import BaseChatModel
 
 logger = logging.getLogger(__name__)
 
@@ -83,23 +81,22 @@ class Executor:
             search_query = quote_plus(input_str)
             return f'https://www.google.com/search?q={search_query}'
         
-    def _update_total_cost(self):
-        """Safely update total cost from current callback."""
-        if self._cb:
-            try:
-                cost = self._cb.total_cost
-                if cost == 0 and self._cb.total_tokens > 0:
-                    cached_tokens = getattr(self._cb, "prompt_tokens_cached", 0)
-                    if is_openai_model(self.constraints.llm_model):
-                        cost = estimate_llm_cost(
-                            model_name=self.constraints.llm_model,
-                            prompt_tokens=self._cb.prompt_tokens,
-                            completion_tokens=self._cb.completion_tokens,
-                            cached_tokens=cached_tokens,
-                        )
-                self._total_cost += cost
-            except Exception as e:
-                logger.debug(f"Error updating partial cost: {e}")  # Debug level since this is expected for non-OpenAI models
+    async def _get_cost_from_agent(self, agent):
+        """Get cost information from agent's token cost service."""
+        try:
+            if hasattr(agent, 'token_cost_service') and agent.token_cost_service:
+                # Get usage summary for all models
+                usage_summary = await agent.token_cost_service.get_usage_summary()
+                
+                # Update total cost
+                self._total_cost += usage_summary.total_cost
+                
+                return usage_summary.total_cost
+            
+            return 0.0
+        except Exception as e:
+            logger.debug(f"Error getting cost from agent: {e}")
+            return 0.0
 
     async def run(self, task_or_plan: Union[str, AgentHistoryList], initial_url: Optional[str] = None) -> AgentHistoryList:
         """Run a task or reuse a cached plan.
@@ -133,7 +130,8 @@ class Executor:
                         llm=self.llm,
                         use_vision=self.constraints.allow_vision,
                         initial_actions=initial_actions,
-                        sensitive_data=self.sensitive_data
+                        sensitive_data=self.sensitive_data,
+                        calculate_cost=True,
                     )
                 else:
                     # For follow-up tasks, we need to clear any initial_actions
@@ -188,18 +186,19 @@ class Executor:
                     # Update the agent's task property directly before calling add_new_task
                     self.agent.task = task
                     self.agent.add_new_task(task)
-                
-                # Run task with cost tracking if using OpenAI
-                if is_openai_model(self.constraints.llm_model):
-                    with get_openai_callback() as cb:
-                        self._cb = cb  # Store callback
-                        try:
-                            self._history = await self.agent.run()
-                        finally:
-                            self._update_total_cost()
-                            self._cb = None
-                else:
+                # Run task
+                try:
+                    # Make sure calculate_cost is enabled in the agent settings
+                    if hasattr(self.agent, 'settings'):
+                        self.agent.settings.calculate_cost = True
+                    
                     self._history = await self.agent.run()
+                    
+                    # Get cost from agent's token cost service
+                    await self._get_cost_from_agent(self.agent)
+                except Exception as e:
+                    logger.error(f"Error running agent: {e}")
+                    raise
                 return self._history
                 
             else:
@@ -211,20 +210,22 @@ class Executor:
                         controller=self.controller,
                         llm=self.llm,
                         use_vision=self.constraints.allow_vision,
-                        sensitive_data=self.sensitive_data
+                        sensitive_data=self.sensitive_data,
+                        calculate_cost=True,
                     )
-                
-                # Run plan with cost tracking if using OpenAI
-                if is_openai_model(self.constraints.llm_model):
-                    with get_openai_callback() as cb:
-                        self._cb = cb  # Store callback
-                        try:
-                            self._history = await self.agent.rerun_history(task_or_plan)
-                        finally:
-                            self._update_total_cost()
-                            self._cb = None
-                else:
+                # Run plan
+                try:
+                    # Make sure calculate_cost is enabled in the agent settings
+                    if hasattr(self.agent, 'settings'):
+                        self.agent.settings.calculate_cost = True
+                    
                     self._history = await self.agent.rerun_history(task_or_plan)
+                    
+                    # Get cost from agent's token cost service
+                    await self._get_cost_from_agent(self.agent)
+                except Exception as e:
+                    logger.error(f"Error rerunning history: {e}")
+                    raise
                 return self._history
             
         except Exception as e:
@@ -353,6 +354,7 @@ class Executor:
         
     def get_total_cost(self) -> float:
         """Get total LLM cost for this executor."""
+        # We've been tracking the total cost as we go
         return self._total_cost
         
     def set_task_id(self, task_id: str, controller: Controller):

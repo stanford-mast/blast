@@ -3,7 +3,7 @@
 import logging
 import re
 from typing import List, Optional, Tuple
-from langchain_core.messages import HumanMessage, SystemMessage
+from browser_use.llm.messages import UserMessage, SystemMessage
 
 from .config import Constraints
 from .utils import init_model
@@ -100,12 +100,12 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
         # Get summary from LLM
         messages = [
             SystemMessage(content="You are a helpful assistant that summarizes previous tasks concisely."),
-            HumanMessage(content=summary_prompt)
+            UserMessage(content=summary_prompt)
         ]
         
         try:
             response = await self.llm.ainvoke(messages)
-            summary = response.content.strip()
+            summary = response.completion.strip()
             
             # Extract the part starting with "The previous task was to"
             match = re.search(r'The previous task was to.*', summary, re.DOTALL)
@@ -128,10 +128,10 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
         try:
             messages = [
                 SystemMessage(content=self.system_prompt),
-                HumanMessage(content=f"Generate a plan for this task: {context_task_description}")
+                UserMessage(content=f"Generate a plan for this task: {context_task_description}")
             ]
             response = await self.llm.ainvoke(messages)
-            plan = response.content.replace("Plan:", "").strip()
+            plan = response.completion.replace("Plan:", "").strip()
             plan_lines = plan.split('\n')
             plan_summary = ' '.join(plan_lines[:2]) if len(plan_lines) > 2 else plan
             return f"Execute: {plan_summary}"

@@ -7,8 +7,12 @@ import subprocess
 from pathlib import Path
 import json
 from typing import Dict, Optional, List, Union, Any
-from langchain.chat_models import init_chat_model
-from langchain_core.language_models.chat_models import BaseChatModel
+from browser_use.llm.base import BaseChatModel
+from browser_use.llm.openai.chat import ChatOpenAI
+from browser_use.llm.anthropic.chat import ChatAnthropic
+from browser_use.llm.azure.chat import ChatAzureOpenAI
+from browser_use.llm.google.chat import ChatGoogle
+from browser_use.llm.groq.chat import ChatGroq
 
 from .models import is_openai_model
 
@@ -17,7 +21,7 @@ def init_model(model_name: str, **kwargs: Any) -> BaseChatModel:
     
     Args:
         model_name: Name of the model to initialize
-        **kwargs: Additional keyword arguments to pass to init_chat_model
+        **kwargs: Additional keyword arguments to pass to the model
         
     Returns:
         Initialized chat model
@@ -26,10 +30,26 @@ def init_model(model_name: str, **kwargs: Any) -> BaseChatModel:
     base_url = get_base_url_for_provider(model_name)
     if base_url:
         kwargs['base_url'] = base_url
-        kwargs['api_base'] = base_url
-        
-    # Initialize and return model
-    return init_chat_model(model_name, **kwargs)
+    
+    # Extract provider and model if provider prefix is present
+    provider = None
+    if ":" in model_name:
+        provider, model_name = model_name.split(":", 1)
+    
+    # Initialize based on provider or model name pattern
+    if provider == "openai" or (not provider and is_openai_model(model_name)):
+        return ChatOpenAI(model=model_name, **kwargs)
+    elif provider == "anthropic" or (not provider and model_name.startswith("claude")):
+        return ChatAnthropic(model=model_name, **kwargs)
+    elif provider == "azure":
+        return ChatAzureOpenAI(model=model_name, **kwargs)
+    elif provider == "google" or (not provider and model_name.startswith("gemini")):
+        return ChatGoogle(model=model_name, **kwargs)
+    elif provider == "groq" or (not provider and model_name.startswith("llama") or model_name.startswith("mixtral")):
+        return ChatGroq(model=model_name, **kwargs)
+    else:
+        # Default to OpenAI for backward compatibility
+        return ChatOpenAI(model=model_name, **kwargs)
 
 
 
@@ -37,14 +57,26 @@ def get_base_url_for_provider(provider: str) -> Optional[str]:
     """Get base URL for a model provider from environment variables.
     
     Args:
-        provider: Model provider name (e.g. 'openai', 'deepseek')
+        provider: Model provider name (e.g. 'openai', 'anthropic', 'azure', 'google', 'groq')
         
     Returns:
         Base URL if found in environment, None otherwise
     """
+    # Extract provider from model name if it contains a prefix
+    if ":" in provider:
+        provider, _ = provider.split(":", 1)
+    
     provider = provider.lower()
     if provider == 'openai':
         return os.environ.get('OPENAI_BASE_URL')
+    elif provider == 'anthropic':
+        return os.environ.get('ANTHROPIC_BASE_URL')
+    elif provider == 'azure':
+        return os.environ.get('AZURE_OPENAI_BASE_URL')
+    elif provider == 'google':
+        return os.environ.get('GOOGLE_API_BASE')
+    elif provider == 'groq':
+        return os.environ.get('GROQ_BASE_URL')
     elif provider == 'deepseek':
         # Check both possible env var names
         return os.environ.get('DEEPSEEK_BASE_URL') or os.environ.get('DEEPSEEK_API_BASE')
