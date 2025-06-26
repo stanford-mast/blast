@@ -278,13 +278,15 @@ async def start_novnc(display: int) -> Tuple[asyncio.subprocess.Process, int, Pa
 
     port = await find_free_http_port(initial_port, initial_port + 4)  # Smaller range per display
     
-    # Add heartbeat parameter to prevent WebSocket connection from timing out
+    # Add parameters to prevent WebSocket connection from timing out
     cmd = [
         "bash", str(proxy),
         "--vnc", f"localhost:{vnc_port}",
         "--web", str(novnc_dir),
         "--listen", str(port),
-        "--heartbeat", "60"  # Send a ping every 60 seconds (1 minute) to keep connection alive
+        "--heartbeat", "15",  # Send a ping every 15 seconds to keep connection alive
+        "--idle-timeout", "86400",  # 24 hours idle timeout
+        "--timeout", "0"  # No timeout (run indefinitely)
     ]
     
     logger.debug(f"[noVNC] {' '.join(cmd)}")

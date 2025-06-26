@@ -278,19 +278,19 @@ class RealtimeConnection:
     async def cleanup(self):
         """Clean up connection resources."""
         if self.current_task_id and self.queues:
-            # Send stop request to current task
-            try:
-                logger.info(f"Sending stop request during cleanup for task {self.current_task_id}")
-                await self.queues["from_client"].put(StopRequest(type="stop"))
-            except Exception as e:
-                logger.error(f"Error sending stop request during cleanup: {e}")
+            # Don't send stop request to current task
+            # try:
+            #     logger.info(f"Sending stop request during cleanup for task {self.current_task_id}")
+            #     await self.queues["from_client"].put(StopRequest(type="stop"))
+            # except Exception as e:
+            #     logger.error(f"Error sending stop request during cleanup: {e}")
             
             # Don't set queues to None - this allows the connection to be reused
             # when the client reconnects
             logger.info(f"Preserving connection state for task {self.current_task_id}")
             
-            # Just mark the task as completed
-            self.current_task_id = None
+            # # Just mark the task as completed
+            # self.current_task_id = None
 
 # Dictionary to track connections by session ID
 _session_connections: Dict[str, str] = {}  # Maps session_id to connection_id
