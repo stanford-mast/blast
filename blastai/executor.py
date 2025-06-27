@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import re
 import random
 from pathlib import Path
@@ -14,6 +15,8 @@ from browser_use.agent.views import AgentHistoryList
 from browser_use.browser import BrowserSession
 from browser_use.llm.base import BaseChatModel
 
+from lmnr import Laminar
+
 logger = logging.getLogger(__name__)
 
 from .config import Settings, Constraints
@@ -21,6 +24,34 @@ from .response import AgentReasoning, AgentHistoryListResponse
 from .utils import estimate_llm_cost, get_base_url_for_provider
 from .models import is_openai_model
 from .resource_factory_utils import cleanup_stealth_profile_dir
+
+# Initialize Laminar if available and API key is set
+laminar_api_key = os.environ.get("LMNR_PROJECT_API_KEY")
+if laminar_api_key:
+    try:
+        # Check for self-hosting configuration
+        base_url = os.environ.get("LMNR_BASE_URL")
+        http_port = os.environ.get("LMNR_HTTP_PORT")
+        grpc_port = os.environ.get("LMNR_GRPC_PORT")
+        
+        # Initialize with appropriate parameters
+        if base_url and http_port and grpc_port:
+            # Self-hosted configuration
+            Laminar.initialize(
+                project_api_key=laminar_api_key,
+                base_url=base_url,
+                http_port=int(http_port),
+                grpc_port=int(grpc_port)
+            )
+            logger.info(f"Laminar instrumentation initialized with self-hosted instance at {base_url}")
+        else:
+            # Default cloud configuration
+            Laminar.initialize(project_api_key=laminar_api_key)
+            logger.info("Laminar instrumentation initialized with cloud instance")
+    except Exception as e:
+        logger.warning(f"Failed to initialize Laminar instrumentation: {e}")
+else:
+    logger.info("LMNR_PROJECT_API_KEY not found in environment, Laminar instrumentation disabled")
 
 class Executor:
     """Wrapper around browser_use Agent for task execution."""
