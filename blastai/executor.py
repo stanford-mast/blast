@@ -151,7 +151,7 @@ class Executor:
                     initial_actions = None
                     url = self._get_url_or_search(initial_url)
                     if url:
-                        initial_actions = [{'go_to_url': {'url': url}}]
+                        initial_actions = [{'go_to_url': {'url': url, 'new_tab': False}}]
                         
                     logger.debug(f"Creating new agent for task: {task} with sensitive data: {self.sensitive_data}")
                     self.agent = Agent(
