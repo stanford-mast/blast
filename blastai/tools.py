@@ -33,6 +33,7 @@ class Tools:
         self.llm_model = llm_model
         self.human_request_queue = human_request_queue
         self.human_response_queue = human_response_queue
+        self.interactive_queues: Optional[Dict[str, asyncio.Queue]] = None
         
         # Determine which actions to exclude based on constraints
         exclude_actions = []
@@ -56,6 +57,10 @@ class Tools:
             self._register_subtask_tools(scheduler)
         if human_request_queue and human_response_queue:
             self._register_human_tools()
+            self.interactive_queues = {
+                "human_request": human_request_queue,
+                "human_response": human_response_queue
+            }
 
     async def _get_first_subtask_result(self, scheduler: Scheduler, task_ids: List[str], as_final: bool = False) -> ActionResult:
         """Helper function to get first result from multiple subtasks.
@@ -133,7 +138,7 @@ class Tools:
         """Register tools that require a scheduler."""
         
         @self.controller.action("Launch a subtask")
-        async def launch_subtask(task: str, optional_initial_search_or_url: Optional[str] = None, num_copies: Optional[int] = 1) -> ActionResult:
+        async def launch_subtask(task: str, optional_initial_search_or_url: Optional[str] = None, num_copies: int = 1) -> ActionResult:
             """Launch a new subtask.
             
             Args:
@@ -154,8 +159,7 @@ class Tools:
                     description=task,
                     parent_task_id=parent_task_id,
                     cache_control=self.cache_control,  # Inherit cache control from parent task
-                    human_request_queue=self.human_request_queue,
-                    human_response_queue=self.human_response_queue
+                    interactive_queues=self.interactive_queues
                 )
                 
                 # Set initial URL if provided
@@ -166,12 +170,10 @@ class Tools:
             
             if num_copies == 1:
                 return ActionResult(
-                    success=True,
                     extracted_content=f"🚀 Launched subtask {task_ids[0]} to \"{task}\""
                 )
             else:
                 return ActionResult(
-                    success=True,
                     extracted_content=f"🚀 Launched subtasks {','.join(task_ids)} to \"{task}\""
                 )
 
@@ -424,6 +426,7 @@ Explain the content of the chunk and that the requested information is not avail
                     )
                 
                 return ActionResult(
+                    is_done=True,
                     success=True,
                     extracted_content="📋 Subtask results:\n" + "\n".join(combined_results)
                 )
