@@ -91,12 +91,16 @@ class TokenUsage:
         return (self.prompt, self.prompt_cached, self.completion, self.total)
     
     def format_detailed(self) -> str:
-        """Format with detailed breakdown."""
+        """Format with detailed breakdown (showing Total, Prompt, Cached, Output)."""
         return f"{self.total:,} (Prompt: {self.prompt:,}, Cached: {self.prompt_cached:,}, Output: {self.completion:,})"
     
     def format_compact(self) -> str:
-        """Format compactly for single line display."""
+        """Format compactly (showing Total, Prompt, Cached, Output)."""
         if self.prompt_cached > 0:
             return f"{self.total:,} ({self.prompt:,}+{self.prompt_cached:,}c+{self.completion:,})"
         else:
             return f"{self.total:,} ({self.prompt:,}+{self.completion:,})"
+
+    def format_minimal(self) -> str:
+        """Format minimally (only showing Total)."""
+        return f"{self.total:,}"
