@@ -368,8 +368,9 @@ class Engine:
         total_memory = self.resource_manager._get_total_memory_usage()
         memory_gb = total_memory / (1024 * 1024 * 1024)  # Convert to GB
         
-        # Get cost from resource manager
+        # Get cost and token usage from resource manager
         total_cost = self.resource_manager._get_cost()
+        total_token_usage = self.resource_manager._get_token_usage()
         
         return {
             "tasks": {
@@ -379,7 +380,8 @@ class Engine:
             },
             "concurrent_browsers": len([t for t in tasks.values() if t.executor and t.executor.browser_session]),
             "memory_usage_gb": round(memory_gb, 2),
-            "total_cost": round(total_cost, 2)
+            "total_cost": round(total_cost, 2),
+            "total_token_usage": total_token_usage.format_detailed()
         }
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

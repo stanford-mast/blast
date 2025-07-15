@@ -6,7 +6,7 @@ import os
 import re
 import random
 from pathlib import Path
-from typing import List, Optional, Union, AsyncIterator, Dict, Any, cast
+from typing import List, Optional, Union, AsyncIterator, Dict, Any, cast, Tuple
 from datetime import datetime
 from urllib.parse import urlparse, quote_plus
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 from .config import Settings, Constraints
 from .response import AgentReasoning, AgentHistoryListResponse
 from .utils import estimate_llm_cost, get_base_url_for_provider
-from .models import is_openai_model
+from .models import is_openai_model, TokenUsage
 from .resource_factory_utils import cleanup_stealth_profile_dir
 
 # Initialize Laminar if available and API key is set
@@ -83,6 +83,7 @@ class Executor:
         self._history: Optional[AgentHistoryList] = None
         self._last_state: Optional[Dict[str, Any]] = None
         self._total_cost = 0.0  # Track total LLM cost
+        self._total_token_usage = TokenUsage()  # Track total LLM token usage
         self._cb = None  # Track current callback
         
     def _get_url_or_search(self, input_str: Optional[str]) -> Optional[str]:
@@ -113,7 +114,7 @@ class Executor:
             return f'https://www.google.com/search?q={search_query}'
         
     async def _get_cost_from_agent(self, agent):
-        """Get cost information from agent's token cost service."""
+        """Get cost and token usage information from agent's token cost service."""
         try:
             if hasattr(agent, 'token_cost_service') and agent.token_cost_service:
                 # Get usage summary for all models
@@ -122,12 +123,21 @@ class Executor:
                 # Update total cost
                 self._total_cost += usage_summary.total_cost
                 
-                return usage_summary.total_cost
+                # Create TokenUsage from summary and add to total
+                current_usage = TokenUsage(
+                    prompt=usage_summary.total_prompt_tokens,
+                    prompt_cached=usage_summary.total_prompt_cached_tokens,
+                    completion=usage_summary.total_completion_tokens,
+                    total=usage_summary.total_tokens
+                )
+                self._total_token_usage += current_usage
+                
+                return usage_summary.total_cost, current_usage
             
-            return 0.0
+            return 0.0, TokenUsage()
         except Exception as e:
             logger.debug(f"Error getting cost from agent: {e}")
-            return 0.0
+            return 0.0, TokenUsage()
 
     async def run(self, task_or_plan: Union[str, AgentHistoryList], initial_url: Optional[str] = None) -> AgentHistoryList:
         """Run a task or reuse a cached plan.
@@ -387,6 +397,10 @@ class Executor:
         """Get total LLM cost for this executor."""
         # We've been tracking the total cost as we go
         return self._total_cost
+
+    def get_total_token_usage(self) -> TokenUsage:
+        """Get total LLM token usage for this executor."""
+        return self._total_token_usage
         
     def set_task_id(self, task_id: str, controller: Controller):
         """Update task ID and controller for both executor and agent.
