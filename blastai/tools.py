@@ -112,7 +112,6 @@ class Tools:
                             )
                         else:
                             return ActionResult(
-                                success=True,
                                 extracted_content=(
                                     f"📋 First result from subtask {completed_tid}: "
                                     f"{result.final_result()}"
@@ -477,6 +476,7 @@ Explain the content of the chunk and that the requested information is not avail
                     )
 
                 return ActionResult(
+                    is_done=True,
                     success=True,
                     extracted_content=f"Human responded: {response.response}",
                     include_in_memory=True
