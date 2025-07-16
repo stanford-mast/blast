@@ -56,6 +56,7 @@ from .tools import Tools
 from .secrets import SecretsManager
 from .utils import find_local_browser, init_model
 from .resource_factory import create_executor, cleanup_stealth_profile_dir
+from .models import TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,9 @@ class ResourceManager:
         self._monitor_task = None
         self._running = False
         self._total_cost_evicted_executors = 0.0
+        self._total_token_usage_evicted_executors = TokenUsage()
         self._cost_history: List[Tuple[float, datetime]] = []  # List of (cost, timestamp) tuples
+        self._token_usage_history: List[Tuple[TokenUsage, datetime]] = [] # List of (token_usage, timestamp) tuples
         self._start_time = time.time()  # Track when the resource manager was created
         self._prev_not_allocated = 0  # Track previous not_allocated count
         self._prev_completed_with_executor = 0
@@ -189,6 +192,49 @@ class ResourceManager:
             return 0.0
             
         return current_cost
+    
+    def _get_token_usage(self, time_window: Optional[timedelta] = None) -> TokenUsage:
+        """Get total token usage across all executors within time window.
+        
+        Args:
+            time_window: Optional time window to calculate token usage for
+                        None means get total token usage
+        """
+        now = datetime.now()
+        
+        # Calculate current total token usage
+        # Make a copy to avoid modifying the original
+        current_token_usage = self._total_token_usage_evicted_executors.copy()
+        for task in self.scheduler.tasks.values():
+            if task.executor:
+                current_token_usage += task.executor.get_total_token_usage()
+                
+        # Add to history
+        self._token_usage_history.append((current_token_usage, now))
+        
+        if time_window:
+            cutoff = now - time_window
+            
+            # Keep most recent entry before cutoff if it exists
+            oldest_entry = None
+            for token_usage, ts in self._token_usage_history:
+                if ts < cutoff:
+                    oldest_entry = (token_usage, ts)
+                else:
+                    break
+            
+            # Filter history but keep oldest entry if found
+            self._token_usage_history = (
+                ([oldest_entry] if oldest_entry else []) +
+                [(t, ts) for t, ts in self._token_usage_history if ts >= cutoff]
+            )
+            
+            # Calculate token usage within window
+            if len(self._token_usage_history) > 0:
+                return self._token_usage_history[-1][0] - self._token_usage_history[0][0]
+            return TokenUsage()
+            
+        return current_token_usage
         
     def check_constraints_sat(self, with_new_executors: int = 0) -> bool:
         """Check if resource constraints are satisfied.
@@ -336,6 +382,9 @@ class ResourceManager:
             
         # Add cost to evicted total
         self._total_cost_evicted_executors += task.executor.get_total_cost()
+
+        # Add token usage to evicted total
+        self._total_token_usage_evicted_executors += task.executor.get_total_token_usage()
         
         # Store a reference to the executor before clearing it
         executor = task.executor
