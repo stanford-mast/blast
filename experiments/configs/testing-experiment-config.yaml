@@ -15,12 +15,12 @@ stages:
         task: false
         data: false
         first_of_n: false
-      max_parallelism_nesting_depth: 0
+      max_parallelism_nesting_depth: 1
       llm_model: "openai:gpt-4.1"
       llm_model_mini: "openai:gpt-4.1-mini"
   
   - name: "first_of_n_only"
-    description: "Only first-of-n parallelism enabled (3 copies)"
+    description: "Only first-of-n parallelism enabled"
     config:
       allow_parallelism:
         task: false

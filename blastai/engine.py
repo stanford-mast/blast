@@ -381,7 +381,8 @@ class Engine:
             "concurrent_browsers": len([t for t in tasks.values() if t.executor and t.executor.browser_session]),
             "memory_usage_gb": round(memory_gb, 2),
             "total_cost": round(total_cost, 2),
-            "total_token_usage": total_token_usage.format_detailed()
+            "total_token_usage": total_token_usage.to_json(),
+            "total_token_usage_str": total_token_usage.format_detailed(),
         }
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
