@@ -285,7 +285,7 @@ class ExperimentRunner:
 
 
 async def main():
-    config_path = "experiments/configs/test_first_of_n.yaml"
+    config_path = "experiments/configs/testing-experiment-config.yaml"
     if not os.path.exists(config_path):
         print(f"Config file not found: {config_path}")
         return
