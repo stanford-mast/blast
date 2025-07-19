@@ -1,11 +1,22 @@
 tasks:
-  - id: "fly-unified-6"
-    initial_url: "https://real-flyunified.vercel.app/"
-    goal: "Reserve me a seat for the flight from Austin to Pittsburgh departing on December 11th, 2024 at 8:00 in Basic Economy.\nPassenger: Alice Brown\nDate of Birth: 05/20/1992\nSex: Female\nSeat Selection: Yes (Aisle seat)\nPayment: Credit Card (378342143523967), Exp: 09/27, security code: 332 Address: 789 Pine St, Los Angeles, CA, 90012, USA, Phone: 555-456-7890, Email: alicebrown@example.com."
-  - id: "fly-unified-6"
-    initial_url: "https://real-flyunified.vercel.app/"
-    goal: "Calculate 1+1 and return."
-  
+- id: fly-unified-6
+  initial_url: https://real-flyunified.vercel.app/
+  goal: 'Reserve me a seat for the flight from Austin to Pittsburgh departing on December
+    11th, 2024 at 8:00 in Basic Economy.
+
+    Passenger: Alice Brown
+
+    Date of Birth: 05/20/1992
+
+    Sex: Female
+
+    Seat Selection: Yes (Aisle seat)
+
+    Payment: Credit Card (378342143523967), Exp: 09/27, security code: 332 Address:
+    789 Pine St, Los Angeles, CA, 90012, USA, Phone: 555-456-7890, Email: alicebrown@example.com.'
+- id: fly-unified-7
+  initial_url: https://real-flyunified.vercel.app/
+  goal: How many flights are available from Dallas to Fresno on December 4th?
   
 stages:
   - name: "baseline"
