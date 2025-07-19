@@ -1,0 +1,91 @@
+tasks:
+- id: fly-unified-6
+  initial_url: https://real-flyunified.vercel.app/
+  goal: 'Reserve me a seat for the flight from Austin to Pittsburgh departing on December
+    11th, 2024 at 8:00 in Basic Economy.
+
+    Passenger: Alice Brown
+
+    Date of Birth: 05/20/1992
+
+    Sex: Female
+
+    Seat Selection: Yes (Aisle seat)
+
+    Payment: Credit Card (378342143523967), Exp: 09/27, security code: 332 Address:
+    789 Pine St, Los Angeles, CA, 90012, USA, Phone: 555-456-7890, Email: alicebrown@example.com.'
+- id: fly-unified-7
+  initial_url: https://real-flyunified.vercel.app/
+  goal: How many flights are available from Dallas to Fresno on December 4th?
+  
+stages:
+  - name: "baseline"
+    description: "Baseline with all parallelism disabled"
+    config:
+      allow_parallelism:
+        task: false
+        data: false
+        first_of_n: false
+      max_parallelism_nesting_depth: 0
+      llm_model: "openai:gpt-4.1"
+      llm_model_mini: "openai:gpt-4.1-mini"
+  
+  - name: "first_of_n_only"
+    description: "Only first-of-n parallelism enabled (3 copies)"
+    config:
+      allow_parallelism:
+        task: false
+        data: false
+        first_of_n: true
+      max_parallelism_nesting_depth: 1
+      llm_model: "openai:gpt-4.1"
+      llm_model_mini: "openai:gpt-4.1-mini"
+  
+  - name: "task_parallelism_only"
+    description: "Only task-level parallelism for subtasks"
+    config:
+      allow_parallelism:
+        task: true
+        data: false
+        first_of_n: false
+      max_parallelism_nesting_depth: 1
+      llm_model: "openai:gpt-4.1"
+      llm_model_mini: "openai:gpt-4.1-mini"
+  
+  - name: "data_parallelism_only"
+    description: "Only data-level parallelism for content extraction"
+    config:
+      allow_parallelism:
+        task: false
+        data: true
+        first_of_n: false
+      max_parallelism_nesting_depth: 1
+      llm_model: "openai:gpt-4.1"
+      llm_model_mini: "openai:gpt-4.1-mini"
+  
+  - name: "task_and_data_parallelism"
+    description: "Both task and data parallelism enabled"
+    config:
+      allow_parallelism:
+        task: true
+        data: true
+        first_of_n: false
+      max_parallelism_nesting_depth: 1
+      llm_model: "openai:gpt-4.1"
+      llm_model_mini: "openai:gpt-4.1-mini"
+  
+  - name: "all_parallelism_enabled"
+    description: "All parallelism modes enabled"
+    config:
+      allow_parallelism:
+        task: true
+        data: true
+        first_of_n: true
+      max_parallelism_nesting_depth: 1
+      llm_model: "openai:gpt-4.1"
+      llm_model_mini: "openai:gpt-4.1-mini"
+
+settings:
+  runs_per_stage: 3
+  logs_dir: "experiments/logs"
+  output_dir: "experiments/results"

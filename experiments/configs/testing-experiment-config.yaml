@@ -1,0 +1,36 @@
+# A trivial experiment to test the experiment runner and loggers
+tasks:
+  - id: "do-nothing"
+    initial_url: "https://real-flyunified.vercel.app/"
+    goal: "Do nothing and return."
+  - id: "calculate-1+1"
+    initial_url: "https://real-flyunified.vercel.app/"
+    goal: "Calculate 1+1 and return."
+   
+stages:
+  - name: "baseline"
+    description: "Baseline with all parallelism disabled"
+    config:
+      allow_parallelism:
+        task: false
+        data: false
+        first_of_n: false
+      max_parallelism_nesting_depth: 0
+      llm_model: "openai:gpt-4.1"
+      llm_model_mini: "openai:gpt-4.1-mini"
+  
+  - name: "first_of_n_only"
+    description: "Only first-of-n parallelism enabled (3 copies)"
+    config:
+      allow_parallelism:
+        task: false
+        data: false
+        first_of_n: true
+      max_parallelism_nesting_depth: 1
+      llm_model: "openai:gpt-4.1"
+      llm_model_mini: "openai:gpt-4.1-mini"
+
+settings:
+  runs_per_stage: 3
+  logs_dir: "experiments/logs"
+  output_dir: "experiments/results"
