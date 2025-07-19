@@ -130,6 +130,7 @@ class ExperimentRunner:
                 "require_human_in_loop": False,
                 "share_browser_process": False,
                 "allowed_domains": None,
+                "allow_vision": False,
                 **stage_config,  # Override with stage-specific parallelism config
             },
         }
