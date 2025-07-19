@@ -130,6 +130,7 @@ class ExperimentRunner:
                 "require_human_in_loop": False,
                 "share_browser_process": False,
                 "allowed_domains": None,
+                "allow_vision": False,
                 **stage_config,  # Override with stage-specific parallelism config
             },
         }
@@ -284,7 +285,7 @@ class ExperimentRunner:
 
 
 async def main():
-    config_path = "experiments/configs/testing-experiment-config.yaml"
+    config_path = "experiments/configs/test_first_of_n.yaml"
     if not os.path.exists(config_path):
         print(f"Config file not found: {config_path}")
         return
