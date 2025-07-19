@@ -59,7 +59,7 @@ def format_metrics(metrics=None) -> str:
         "Resources:",
         f"  Active browsers: {metrics['concurrent_browsers'] if metrics else 0}",
         f"  Memory usage:    {metrics['memory_usage_gb']:.1f} GB" if metrics else "  Memory usage:    0.0 GB",
-        f"  Total tokens:    {metrics['total_token_usage']}" if metrics else "  Total tokens:    0 (Prompt: 0, Cached: 0, Output: 0)",
+        f"  Total tokens:    {metrics['total_token_usage_str']}" if metrics else "  Total tokens:    0 (Prompt: 0, Cached: 0, Output: 0)",
         f"  Total cost:      ${metrics['total_cost']:.4f}" if metrics else "  Total cost:      $0.0000",
     ])
 

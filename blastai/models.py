@@ -87,8 +87,27 @@ class TokenUsage:
         )
     
     def to_tuple(self) -> tuple:
-        """Convert to (prompt, prompt_cached, completion, total) tuple for backward compatibility."""
+        """Convert to a (prompt, prompt_cached, completion, total) tuple."""
         return (self.prompt, self.prompt_cached, self.completion, self.total)
+
+    @classmethod
+    def from_json(cls, json_data: dict) -> 'TokenUsage':
+        """Create TokenUsage from JSON."""
+        return cls(
+            prompt=json_data["prompt"],
+            prompt_cached=json_data["prompt_cached"],
+            completion=json_data["completion"],
+            total=json_data["total"]
+        )
+    
+    def to_json(self) -> dict:
+        """Convert to JSON."""
+        return {
+            "prompt": self.prompt,
+            "prompt_cached": self.prompt_cached,
+            "completion": self.completion,
+            "total": self.total
+        }
     
     def format_detailed(self) -> str:
         """Format with detailed breakdown (showing Total, Prompt, Cached, Output)."""
