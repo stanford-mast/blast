@@ -411,7 +411,7 @@ async def launch_vnc_session(target_url: str, stealth: bool = False) -> VNCSessi
         browser_args = {
             'headless': False,
             'highlight_elements': False,  # Disable element highlighting
-            'keep_alive': True,  # Keep browser alive between tasks
+            'keep_alive': False,  # Set to False so agent.close() can clean up
             'env': env,
             'args': [
                 "--disable-gpu",
