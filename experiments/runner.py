@@ -26,6 +26,8 @@ class ExperimentResult:
 
     experiment_id: str
     engine_id: str
+    llm_model: str
+    llm_model_mini: str
     stage_name: str
     run_number: int
     success: bool
@@ -176,6 +178,8 @@ class ExperimentRunner:
             result = ExperimentResult(
                 experiment_id=experiment_id,
                 engine_id=engine._instance_hash,
+                llm_model=engine_config["constraints"]["llm_model"],
+                llm_model_mini=engine_config["constraints"]["llm_model_mini"],
                 stage_name=stage_name,
                 run_number=run_number,
                 success=False,

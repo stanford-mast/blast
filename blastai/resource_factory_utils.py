@@ -25,7 +25,7 @@ allocated_displays = set()
 def get_stealth_profile_dir(task_id: str) -> str:
     """Get a unique stealth profile directory path for a task."""
     base_stealth_dir = os.path.expanduser('~/.config/browseruse/profiles/stealth')
-    stealth_dir = os.path.expanduser(f'~/.config/browseruse/profiles/stealth_{task_id}')
+    stealth_dir = os.path.expanduser(f'~/.config/browseruse/profiles/stealth_{task_id}_{int(time.time() * 1000)}')
     
     base_stealth_path = Path(base_stealth_dir)
     stealth_dir_path = Path(stealth_dir)
@@ -36,13 +36,10 @@ def get_stealth_profile_dir(task_id: str) -> str:
     
     # Create task-specific directory
     if stealth_dir_path.exists():
-        try:
-            shutil.rmtree(stealth_dir)
-        except OSError as e:
-            logger.warning(f"Failed to remove existing stealth directory: {e}")
-            # Try to create a unique directory instead
-            stealth_dir = os.path.expanduser(f'~/.config/browseruse/profiles/stealth_{task_id}_{int(time.time())}')
-            stealth_dir_path = Path(stealth_dir)
+        logger.warning(f"Stealth directory already exists: {stealth_dir}")
+        # Add PID for uniqueness
+        stealth_dir = os.path.expanduser(f'~/.config/browseruse/profiles/stealth_{task_id}_{int(time.time() * 1000)}_{os.getpid()}')
+        stealth_dir_path = Path(stealth_dir)
     
     if base_stealth_path.exists():
         try:
@@ -411,7 +408,7 @@ async def launch_vnc_session(target_url: str, stealth: bool = False) -> VNCSessi
         browser_args = {
             'headless': False,
             'highlight_elements': False,  # Disable element highlighting
-            'keep_alive': True,  # Keep browser alive between tasks
+            'keep_alive': False,  # Don't keep browser alive between tasks to avoid resource leaks
             'env': env,
             'args': [
                 "--disable-gpu",

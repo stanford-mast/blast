@@ -224,6 +224,9 @@ def setup_logging(settings: Optional[Settings] = None, engine_hash: Optional[str
         logger = logging.getLogger(name)
         logger.setLevel(level)
         
+        # Clear any existing handlers
+        logger.handlers.clear()
+        
         # Add handler specifically for this logger
         handler = logging.FileHandler(engine_log)
         handler.setFormatter(formatter)
@@ -245,6 +248,8 @@ def setup_logging(settings: Optional[Settings] = None, engine_hash: Optional[str
         for child in ['server', 'engine', 'scheduler', 'executor']:
             child_logger = logging.getLogger(f"{name}.{child}")
             child_logger.setLevel(level)
+            # Clear any existing handlers
+            child_logger.handlers.clear()
 
 def should_show_metrics(settings: Settings) -> bool:
     """Always return True since metrics should always be shown."""

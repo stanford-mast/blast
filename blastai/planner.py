@@ -178,7 +178,7 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
 
             if parallelism.get("first_of_n", False):
                 guidance_parts.append(
-                    f'Execute launch_subtask(task="{task_description}", num_copies=3) '
+                    f'Execute launch_subtask(task="{task_description}", optional_initial_search_or_url={initial_url}, num_copies=3) '
                     "--> then get_first_subtask_result with the returned subtask IDs"
                 )
 
