@@ -119,7 +119,7 @@ async def create_executor(
         browser_args = {
             'headless': constraints.require_headless,
             'user_data_dir': None,  # Use ephemeral profile for security
-            'keep_alive': True,  # Keep browser alive between tasks
+            'keep_alive': False,  # Set to False so agent.close() can clean up
             'highlight_elements': False,  # Disable element highlighting
         }
         
