@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, asdict
+from urllib.parse import urljoin
 
 from blastai import Engine
 from blastai.logging_setup import setup_logging
@@ -233,8 +234,9 @@ class ExperimentRunner:
             task_result = await engine.run(
                 task["goal"], initial_url=task["initial_url"], mode="block"
             )
-            self.logger.info("Finished running task", indent=6)
             finish_time = time.time()
+            result.total_time = finish_time - start_time
+            self.logger.info(f"Finished running task in {result.total_time:.2f} seconds", indent=6)
 
             metrics = await engine.get_metrics()
 
@@ -264,7 +266,7 @@ class ExperimentRunner:
                         if executor and executor.browser_session:
                             page = await executor.browser_session.get_current_page()
                             
-                            finish_url = Path(task["initial_url"]) / 'finish'
+                            finish_url = urljoin(task["initial_url"], 'finish')
                             self.logger.info(f"Navigating to finish page: {finish_url}", indent=6)
                             
                             # Reference: https://github.com/agi-inc/agisdk/blob/main/src/agisdk/REAL/browsergym/webclones/base.py#L146
@@ -304,8 +306,6 @@ class ExperimentRunner:
             result.error = str(e)
 
         finally:
-            result.total_time = finish_time - start_time
-
             if engine:
                 await engine.stop()
         self.logger.info(f"Run {run_number} completed in {result.total_time:.2f} seconds", indent=4)
