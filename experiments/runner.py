@@ -32,12 +32,12 @@ def get_successful_task(parallelism_config: Dict[str, Any], task_states: Dict[st
 def get_successful_main_task(task_states: Dict[str, Any], logger: logging.Logger) -> Optional[Any]:
     """Get the successful main task from the task states."""
     if len(task_states) != 1:
-        logger.warning("Expected 1 task state, got %d", len(task_states))
+        logger.warning(f"Expected 1 task state, got {len(task_states)}", indent=6)
 
     for task_state in task_states.values():
         if task_state.parent_task_id is None and task_state.executor:
             return task_state
-    logger.warning("No successful main task found")
+    logger.warning("No successful main task found", indent=6)
     return None
 
 def get_successful_subtask(task_states: Dict[str, Any], logger: logging.Logger) -> Optional[Any]:
@@ -49,10 +49,10 @@ def get_successful_subtask(task_states: Dict[str, Any], logger: logging.Logger) 
             task_state.executor and 
             task_state.executor.browser_session and 
             task_state.parent_task_id):
-            logger.info(f"Found successful subtask with browser: {task_state.id}", indent=6)
+            logger.info(f"Found successful subtask: {task_state.id}", indent=6)
             return task_state
     
-    logger.info("No successful subtask found", indent=6)
+    logger.warning("No successful subtask found", indent=6)
     return None
 
 @dataclass
