@@ -1,4 +1,3 @@
-# All tasks from https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks
 - id: dashdish-1
   initial_url: https://real-dashdish.vercel.app/
   goal: What are the first three restaurants listed on the homepage?

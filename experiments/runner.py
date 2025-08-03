@@ -14,11 +14,46 @@ from blastai import Engine
 from blastai.logging_setup import setup_logging
 from blastai.response import AgentHistoryListResponse
 
+# Whether to evaluate the result using the agisdk evaluator
+# This is only supported when running one of the REAL tasks:
+# https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks
+EVALUATE_AGISDK = True
 
 def ensure_parent_dir(file_path: str | Path) -> None:
     """Ensure the parent directory of a file path exists."""
     Path(file_path).parent.mkdir(parents=True, exist_ok=True)
 
+def get_successful_task(parallelism_config: Dict[str, Any], task_states: Dict[str, Any], logger: logging.Logger) -> Optional[Any]:
+    """Get the successful task according to the parallelism config. For first-of-n, we need to find the subtask that succeeded. Otherwise, we can use the main task."""
+    if parallelism_config.get("first_of_n", False):
+        return get_successful_subtask(task_states, logger)
+    return get_successful_main_task(task_states, logger)
+
+def get_successful_main_task(task_states: Dict[str, Any], logger: logging.Logger) -> Optional[Any]:
+    """Get the successful main task from the task states."""
+    if len(task_states) != 1:
+        logger.warning("Expected 1 task state, got %d", len(task_states))
+
+    for task_state in task_states.values():
+        if task_state.parent_task_id is None and task_state.executor:
+            return task_state
+    logger.warning("No successful main task found")
+    return None
+
+def get_successful_subtask(task_states: Dict[str, Any], logger: logging.Logger) -> Optional[Any]:
+    """Get the successful subtask from the task states."""
+    for task_state in task_states.values():
+        # Look for the successful subtask with a browser session
+        if (task_state.is_completed and 
+            task_state.success and 
+            task_state.executor and 
+            task_state.executor.browser_session and 
+            task_state.parent_task_id):
+            logger.info(f"Found successful subtask with browser: {task_state.id}", indent=6)
+            return task_state
+    
+    logger.info("No successful subtask found", indent=6)
+    return None
 
 @dataclass
 class ExperimentResult:
@@ -30,11 +65,13 @@ class ExperimentResult:
     llm_model_mini: str
     stage_name: str
     run_number: int
-    success: bool
+    reported_success: bool
+    evaluated_success: Optional[bool]
     error: Optional[str]
     total_time: float
     metrics: Dict[str, Any]
     final_result: Optional[str]
+    final_state: Optional[Dict[str, Any]]
 
 
 class ExperimentLogger:
@@ -154,6 +191,7 @@ class ExperimentRunner:
         stage_name: str,
         run_number: int,
         shared_experiment_id: Optional[str] = None,
+        evaluate: bool = EVALUATE_AGISDK,
     ) -> ExperimentResult:
         """Run a single experiment with given configuration."""
         experiment_folder, experiment_id = self._create_experiment_folder(
@@ -166,6 +204,7 @@ class ExperimentRunner:
         # Create and save engine configuration
         engine_config = self._create_engine_config(stage_config, experiment_folder)
         config_path = self._save_config(engine_config, experiment_folder)
+        parallelism_config = stage_config["allow_parallelism"]
 
         # Initialize result object
         start_time = time.time()
@@ -182,21 +221,25 @@ class ExperimentRunner:
                 llm_model_mini=engine_config["constraints"]["llm_model_mini"],
                 stage_name=stage_name,
                 run_number=run_number,
-                success=False,
+                reported_success=False,
+                evaluated_success=None,
                 error=None,
                 total_time=0.0,
                 metrics={},
                 final_result=None,
+                final_state=None,
             )
 
             task_result = await engine.run(
                 task["goal"], initial_url=task["initial_url"], mode="block"
             )
+            self.logger.info("Finished running task", indent=6)
+            finish_time = time.time()
 
             metrics = await engine.get_metrics()
 
             if isinstance(task_result, AgentHistoryListResponse):
-                result.success = (
+                result.reported_success = (
                     bool(task_result.is_successful())
                     if task_result.is_done()
                     else False
@@ -205,6 +248,53 @@ class ExperimentRunner:
                 result.final_result = (
                     task_result.final_result() if task_result.is_done() else None
                 )
+                
+                # Evaluate the result to judge success
+                if evaluate and "initial_url" in task:
+                    try:
+                        task_states = engine.scheduler.tasks
+                        executor = None
+                        
+                        # Based on the parallelism config, figure out which task / browser session to use for evaluation
+                        successful_task = get_successful_task(parallelism_config, task_states, self.logger)
+                        
+                        if successful_task and successful_task.executor:
+                            executor = successful_task.executor
+                        
+                        if executor and executor.browser_session:
+                            page = await executor.browser_session.get_current_page()
+                            
+                            finish_url = Path(task["initial_url"]) / 'finish'
+                            self.logger.info(f"Navigating to finish page: {finish_url}", indent=6)
+                            
+                            # Reference: https://github.com/agi-inc/agisdk/blob/main/src/agisdk/REAL/browsergym/webclones/base.py#L146
+                            await page.goto(finish_url, timeout=1000)
+                            await page.wait_for_load_state("networkidle", timeout=1000)
+                            pre_element = await page.wait_for_selector("pre", timeout=1000)
+                            if pre_element:
+                                env_state = await pre_element.inner_text()
+                                env_state_json = json.loads(env_state)
+                                
+                                result.final_state = env_state_json
+                                self.logger.info("Saved final state for AGISDK evaluation", indent=6)
+                                
+                                try:
+                                    from agisdk.REAL.browsergym.webclones.evaluate import WebCloneEvaluator
+                                    from agisdk.REAL.browsergym.webclones.task_config import TaskConfig
+                                    
+                                    task_config = TaskConfig(task["id"])
+                                    evaluator = WebCloneEvaluator(task_config)
+
+                                    reward, done, message, info = evaluator.evaluate(env_state_json, result.final_result)
+                                    self.logger.info(f"Evaluation result: {message}, Reward: {reward}", indent=6)
+                                    result.evaluated_success = all(result[0] for result in info['results'])
+                                except Exception as e:
+                                    self.logger.error(f"Failed to evaluate result: {e}", indent=6)
+                                    result.evaluated_success = False
+                                    result.error = str(e)
+                                
+                    except Exception as e:
+                        self.logger.error(f"Failed to get AGISDK finish page: {e}", indent=6)
             else:
                 self.logger.error(f"Unexpected result type: {type(task_result)}")
                 result.error = f"Unexpected result type: {type(task_result)}"
@@ -214,7 +304,7 @@ class ExperimentRunner:
             result.error = str(e)
 
         finally:
-            result.total_time = time.time() - start_time
+            result.total_time = finish_time - start_time
 
             if engine:
                 await engine.stop()
@@ -245,7 +335,7 @@ class ExperimentRunner:
             self.results_path = Path(self.config["settings"]["output_dir"]) / f"{task['id']}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
             self.logger.info("Running task:", indent=2)
             self.logger.info(f"{task}", indent=4)
-            self.logger.info(f"Results will be saved to {self.results_path}")
+            self.logger.info(f"Results will be saved to {self.results_path}", indent=4)
             self.logger.info("--------------------------------", indent=2)
 
             for stage in stages:
