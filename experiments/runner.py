@@ -43,7 +43,7 @@ def get_successful_main_task(task_states: Dict[str, Any], logger: logging.Logger
 def get_successful_subtask(task_states: Dict[str, Any], logger: logging.Logger) -> Optional[Any]:
     """Get the successful subtask from the task states."""
     for task_state in task_states.values():
-        # Look for the successful subtask with a browser session
+        # Look for the successful subtask
         if (task_state.is_completed and 
             task_state.success and 
             task_state.executor and 
