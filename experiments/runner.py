@@ -19,6 +19,7 @@ from blastai.response import AgentHistoryListResponse
 # This is only supported when running one of the REAL tasks:
 # https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks
 EVALUATE_AGISDK = True
+AGISDK_TIMEOUT = 10000
 
 def ensure_parent_dir(file_path: str | Path) -> None:
     """Ensure the parent directory of a file path exists."""
@@ -270,9 +271,9 @@ class ExperimentRunner:
                             self.logger.info(f"Navigating to finish page: {finish_url}", indent=6)
                             
                             # Reference: https://github.com/agi-inc/agisdk/blob/main/src/agisdk/REAL/browsergym/webclones/base.py#L146
-                            await page.goto(finish_url, timeout=1000)
-                            await page.wait_for_load_state("networkidle", timeout=1000)
-                            pre_element = await page.wait_for_selector("pre", timeout=1000)
+                            await page.goto(finish_url, timeout=AGISDK_TIMEOUT)
+                            await page.wait_for_load_state("networkidle", timeout=AGISDK_TIMEOUT)
+                            pre_element = await page.wait_for_selector("pre", timeout=AGISDK_TIMEOUT)
                             if pre_element:
                                 env_state = await pre_element.inner_text()
                                 env_state_json = json.loads(env_state)
@@ -379,7 +380,7 @@ class ExperimentRunner:
 
 
 async def main():
-    config_path = "experiments/configs/testing-experiment-config.yaml"
+    config_path = "experiments/configs/test_first_of_n.yaml"
     if not os.path.exists(config_path):
         print(f"Config file not found: {config_path}")
         return
