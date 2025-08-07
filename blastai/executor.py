@@ -3,8 +3,9 @@
 import asyncio
 import logging
 import os
-import re
 import random
+import re
+import time
 from pathlib import Path
 from typing import List, Optional, Union, AsyncIterator, Dict, Any, cast, Tuple
 from datetime import datetime
@@ -214,7 +215,13 @@ class Executor:
                         
                         # Create a new EventBus instance
                         from bubus import EventBus
-                        self.agent.eventbus = EventBus(name=name, wal_path=wal_path, parallel_handlers=parallel_handlers)
+                        try:
+                            self.agent.eventbus = EventBus(name=name, wal_path=wal_path, parallel_handlers=parallel_handlers)
+                        except Exception as e:
+                            logger.error(f"Error creating EventBus: {e}, creating a new one with a unique name")
+                            timestamp = str(int(time.time() * 1000))[-8:]
+                            unique_name = f"{name}_{timestamp}"
+                            self.agent.eventbus = EventBus(name=unique_name, wal_path=wal_path, parallel_handlers=parallel_handlers)
                         
                         # Explicitly call _start() to ensure the EventBus is properly initialized
                         # This ensures event_queue, runloop_lock, and on_idle are set up
