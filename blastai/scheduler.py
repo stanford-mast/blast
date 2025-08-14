@@ -306,7 +306,14 @@ class Scheduler:
                     # Return result
                     return result
                     
-                except Exception as e:
+                except asyncio.CancelledError:
+                    # Task was cancelled (e.g., by first_of_n completion)
+                    # Don't propagate the cancellation, just mark as failed
+                    logger.debug(f"Task {task_id} was cancelled, returning None instead of propagating")
+                    await self.complete_task(task_id, success=False)
+                    return None
+                    
+                except Exception:
                     # logger.error(f"Task {task_id} failed: {e}")
                     # Mark task as complete but failed
                     await self.complete_task(task_id, success=False)
