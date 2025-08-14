@@ -180,7 +180,7 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
                 guidance_parts.append(
                     f'Execute launch_subtask(task="{task_description}", optional_initial_search_or_url={initial_url}, num_copies=3) '
                     "--> then get_first_subtask_result with the returned subtask IDs"
-                    " Do not attempt to complete the task yourself - delegate it to subtasks."
+                    " Do not attempt to complete the task yourself - delegate it to subtasks. Unless polling for subtask results repeatedly fails, in which case you can attempt to complete the task yourself."
                 )
 
             if parallelism.get("task", False):
