@@ -1,53 +1,52 @@
-# All tasks from https://github.com/agi-inc/agisdk/tree/0.2.4/src/agisdk/REAL/browsergym/webclones/tasks
 - id: dashdish-1
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: What are the first three restaurants listed on the homepage?
 - id: dashdish-10
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: Place an order from "Souvla" for a "Medium Classic Cheeseburger" and a "Small
     Bacon Double Cheeseburger" with "Standard Delivery" as the method with the default
     charged options.
 - id: dashdish-11
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: Can you find out how much a medium 'Chicken Biryani' from 'Mashaallah Halal
     Food Pakistani Food' costs? And while you're at it, add one to the cart, buy it,
     and let me know the total price.
 - id: dashdish-2
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: Add a "Medium Pepperoni Pizza" from the restaurant "Papa Johns Pizza" to the
     shopping cart and purchase it.
 - id: dashdish-3
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: How many restaurants in the "Light & fresh" category offer delivery?
 - id: dashdish-4
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: Schedule a delivery order from "Taco Bell" adding a "Classic Cheeseburger"
     large size for later and add the note "Leave at the front door".
 - id: dashdish-5
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: Add three "Loaded Bacon Cheese Fries" to the shopping cart from "Man vs. Fries".
     Proceed to checkout and select "Pickup" as the delivery method.
 - id: dashdish-6
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: What is the price of a regular "Chicken Biryani" from "Mashaallah Halal Food
     Pakistani Food"?
 - id: dashdish-7
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: Select "Express Delivery" for an order from "DragonEats" of "Mushroom Swiss
     Burger" and complete the checkout with the pre-loaded Visa card.
 - id: dashdish-8
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: What are first three categories of deliverable food displayed on the homepage?
 - id: dashdish-9
-  initial_url: https://real-dashdish-2io2zmn35-agi-co.vercel.app/
+  initial_url: https://real-dashdish-fnq7w19sk-real-sites.vercel.app
   goal: Add a "Large Classic Cheeseburger" from "RT Rotisserie" to the cart, then
     remove it.
 - id: fly-unified-1
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: What is the earliest available flight from Savannah to Albuquerque on December
     1st, 2024?
 - id: fly-unified-10
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: 'Try to book a one-way flight for a minor under 18 years old from San Francisco
     to Chicago in Basic Economy on December 18th at 10:00. Ensure no seat selection
     is made. Tell me if the booking process allows this.
@@ -63,11 +62,11 @@
     Payment: Credit Card (9999 8888 7777), Exp: 03/30, Address: 987 Cedar St, Chicago,
     IL, 60601, USA, Phone: 555-987-1234, Email: parentlee@example.com.'
 - id: fly-unified-11
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: Can you book a one-way flight from San Francisco (SFO) to New York (JFK) for
     December 18th, 2024?
 - id: fly-unified-12
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: 'Book me a flight from San Francisco to Chicago in Basic Economy on December
     18th at 10:00. Ensure no seat selection is made. Tell me if there are any issues
     with the booking.
@@ -83,17 +82,17 @@
     Payment: Credit Card (9999 8888 7777), Exp: 11/24, Address: 987 Cedar St, Chicago,
     IL, 60601, USA, Phone: 555-987-1234, Email: davidlee@example.com.'
 - id: fly-unified-13
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: Can you calculate the price difference between a Business Class seat and an
     Economy Class seat for a one-way flight from Austin (AUS) to Jacksonville (JAX)
     on December 3rd, 2024, departing at 8:00 AM?
 - id: fly-unified-14
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: Can you find the closest window seat to the front of the plane for a one-way
     flight from Indianapolis (IND) to Boise (BOI) on December 5th, 2024, departing
     at the first time in the morning in Economy class?
 - id: fly-unified-2
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: 'Book me a one-way flight from Indiana to New York on December 2nd 2024 at
     12:00.
 
@@ -108,11 +107,11 @@
     Payment: Credit Card (378342143523967), Exp: 12/25, Security Code: 245, Address:
     123 Main St, San Francisco, CA, 94105, USA, Phone: 555-123-4567, Email: johndoe@example.com.'
 - id: fly-unified-3
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: What is the price for a Premium Economy flight from Indiana to New York at
     12:00 on December 2nd?
 - id: fly-unified-4
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: 'Book me a round-trip flight from Providence (Rhode Island) to Indianapolis,
     departing on December 5th, 2024 at 08:00 and returning on December 9th at 14:00.
 
@@ -127,7 +126,7 @@
     Payment: Credit Card (378342143523967), Exp: 06/26, security code: 345 Address:
     456 Elm St, Miami, FL, 33101, USA, Phone: 555-987-6543, Email: janesmith@example.com.'
 - id: fly-unified-5
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app/
   goal: 'Find me the cheapest fare for a flight from Orlando to Milwaukee on December
     5th, 2024 and book it.
 
@@ -142,7 +141,7 @@
     Payment: Credit Card (378342143523967), Exp: 12/25, Security Code: 420 Address:
     123 Main St, San Francisco, CA, 94105, USA, Phone: 555-123-4567, Email: johndoe@example.com.'
 - id: fly-unified-6
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: 'Reserve me a seat for the flight from Austin to Pittsburgh departing on December
     11th, 2024 at 8:00 in Basic Economy.
 
@@ -157,10 +156,10 @@
     Payment: Credit Card (378342143523967), Exp: 09/27, security code: 332 Address:
     789 Pine St, Los Angeles, CA, 90012, USA, Phone: 555-456-7890, Email: alicebrown@example.com.'
 - id: fly-unified-7
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: How many flights are available from Dallas to Fresno on December 4th?
 - id: fly-unified-8
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: 'Find the cheapest Economy flight from Charlotte to Norfolk on December 10th,
     and book it if it departs before noon. Tell me what time the flight departs and
     whether you booked it.
@@ -176,7 +175,7 @@
     Payment: Credit Card (2222 3333 4444), Exp: 08/29, Security: 244 Address: 654
     Maple St, Boston, MA, 02108, USA, Phone: 555-654-3210, Email: sarahwhite@example.com.'
 - id: fly-unified-9
-  initial_url: https://real-flyunified-ls5jur3vc-real-sites.vercel.app/
+  initial_url: https://real-flyunified-qokk7t67g-real-sites.vercel.app
   goal: 'Book me a flight from San Francisco to Chicago in Basic Economy on December
     18th at 10:00. Ensure no seat selection is made.
 
@@ -191,364 +190,367 @@
     Payment: Credit Card (9999 8888 7777), Exp: 03/30, Address: 987 Cedar St, Chicago,
     IL, 60601, USA, Phone: 555-987-1234, Email: davidlee@example.com.'
 - id: gocalendar-1
-  initial_url: https://real-gocalendar-p39zyvq69-real-sites.vercel.app/
+  initial_url: real-gocalendar-5o0l1rug2-real-sites.vercel.app
   goal: Create a new event titled "Team Meeting" on July 19, 2024, from 2 PM to 2:30
     PM, and include "Conference Room A" as the location
 - id: gocalendar-10
-  initial_url: https://real-gocalendar-p39zyvq69-real-sites.vercel.app/
+  initial_url: real-gocalendar-5o0l1rug2-real-sites.vercel.app
   goal: Delete all events from the "Family" calendar, and delete the "Personal" calendar
     and display how many events are left
 - id: gocalendar-2
-  initial_url: https://real-gocalendar-p39zyvq69-real-sites.vercel.app/
+  initial_url: real-gocalendar-5o0l1rug2-real-sites.vercel.app
   goal: Switch to the "Month" view and list all events displayed for July 2024
 - id: gocalendar-3
-  initial_url: https://real-gocalendar-p39zyvq69-real-sites.vercel.app/
+  initial_url: real-gocalendar-5o0l1rug2-real-sites.vercel.app
   goal: Delete the event titled "Breakfast Meeting with Client" scheduled for July
     19, 2024
 - id: gocalendar-4
-  initial_url: https://real-gocalendar-p39zyvq69-real-sites.vercel.app/
+  initial_url: real-gocalendar-5o0l1rug2-real-sites.vercel.app
   goal: Change the "Team Check-In" event on July 18, 2024, name to "Project Kickoff"
     and update the location to "Zoom"
 - id: gocalendar-5
-  initial_url: https://real-gocalendar-p39zyvq69-real-sites.vercel.app/
+  initial_url: real-gocalendar-5o0l1rug2-real-sites.vercel.app
   goal: Create an event titled "Brainstorming Session" for July 22, 2024, from 11
     AM to 12 PM, add three guests ("Alexa Richardson" "James Anderson" and "Sophie
     Taylor"), and include a video meeting
 - id: gocalendar-6
-  initial_url: https://real-gocalendar-p39zyvq69-real-sites.vercel.app/
+  initial_url: real-gocalendar-5o0l1rug2-real-sites.vercel.app
   goal: Assign a sage color code to the "Personal" calendar and a peacock color code
     to the "Work" calendar
 - id: gocalendar-7
-  initial_url: https://real-gocalendar-p39zyvq69-real-sites.vercel.app/
+  initial_url: real-gocalendar-5o0l1rug2-real-sites.vercel.app
   goal: Reschedule the "Morning Coffee with sister" event from July 18, 2024, at 9
     AM to July 19, 2024, at 10AM using drag-and-drop functionality
 - id: gocalendar-8
-  initial_url: https://real-gocalendar-p39zyvq69-real-sites.vercel.app/
+  initial_url: real-gocalendar-5o0l1rug2-real-sites.vercel.app
   goal: Compare the events on the "Work" calendar and the "Personal" calendar and
     list the total number of events on each for July 2024
 - id: gocalendar-9
-  initial_url: https://real-gocalendar-p39zyvq69-real-sites.vercel.app/
+  initial_url: real-gocalendar-5o0l1rug2-real-sites.vercel.app
   goal: Create a recurring "Daily Standup" event from July 18, 2024 that repeats daily,
     and adjust the July 22, 2024, event to start at 10 AM
 - id: gomail-1
-  initial_url: https://real-gomail-lboz66l9b-real-sites.vercel.app/
+  initial_url: http://real-gomail-9q9gt012g-real-sites.vercel.app
   goal: How many unread emails are in the Inbox?
 - id: gomail-2
-  initial_url: https://real-gomail-lboz66l9b-real-sites.vercel.app/
+  initial_url: http://real-gomail-9q9gt012g-real-sites.vercel.app
   goal: Mark the first email in the Inbox as "read".
 - id: gomail-3
-  initial_url: https://real-gomail-lboz66l9b-real-sites.vercel.app/
+  initial_url: http://real-gomail-9q9gt012g-real-sites.vercel.app
   goal: Compose a new email to jonathan.smith@example.com with the subject "Meeting
     Notes" and body "Please find the meeting notes attached."
 - id: gomail-4
-  initial_url: https://real-gomail-lboz66l9b-real-sites.vercel.app/
+  initial_url: http://real-gomail-9q9gt012g-real-sites.vercel.app
   goal: How many emails are in the "Starred" category?
 - id: gomail-5
-  initial_url: https://real-gomail-lboz66l9b-real-sites.vercel.app/
+  initial_url: http://real-gomail-9q9gt012g-real-sites.vercel.app
   goal: Schedule an email to jane.doe@example.com with the subject "Weekly Update"
     to be sent next Monday at 9:00 AM.
 - id: gomail-6
-  initial_url: https://real-gomail-lboz66l9b-real-sites.vercel.app/
+  initial_url: http://real-gomail-9q9gt012g-real-sites.vercel.app
   goal: 'Find the email with the subject "Project Update: Deadline Extended" and tell
     me if it is marked as read or unread.'
 - id: gomail-7
-  initial_url: https://real-gomail-lboz66l9b-real-sites.vercel.app/
+  initial_url: http://real-gomail-9q9gt012g-real-sites.vercel.app
   goal: Delete the email with the subject "New Leadership Articles You Can't Miss"
     from the Inbox.
 - id: gomail-8
-  initial_url: https://real-gomail-lboz66l9b-real-sites.vercel.app/
+  initial_url: http://real-gomail-9q9gt012g-real-sites.vercel.app
   goal: Clear all emails from "GitHub" in the inbox to trash.
+- id: my-task-test
+  initial_url: https://evals-dashdish.vercel.app/
+  goal: Tell me the current time.
 - id: networkin-1
-  initial_url: https://real-networkin-aiugl4wcw-real-sites.vercel.app/
+  initial_url: https://real-networkin-hd0vd3u0w-real-sites.vercel.app
   goal: Create a new text post for the feed with a professional update about AI trends
     in 2025, mentioning three key advancements and their impact on the job market.
 - id: networkin-10
-  initial_url: https://real-networkin-aiugl4wcw-real-sites.vercel.app/
+  initial_url: https://real-networkin-hd0vd3u0w-real-sites.vercel.app
   goal: Generate a polite follow-up message for a previous unanswered chat, starting
     with "Following up on".
 - id: networkin-2
-  initial_url: https://real-networkin-aiugl4wcw-real-sites.vercel.app/
+  initial_url: https://real-networkin-hd0vd3u0w-real-sites.vercel.app
   goal: Summarize the last five posts on the homepage feed, providing a brief description
     of each and identifying any recurring themes.
 - id: networkin-3
-  initial_url: https://real-networkin-aiugl4wcw-real-sites.vercel.app/
+  initial_url: https://real-networkin-hd0vd3u0w-real-sites.vercel.app
   goal: Write a post inviting users to a networking event, including details about
     the event's purpose, date, and target audience.
 - id: networkin-4
-  initial_url: https://real-networkin-aiugl4wcw-real-sites.vercel.app/
+  initial_url: https://real-networkin-hd0vd3u0w-real-sites.vercel.app
   goal: List the top 5 most recently shared posts on the homepage.
 - id: networkin-5
-  initial_url: https://real-networkin-aiugl4wcw-real-sites.vercel.app/
+  initial_url: https://real-networkin-hd0vd3u0w-real-sites.vercel.app
   goal: Send a connection request to John Smith.
 - id: networkin-6
-  initial_url: https://real-networkin-aiugl4wcw-real-sites.vercel.app/
+  initial_url: https://real-networkin-hd0vd3u0w-real-sites.vercel.app
   goal: Choose a random person who you haven't connected with, connect with them,
     and send them a message saying, 'howdy, partner'.
 - id: networkin-7
-  initial_url: https://real-networkin-aiugl4wcw-real-sites.vercel.app/
+  initial_url: https://real-networkin-hd0vd3u0w-real-sites.vercel.app
   goal: Search for three users who have worked at Amazon and list their current job
     positions.
 - id: networkin-8
-  initial_url: https://real-networkin-aiugl4wcw-real-sites.vercel.app/
+  initial_url: https://real-networkin-hd0vd3u0w-real-sites.vercel.app
   goal: Search for two users who have worked at Microsoft and list their current job
     positions.
 - id: networkin-9
-  initial_url: https://real-networkin-aiugl4wcw-real-sites.vercel.app/
+  initial_url: https://real-networkin-hd0vd3u0w-real-sites.vercel.app
   goal: Find a professional who attended Stanford and send them a connection request
     and a message.
 - id: omnizon-1
-  initial_url: https://real-omnizon-i2uaiixm5-real-sites.vercel.app/
+  initial_url: https://real-omnizon-crih1fho3-real-sites.vercel.app
   goal: Search for "laptop" using the search bar and display the first product in
     the results.
 - id: omnizon-10
-  initial_url: https://real-omnizon-i2uaiixm5-real-sites.vercel.app/
+  initial_url: https://real-omnizon-crih1fho3-real-sites.vercel.app
   goal: Click on "buy now" on any product, increase its quantity to the maximum allowed,
     update the delivery date to the last available, and place the order.
 - id: omnizon-2
-  initial_url: https://real-omnizon-i2uaiixm5-real-sites.vercel.app/
+  initial_url: https://real-omnizon-crih1fho3-real-sites.vercel.app
   goal: Search for "smartphones" using the search bar, add the first two to your cart,
     view the details of the third product, click on "Buy Now," and proceed through
     the checkout process.
 - id: omnizon-3
-  initial_url: https://real-omnizon-i2uaiixm5-real-sites.vercel.app/
+  initial_url: https://real-omnizon-crih1fho3-real-sites.vercel.app
   goal: Scroll through the homepage, click on the "Headphones" category card, and
     retrieve all product listings within that category.
 - id: omnizon-4
-  initial_url: https://real-omnizon-i2uaiixm5-real-sites.vercel.app/
+  initial_url: https://real-omnizon-crih1fho3-real-sites.vercel.app
   goal: Search for a "Marshall Emberton II Portable Bluetooth Speaker" and add it
     to your cart, then search for the "Michael Kors Oversized Slim Runway Men's Watch,"
     add it to the cart, and complete the checkout with both items.
 - id: omnizon-5
-  initial_url: https://real-omnizon-i2uaiixm5-real-sites.vercel.app/
+  initial_url: https://real-omnizon-crih1fho3-real-sites.vercel.app
   goal: Search for the "KTC 24 inch 1500R Curved Gaming Monitor" click on it, and
     display the specifications from its product page.
 - id: omnizon-6
-  initial_url: https://real-omnizon-i2uaiixm5-real-sites.vercel.app/
+  initial_url: https://real-omnizon-crih1fho3-real-sites.vercel.app
   goal: Compare the specifications and price of the "SAMSUNG Galaxy S24 Ultra" and
     "SAMSUNG Galaxy Z Fold 6," and buy the one with better features relative to its
     price, using the "Buy Now" button in the product details. Explain your choice.
 - id: omnizon-7
-  initial_url: https://real-omnizon-i2uaiixm5-real-sites.vercel.app/
+  initial_url: https://real-omnizon-crih1fho3-real-sites.vercel.app
   goal: Go to the "Gaming" category from the homepage and identify the most expensive
     product.
 - id: omnizon-8
-  initial_url: https://real-omnizon-i2uaiixm5-real-sites.vercel.app/
+  initial_url: https://real-omnizon-crih1fho3-real-sites.vercel.app
   goal: Search for "Automatic Espresso Machine," click on the cheapest one, change
     the quantity to 5, use "buy now" to purchase them and complete the checkout.
 - id: omnizon-9
-  initial_url: https://real-omnizon-i2uaiixm5-real-sites.vercel.app/
+  initial_url: https://real-omnizon-crih1fho3-real-sites.vercel.app
   goal: "Search for \"PlayStation DualSense\", purchase it using the \"buy now\" button\
     \ after opening the first result and change the default payment method to:\nname:\
     \ Jack Fulton\ncard number: 9231 3432 8927 7764\nexp date: 1/2029\nsecurity code:\
     \ 128\n before placing your order. "
 - id: opendining-1
-  initial_url: https://real-opendining-6i0orb9k9-real-sites.vercel.app/
+  initial_url: https://real-opendining-4ie5urers-real-sites.vercel.app
   goal: Browse the list of restaurants in the "Available for lunch now" section and
     display the names of all available options.
 - id: opendining-10
-  initial_url: https://real-opendining-6i0orb9k9-real-sites.vercel.app/
+  initial_url: https://real-opendining-4ie5urers-real-sites.vercel.app
   goal: Check the menus of all restaurants for vegetarian options and make a reservation
     at the one with the most vegetarian choices. For fields you don't know the answer
     for, just fill them in with anything of your choice.
 - id: opendining-2
-  initial_url: https://real-opendining-6i0orb9k9-real-sites.vercel.app/
+  initial_url: https://real-opendining-4ie5urers-real-sites.vercel.app
   goal: Click on the restaurant named "Yellowy Bistro" and tell me its description,
     menu, and reviews.
 - id: opendining-3
-  initial_url: https://real-opendining-6i0orb9k9-real-sites.vercel.app/
+  initial_url: https://real-opendining-4ie5urers-real-sites.vercel.app
   goal: Book a table at "The Royal Dine" for a party of 4 on July 20, 2024, at 7 PM.
     For fields you don't know the answer for, just fill them in with anything of your
     choice.
 - id: opendining-4
-  initial_url: https://real-opendining-6i0orb9k9-real-sites.vercel.app/
+  initial_url: https://real-opendining-4ie5urers-real-sites.vercel.app
   goal: Use the search bar to search for a restaurant on September 2nd at 4:30 PM
     for 7 people, using "Japanese" as the search term, and book the first result.
     For fields you don't know the answer for, just fill them in with anything of your
     choice.
 - id: opendining-5
-  initial_url: https://real-opendining-6i0orb9k9-real-sites.vercel.app/
+  initial_url: https://real-opendining-4ie5urers-real-sites.vercel.app
   goal: Scroll through the homepage carousel until "Ocean Breeze" is visible, select
     the second available time slot, and complete the reservation. For fields you don't
     know the answer for, just fill them in with anything of your choice.
 - id: opendining-6
-  initial_url: https://real-opendining-6i0orb9k9-real-sites.vercel.app/
+  initial_url: https://real-opendining-4ie5urers-real-sites.vercel.app
   goal: Select any restaurant and try finishing the booking with the phone number
     "+1 1111". Report whether the booking was successful or if there was an error.
 - id: opendining-7
-  initial_url: https://real-opendining-6i0orb9k9-real-sites.vercel.app/
+  initial_url: https://real-opendining-4ie5urers-real-sites.vercel.app
   goal: Compare the restaurants in the "Available for Lunch Now" section and choose
     the one with the best reviews relative to price. Book a table at this restaurant
     and provide an explanation of why you selected it. For fields you don't know the
     answer for, just fill them in with anything of your choice.
 - id: opendining-8
-  initial_url: https://real-opendining-6i0orb9k9-real-sites.vercel.app/
-  goal: Identify and book the restaurant with the lowest reviews. For fields you don't
+  initial_url: https://real-opendining-4ie5urers-real-sites.vercel.app
+  goal: Identify and book the restaurant with the lowest rating. For fields you don't
     know the answer for, just fill them in with anything of your choice.
 - id: opendining-9
-  initial_url: https://real-opendining-6i0orb9k9-real-sites.vercel.app/
+  initial_url: https://real-opendining-4ie5urers-real-sites.vercel.app
   goal: Search all menus and identify the restaurant offering the cheapest dish, along
     with its name and price.
 - id: staynb-1
-  initial_url: https://real-staynb-fu7xt71ch-real-sites.vercel.app/
+  initial_url: https://real-staynb-ahia8hrjf-real-sites.vercel.app
   goal: Can you book any stay for July 1st to July 16th 2024?
 - id: staynb-2
-  initial_url: https://real-staynb-fu7xt71ch-real-sites.vercel.app/
+  initial_url: https://real-staynb-ahia8hrjf-real-sites.vercel.app
   goal: Click on one of the stays displayed on the homepage and book it for a family
     of 4 (2 adults and 2 children). For fields you don't know the answer for, just
     fill them in with anything of your choice.
 - id: staynb-3
-  initial_url: https://real-staynb-fu7xt71ch-real-sites.vercel.app/
+  initial_url: https://real-staynb-ahia8hrjf-real-sites.vercel.app
   goal: How much more expensive is the most expensive stay compared to the cheapest
     one? Please provide just the dollar amount difference.
 - id: staynb-4
-  initial_url: https://real-staynb-fu7xt71ch-real-sites.vercel.app/
+  initial_url: https://real-staynb-ahia8hrjf-real-sites.vercel.app
   goal: Book a stay for 2 children with 1 adult. For fields you don't know the answer
     for, just fill them in with anything of your choice.
 - id: staynb-5
-  initial_url: https://real-staynb-fu7xt71ch-real-sites.vercel.app/
+  initial_url: https://real-staynb-ahia8hrjf-real-sites.vercel.app
   goal: Use the search bar to look for a stay. For the "Where" section, use the "Search
     by region" popover and select "Europe". Set the check-in date to October 13th
     and the check-out date to October 23rd. For the "Who" section, select 1 infant,
     2 children, and 2 adults. Press the search button, select the first stay, and
     book it.
 - id: staynb-6
-  initial_url: https://real-staynb-fu7xt71ch-real-sites.vercel.app/
+  initial_url: https://real-staynb-ahia8hrjf-real-sites.vercel.app
   goal: Find and book the stay with the best value for money (cheapest stay with the
     best reviews) for 1 day. For fields you don't know the answer for, just fill them
     in with anything of your choice.
 - id: staynb-7
-  initial_url: https://real-staynb-fu7xt71ch-real-sites.vercel.app/
+  initial_url: https://real-staynb-ahia8hrjf-real-sites.vercel.app
   goal: Compare all the stays listed by review quality and price and rank them by
     affordability. Please provide a ranked list showing each stay's name, rating,
     and price.
 - id: staynb-8
-  initial_url: https://real-staynb-fu7xt71ch-real-sites.vercel.app/
+  initial_url: https://real-staynb-ahia8hrjf-real-sites.vercel.app
   goal: Scroll through the homepage and book the last stay located in Paris.
 - id: staynb-9
-  initial_url: https://real-staynb-fu7xt71ch-real-sites.vercel.app/
+  initial_url: https://real-staynb-ahia8hrjf-real-sites.vercel.app
   goal: Book a stay with the maximum number of guests supported. For fields you don't
     know the answer for, just fill them in with anything of your choice.
 - id: topwork-1
-  initial_url: https://real-topwork-dsu3x9g1n-real-sites.vercel.app/
+  initial_url: https://real-topwork-on3lcbo9s-real-sites.vercel.app
   goal: Create a new job post for a Frontend Developer with expertise in React and
     TypeScript, specifying project details such as estimated duration, required skills,
     and budget.
 - id: topwork-2
-  initial_url: https://real-topwork-dsu3x9g1n-real-sites.vercel.app/
+  initial_url: https://real-topwork-on3lcbo9s-real-sites.vercel.app
   goal: Create a job posting for a Backend Developer specializing in Python, Django,
     and Flask to develop a high-performance web application. Include project details
     such as required skills (PostgreSQL, Docker, AWS, CI/CD), estimated project timeline,
     and budget.
 - id: topwork-3
-  initial_url: https://real-topwork-dsu3x9g1n-real-sites.vercel.app/
+  initial_url: https://real-topwork-on3lcbo9s-real-sites.vercel.app
   goal: Create a job listing for a Full-Stack Developer with expertise in Java, Spring
     Boot, and Angular, outlining the project scope, estimated duration, and required
     skills (MySQL, Docker, Kubernetes, and Jenkins). The ideal candidate should have
     experience in enterprise-level applications and building scalable microservices.
     After creating the job post, please describe what you included in the job listing.
 - id: topwork-4
-  initial_url: https://real-topwork-dsu3x9g1n-real-sites.vercel.app/
+  initial_url: https://real-topwork-on3lcbo9s-real-sites.vercel.app
   goal: Create a job post for a UI/UX Designer with expertise in Figma, Sketch, and
     Adobe Creative Suite, including project details, timeline, and required skills
     (Wireframing, Prototyping, Responsive Design).
 - id: topwork-5
-  initial_url: https://real-topwork-dsu3x9g1n-real-sites.vercel.app/
+  initial_url: https://real-topwork-on3lcbo9s-real-sites.vercel.app
   goal: Generate a follow-up message for a freelancer working on an active job, requesting
     a status update and estimated completion time. After sending the message, please
     share the content of the message you sent.
 - id: topwork-6
-  initial_url: https://real-topwork-dsu3x9g1n-real-sites.vercel.app/
+  initial_url: https://real-topwork-on3lcbo9s-real-sites.vercel.app
   goal: Find Ashley C. and tell me what her last completed project was.
 - id: topwork-7
-  initial_url: https://real-topwork-dsu3x9g1n-real-sites.vercel.app/
+  initial_url: https://real-topwork-on3lcbo9s-real-sites.vercel.app
   goal: Compare two front-end freelancers based on their work history, success rate,
     and client feedback, highlighting the pros and cons of hiring each. Please provide
     your comparison of the two front-end freelancers, including their pros and cons.
 - id: topwork-8
-  initial_url: https://real-topwork-dsu3x9g1n-real-sites.vercel.app/
+  initial_url: https://real-topwork-on3lcbo9s-real-sites.vercel.app
   goal: What was the last message that you recieved?
 - id: topwork-9
-  initial_url: https://real-topwork-dsu3x9g1n-real-sites.vercel.app/
+  initial_url: https://real-topwork-on3lcbo9s-real-sites.vercel.app
   goal: Draft a message to negotiate a lower hourly rate with a freelancer while maintaining
     professionalism and respect for their expertise. After sending the message, please
     share the content of your negotiation message.
 - id: udriver-1
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: Book a ride from Fitness Urbano to Pacific Cafe
 - id: udriver-10
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: Order me a ride for 4pm, I'll be at the de Young muesum headed to the Waterbar,
     fanciest option possible please.
 - id: udriver-11
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: I need to go from Pacific Catch on Chestnut back home to 333 Fremont now.
     If the fancy version is within ten dollars of the regular one, book that.
 - id: udriver-2
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: What was the name of the Thai restaurant I last got a ride to?
 - id: udriver-3
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: What's the cheapest ride price from Pacific Catch on Chestnut back home to
     333 Fremont?
 - id: udriver-4
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: Book me a ride home
 - id: udriver-5
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: Book a UdriverX ride leaving now from 333 Fremont to Fitness SF in the Castro
     and tell me the license plate of the driver once booked.
 - id: udriver-6
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: Me and 4 friends need a ride from the Palace Hotel to dinner at Osha Thai
     leaving now
 - id: udriver-7
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: How many trips did I take in June?
 - id: udriver-8
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: Book me a ride from 333 Fremont Apartments to Le Colonial
 - id: udriver-9
-  initial_url: https://real-udriver-q3l36vo2v-real-sites.vercel.app/
+  initial_url: https://real-udriver-sb2bj0jnt-real-sites.vercel.app
   goal: Book me a ride from the thai restaurant I last took a ride to for later today
     at 2pm, I'll be at 333 Apartments on Fremont
 - id: zilloft-1
-  initial_url: https://real-zilloft-clj9ey4hs-real-sites.vercel.app/
+  initial_url: https://real-zilloft-gs64ask7g-real-sites.vercel.app
   goal: Search for homes in San Francisco with a price range of $500,000 to $750,000.
     How many listings are displayed?
 - id: zilloft-10
-  initial_url: https://real-zilloft-clj9ey4hs-real-sites.vercel.app/
+  initial_url: https://real-zilloft-gs64ask7g-real-sites.vercel.app
   goal: How many "Houses" and "Townhomes" are listed in San Francisco with a price
     below $500,000?
 - id: zilloft-2
-  initial_url: https://real-zilloft-clj9ey4hs-real-sites.vercel.app/
+  initial_url: https://real-zilloft-gs64ask7g-real-sites.vercel.app
   goal: Filter the listings in San Francisco to show only homes with exactly 3 bedrooms
     and 2 bathrooms. How many listings are displayed?
 - id: zilloft-3
-  initial_url: https://real-zilloft-clj9ey4hs-real-sites.vercel.app/
+  initial_url: https://real-zilloft-gs64ask7g-real-sites.vercel.app
   goal: 'Find a home in San Diego priced under $150,000 with at least 2 bedrooms and
     request a tour. Use these details: Contact Name: John Doe, Email: johndoe@example.com,
     Phone: 555-123-4567, Tour Time: 2:00 PM, Tour Date: First available.'
 - id: zilloft-4
-  initial_url: https://real-zilloft-clj9ey4hs-real-sites.vercel.app/
+  initial_url: https://real-zilloft-gs64ask7g-real-sites.vercel.app
   goal: What is the price of the cheapest home in San Francisco with at least 4 bedrooms?
 - id: zilloft-5
-  initial_url: https://real-zilloft-clj9ey4hs-real-sites.vercel.app/
+  initial_url: https://real-zilloft-gs64ask7g-real-sites.vercel.app
   goal: Filter the listings in San Jose to display only "Townhomes" within a price
     range of $750,000 to $1,000,000. How many results are displayed?
 - id: zilloft-6
-  initial_url: https://real-zilloft-clj9ey4hs-real-sites.vercel.app/
+  initial_url: https://real-zilloft-gs64ask7g-real-sites.vercel.app
   goal: 'Select a property listed in San Francisco as "Condos" within a price range
     under $300,000 and request a tour for tomorrow at 4:00 PM. Use these contact details:
     Name: Sarah Brown, Email: sarahbrown@example.com, Phone: 555-987-6543.'
 - id: zilloft-7
-  initial_url: https://real-zilloft-clj9ey4hs-real-sites.vercel.app/
+  initial_url: https://real-zilloft-gs64ask7g-real-sites.vercel.app
   goal: How many "Manufactured" homes are available in San Francisco under $1,000,000?
 - id: zilloft-8
-  initial_url: https://real-zilloft-clj9ey4hs-real-sites.vercel.app/
+  initial_url: https://real-zilloft-gs64ask7g-real-sites.vercel.app
   goal: Apply a filter for homes with 3 bedrooms, 2 bathrooms, and a price range between
     $600,000 and $800,000 for zipcode 92114. How many results are displayed?
 - id: zilloft-9
-  initial_url: https://real-zilloft-clj9ey4hs-real-sites.vercel.app/
+  initial_url: https://real-zilloft-gs64ask7g-real-sites.vercel.app
   goal: 'Find the most expensive home listed in San Francisco with 4+ bedrooms and
     request a tour for 6:00 PM on the earliest possible date. Use these contact details:
     Name: David Smith, Email: davidsmith@example.com, Phone: 555-333-7890. What is
