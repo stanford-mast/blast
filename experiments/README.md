@@ -14,7 +14,7 @@ Each task has the following fields:
 ```
 For convenience, all tasks from [agisdk-REAL](https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks) have already been imported and can be found in `tasks/agisdk/agisdk.yaml`.
 
-Next, edit the **stages** section to configure the experiment stages. For example, to evaluate results from `baseline` and `data parallelism`, you can set it as follows:
+Next, edit the **stages** section to configure the experiment stages. For example, to evaluate results under `baseline` and `data-parallelism`, you can set it as follows:
 ```
   - name: "baseline"
     description: "Baseline with all parallelism disabled"
@@ -39,16 +39,16 @@ Next, edit the **stages** section to configure the experiment stages. For exampl
       llm_model_mini: "openai:gpt-4.1-mini"
 ```
 
-Finally, edit the **settings** section to configure the experiment settings. For example, to run 50 runs per stage:
+Finally, edit the **settings** section to configure the experiment settings. `runs_per_stage` specifies the number of runs to repeat per stage. `logs_dir` and `output_dir` specify the directories to save the logs and results. For example, to run 50 runs per stage:
 ```
   runs_per_stage: 50
-  logs_dir: "experiments/logs"
-  output_dir: "experiments/results"
+  logs_dir: "logs"
+  output_dir: "results"
 ```
 
-This is it! You can now run the experiment by running `python runner.py --config <path-to-your-config-file>`. 
+That's it! You can now run the experiment by running `python runner.py --config <path-to-your-config-file>`. 
 
-When you run one of the tasks from the [agisdk-REAL](https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks), you can add the `--evaluate` flag to evaluate the results. `python runner.py --config <path-to-your-config-file> --evaluate`
+When you run one of the tasks from the [agisdk-REAL](https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks), you can add the `--evaluate` flag to evaluate the results: `python runner.py --config <path-to-your-config-file> --evaluate`
 
 ### Import tasks
 All tasks from [agisdk-REAL](https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks) have already been imported and can be found in `tasks/agisdk/agisdk.yaml`. To re-import them, clone the `agisdk` repo and run `python tasks/agisdk/import_real.py`.
