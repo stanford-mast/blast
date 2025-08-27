@@ -87,5 +87,5 @@ stages:
 
 settings:
   runs_per_stage: 3
-  logs_dir: "experiments/logs"
-  output_dir: "experiments/results"
+  logs_dir: "logs"
+  output_dir: "results"
