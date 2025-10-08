@@ -8,11 +8,8 @@ logger = logging.getLogger(__name__)
 
 def apply_all_patches():
     """Apply all browser session patches."""
-    # Import BrowserSession only when needed
-    from browser_use.browser import BrowserSession
-    
-    patch_take_screenshot(BrowserSession)
-    logger.info("BrowserSession patches applied")
+    logger.info("Skipping BrowserSession patches")
+    return
 
 def patch_take_screenshot(BrowserSession):
     """

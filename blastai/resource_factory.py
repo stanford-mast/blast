@@ -7,7 +7,6 @@ from typing import Optional, Dict, Any
 
 from browser_use import Agent
 from browser_use.browser import BrowserSession
-from patchright.async_api import async_playwright as async_patchright
 
 # Import moved to line 27
 
@@ -152,9 +151,9 @@ async def create_executor(
             browser_args['deterministic_rendering'] = False
             logger.debug(f"Using patchright for browser automation with profile: {stealth_dir}")
 
-            # Create and start browser session
-            browser_session = BrowserSession(**browser_args)
-            await browser_session.start()
+        # Create and start browser session
+        browser_session = BrowserSession(**browser_args)
+        await browser_session.start()
     
         # Create and return regular executor
         logger.debug(f"Created new executor for task {task_id}")
