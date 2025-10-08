@@ -289,10 +289,10 @@ class Executor:
             List of AgentReasoning objects, one each for goal, memory, and screenshot.
             Empty list if agent is not running or has no state.
         """
-        if not self.agent or not self.agent.state or not self.agent.state.history:
+        if not self.agent or not self.agent.state or not self.agent.history:
             return []
             
-        thoughts = self.agent.state.history.model_thoughts()
+        thoughts = self.agent.history.model_thoughts()
         if not thoughts:
             return []
             
