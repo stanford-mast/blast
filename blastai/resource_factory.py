@@ -143,35 +143,19 @@ async def create_executor(
 
         # Initialize patchright if required
         if constraints.require_patchright:
-            try:
-                playwright = await async_patchright().start()
-                browser_args['playwright'] = playwright
-            
-                # Get stealth profile directory path
-                stealth_dir = get_stealth_profile_dir(task_id)
-                browser_args['user_data_dir'] = stealth_dir
-                browser_args['disable_security'] = False
-                browser_args['deterministic_rendering'] = False
-                logger.debug(f"Using patchright for browser automation with profile: {stealth_dir}")
-
-                # Create and start browser session
-                browser_session = BrowserSession(**browser_args)
-                await browser_session.start()
-            
-            except Exception as e:
-                logger.error(f"Failed to create browser session: {e}. Retrying without patchright.")
-            
-                # Get stealth profile directory path
-                stealth_dir = get_stealth_profile_dir(task_id)
-                browser_args['user_data_dir'] = stealth_dir
-                browser_args['disable_security'] = False
-                browser_args['deterministic_rendering'] = False
-                logger.debug(f"Using patchright for browser automation with profile: {stealth_dir}")
-
-                # Create and start browser session
-                browser_session = BrowserSession(**browser_args)
-                await browser_session.start()
+            logger.info("Patchright is no longer supported starting in Browser Use v0.6.0rc1. Creating browser session without patchright.")
         
+            # Get stealth profile directory path
+            stealth_dir = get_stealth_profile_dir(task_id)
+            browser_args['user_data_dir'] = stealth_dir
+            browser_args['disable_security'] = False
+            browser_args['deterministic_rendering'] = False
+            logger.debug(f"Using patchright for browser automation with profile: {stealth_dir}")
+
+            # Create and start browser session
+            browser_session = BrowserSession(**browser_args)
+            await browser_session.start()
+    
         # Create and return regular executor
         logger.debug(f"Created new executor for task {task_id}")
         return Executor(
