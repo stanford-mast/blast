@@ -43,8 +43,6 @@ interface StreamEvent {
   type: string;
   item_id?: string;
   delta?: string;
-  reasoning_type?: 'screenshot' | 'thought';
-  thought_type?: 'memory' | 'goal';
   item?: {
     id: string;
     content?: Array<{
