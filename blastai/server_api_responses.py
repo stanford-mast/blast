@@ -32,23 +32,32 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
     # Track output items and content parts
     output_items = {}  # task_id -> output item
     content_parts = {}  # task_id -> list of content parts
+    task_order = []  # Track order of task IDs as they appear
+    main_task_id = None  # The main task (last to complete)
     response_id = None
+    response_sent = False
     
     # Process stream updates
     async for update in engine_stream:
-        # Get task_id and set response_id on first update
+        # Get task_id
         # logger.debug(f"Streaming update to client for request {request}: {update}")
         task_id = None
         if isinstance(update, AgentHistoryListResponse):
             task_id = update.task_id
+            # Main task is the last one to send AgentHistoryListResponse
+            main_task_id = task_id
         elif isinstance(update, AgentReasoning):
             task_id = update.task_id
             
-        if task_id and not response_id:
-            response_id = f"resp_{task_id}"
+        # Send response.created on first update (we'll update the ID when we know the main task)
+        if task_id and not response_sent:
+            # Initially use a temporary ID
+            temp_response_id = f"resp_temp_{task_id}"
+            response_sent = True
+            
             # Initial response created
             initial_response = {
-                'id': response_id,
+                'id': temp_response_id,
                 'object': 'response',
                 'created_at': created_at,
                 'status': 'in_progress',
@@ -96,6 +105,10 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             
             # Add output item if new task
             if task_id not in output_items:
+                # Track task order
+                task_order.append(task_id)
+                output_index = len(task_order) - 1
+                
                 # Create output item
                 output_items[task_id] = {
                     'id': msg_id,
@@ -109,10 +122,13 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
                 # Send output item added event
                 data = {
                     'type': 'response.output_item.added',
-                    'output_index': len(output_items) - 1,
+                    'output_index': output_index,
                     'item': output_items[task_id]
                 }
                 yield f"event: response.output_item.added\ndata: {json.dumps(data)}\n\n"
+            
+            # Get output index from task order
+            output_index = task_order.index(task_id)
             
             # Add content part based on type
             content_index = len(content_parts[task_id])
@@ -127,7 +143,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.content_part.added',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': output_index,
                 'content_index': content_index,
                 'part': {
                     'type': 'output_text',
@@ -141,7 +157,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.output_text.delta',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': output_index,
                 'content_index': content_index,
                 'delta': update.content
             }
@@ -151,7 +167,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.output_text.done',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': output_index,
                 'content_index': content_index,
                 'text': update.content
             }
@@ -161,7 +177,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.content_part.done',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': output_index,
                 'content_index': content_index,
                 'part': part
             }
@@ -173,6 +189,9 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             
             # Initialize content_parts for task if needed (for cached results)
             if task_id not in content_parts:
+                task_order.append(task_id)
+                output_index = len(task_order) - 1
+                
                 content_parts[task_id] = []
                 output_items[task_id] = {
                     'id': msg_id,
@@ -184,10 +203,13 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
                 # Send output item added event
                 data = {
                     'type': 'response.output_item.added',
-                    'output_index': len(output_items) - 1,
+                    'output_index': output_index,
                     'item': output_items[task_id]
                 }
                 yield f"event: response.output_item.added\ndata: {json.dumps(data)}\n\n"
+            
+            # Get output index from task order
+            output_index = task_order.index(task_id)
             
             # Add final result content part
             content_index = len(content_parts[task_id])
@@ -202,7 +224,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.content_part.added',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': output_index,
                 'content_index': content_index,
                 'part': {
                     'type': 'output_text',
@@ -216,7 +238,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.output_text.delta',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': output_index,
                 'content_index': content_index,
                 'delta': update.final_result()
             }
@@ -226,7 +248,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.output_text.done',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': output_index,
                 'content_index': content_index,
                 'text': update.final_result()
             }
@@ -236,7 +258,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.content_part.done',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': output_index,
                 'content_index': content_index,
                 'part': part
             }
@@ -247,57 +269,64 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             output_items[task_id]['content'] = content_parts[task_id]
             data = {
                 'type': 'response.output_item.done',
-                'output_index': len(output_items) - 1,
+                'output_index': output_index,
                 'item': output_items[task_id]
             }
             yield f"event: response.output_item.done\ndata: {json.dumps(data)}\n\n"
-            
-            # Response completed with detailed usage stats
-            final_response = {
-                'id': response_id,
-                'object': 'response',
-                'created_at': created_at,
-                'status': 'completed',
-                'error': None,
-                'incomplete_details': None,
-                'instructions': request.instructions,
-                'max_output_tokens': None,
-                'model': model,
-                'output': list(output_items.values()),
-                'parallel_tool_calls': True,
-                'previous_response_id': request.previous_response_id,
-                'reasoning': {
-                    'effort': None,
-                    'generate_summary': None,
-                    'summary': None
-                },
-                'store': request.store,
-                'temperature': 1.0,
-                'text': {'format': {'type': 'text'}},
-                'tool_choice': 'auto',
-                'tools': [],
-                'top_p': 1.0,
-                'truncation': 'disabled',
-                'usage': {
-                    'input_tokens': 0,  # TODO: Get actual counts
-                    'input_tokens_details': {
-                        'cached_tokens': 0
-                    },
-                    'output_tokens': 0,
-                    'output_tokens_details': {
-                        'reasoning_tokens': 0
-                    },
-                    'total_tokens': 0
-                },
-                'user': None,
-                'metadata': {},
-                'service_tier': 'default'  # Always use default for consistency
-            }
-            data = {
-                'type': 'response.completed',
-                'response': final_response
-            }
-            yield f"event: response.completed\ndata: {json.dumps(data)}\n\n"
+    
+    # After stream ends, send final response.completed event
+    # Use main_task_id (the last task to complete) as the response ID
+    if main_task_id:
+        response_id = f"resp_{main_task_id}"
+    
+    # Build ordered output list
+    ordered_output = [output_items[tid] for tid in task_order if tid in output_items]
+    
+    final_response = {
+        'id': response_id,
+        'object': 'response',
+        'created_at': created_at,
+        'status': 'completed',
+        'error': None,
+        'incomplete_details': None,
+        'instructions': request.instructions,
+        'max_output_tokens': None,
+        'model': model,
+        'output': ordered_output,
+        'parallel_tool_calls': True,
+        'previous_response_id': request.previous_response_id,
+        'reasoning': {
+            'effort': None,
+            'generate_summary': None,
+            'summary': None
+        },
+        'store': request.store,
+        'temperature': 1.0,
+        'text': {'format': {'type': 'text'}},
+        'tool_choice': 'auto',
+        'tools': [],
+        'top_p': 1.0,
+        'truncation': 'disabled',
+        'usage': {
+            'input_tokens': 0,  # TODO: Get actual counts
+            'input_tokens_details': {
+                'cached_tokens': 0
+            },
+            'output_tokens': 0,
+            'output_tokens_details': {
+                'reasoning_tokens': 0
+            },
+            'total_tokens': 0
+        },
+        'user': None,
+        'metadata': {},
+        'service_tier': 'default'  # Always use default for consistency
+    }
+    data = {
+        'type': 'response.completed',
+        'response': final_response
+    }
+    yield f"event: response.completed\ndata: {json.dumps(data)}\n\n"
 
 async def handle_responses(request: ResponseRequest, engine: Engine):
     """Handle responses requests."""
