@@ -43,6 +43,8 @@ interface StreamEvent {
   type: string;
   item_id?: string;
   delta?: string;
+  reasoning_type?: 'screenshot' | 'thought';
+  thought_type?: 'memory' | 'goal';
   item?: {
     id: string;
     content?: Array<{
@@ -140,7 +142,7 @@ export default function Home() {
         }
 
         if (event.type === 'response.output_text.delta') {
-          const { item_id, delta } = event;
+          const { item_id, delta, reasoning_type } = event;
           const taskId = item_id?.split('_')[1];
           if (!taskId || !delta) continue;
 
@@ -161,7 +163,7 @@ export default function Home() {
           const update: TaskUpdate = {
             content: delta,
             timestamp: Date.now(),
-            type: delta.includes(' ') ? 'thought' : 'screenshot'
+            type: reasoning_type || (delta.includes(' ') ? 'thought' : 'screenshot')
           };
           currentTasks[taskId].updates.push(update);
 

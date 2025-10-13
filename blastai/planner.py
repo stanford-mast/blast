@@ -186,7 +186,7 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
             if parallelism.get("task", False):
                 tool_annotation = await self._generate_tool_use_annotations(context_task_description)
                 if tool_annotation:
-                    guidance_parts.append(tool_annotation)
+                    guidance_parts.append(tool_annotation + "\n\nIMPORTANT: The above is your execution plan. You should use the launch_subtask tool if you need to create parallel tasks. For each item you need to process in parallel:\n1. Call launch_subtask once for each item with the specific details\n2. After launching all subtasks, use get_subtask_results to collect and aggregate their results\n3. For parallel tasks, do NOT attempt to complete all items sequentially yourself")
 
             if parallelism.get("data", False):
                 guidance_parts.append(

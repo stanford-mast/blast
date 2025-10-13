@@ -32,6 +32,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
     # Track output items and content parts
     output_items = {}  # task_id -> output item
     content_parts = {}  # task_id -> list of content parts
+    task_output_indices = {}  # task_id -> output_index
     response_id = None
     
     # Process stream updates
@@ -96,6 +97,8 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             
             # Add output item if new task
             if task_id not in output_items:
+                task_output_indices[task_id] = len(task_output_indices)
+                
                 # Create output item
                 output_items[task_id] = {
                     'id': msg_id,
@@ -109,7 +112,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
                 # Send output item added event
                 data = {
                     'type': 'response.output_item.added',
-                    'output_index': len(output_items) - 1,
+                    'output_index': task_output_indices[task_id],
                     'item': output_items[task_id]
                 }
                 yield f"event: response.output_item.added\ndata: {json.dumps(data)}\n\n"
@@ -127,7 +130,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.content_part.added',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': task_output_indices[task_id],
                 'content_index': content_index,
                 'part': {
                     'type': 'output_text',
@@ -141,9 +144,11 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.output_text.delta',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': task_output_indices[task_id],
                 'content_index': content_index,
-                'delta': update.content
+                'delta': update.content,
+                'reasoning_type': update.type,  # 'screenshot' or 'thought'
+                'thought_type': update.thought_type  # 'memory', 'goal', or None
             }
             yield f"event: response.output_text.delta\ndata: {json.dumps(data)}\n\n"
             
@@ -151,7 +156,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.output_text.done',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': task_output_indices[task_id],
                 'content_index': content_index,
                 'text': update.content
             }
@@ -161,7 +166,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.content_part.done',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': task_output_indices[task_id],
                 'content_index': content_index,
                 'part': part
             }
@@ -173,6 +178,8 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             
             # Initialize content_parts for task if needed (for cached results)
             if task_id not in content_parts:
+                task_output_indices[task_id] = len(task_output_indices)
+                
                 content_parts[task_id] = []
                 output_items[task_id] = {
                     'id': msg_id,
@@ -184,7 +191,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
                 # Send output item added event
                 data = {
                     'type': 'response.output_item.added',
-                    'output_index': len(output_items) - 1,
+                    'output_index': task_output_indices[task_id],
                     'item': output_items[task_id]
                 }
                 yield f"event: response.output_item.added\ndata: {json.dumps(data)}\n\n"
@@ -202,7 +209,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.content_part.added',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': task_output_indices[task_id],
                 'content_index': content_index,
                 'part': {
                     'type': 'output_text',
@@ -216,7 +223,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.output_text.delta',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': task_output_indices[task_id],
                 'content_index': content_index,
                 'delta': update.final_result()
             }
@@ -226,7 +233,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.output_text.done',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': task_output_indices[task_id],
                 'content_index': content_index,
                 'text': update.final_result()
             }
@@ -236,7 +243,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             data = {
                 'type': 'response.content_part.done',
                 'item_id': msg_id,
-                'output_index': len(output_items) - 1,
+                'output_index': task_output_indices[task_id],
                 'content_index': content_index,
                 'part': part
             }
@@ -247,7 +254,7 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
             output_items[task_id]['content'] = content_parts[task_id]
             data = {
                 'type': 'response.output_item.done',
-                'output_index': len(output_items) - 1,
+                'output_index': task_output_indices[task_id],
                 'item': output_items[task_id]
             }
             yield f"event: response.output_item.done\ndata: {json.dumps(data)}\n\n"
