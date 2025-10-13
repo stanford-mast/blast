@@ -44,12 +44,14 @@ async def format_response_stream(engine_stream, model: str, request: ResponseReq
         task_id = None
         if isinstance(update, AgentHistoryListResponse):
             task_id = update.task_id
-            # Main task is the last one to send AgentHistoryListResponse
+            # Overwrite task_id repeatedly, main task is the last one to send AgentHistoryListResponse
             main_task_id = task_id
         elif isinstance(update, AgentReasoning):
             task_id = update.task_id
             
-        # Send response.created on first update (we'll update the ID when we know the main task)
+        # Send response.created on first update with temporary ID
+        # The real response ID (based on main task) will be sent in response.completed
+        # The client should use the response ID from response.completed to identify the response
         if task_id and not response_sent:
             # Initially use a temporary ID
             temp_response_id = f"resp_temp_{task_id}"
