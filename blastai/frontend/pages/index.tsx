@@ -52,6 +52,13 @@ interface StreamEvent {
   };
   response?: {
     id: string;
+    output?: Array<{
+      id: string;
+      content?: Array<{
+        type: string;
+        text: string;
+      }>;
+    }>;
   };
 }
 
@@ -120,24 +127,11 @@ export default function Home() {
 
       // Track tasks for this conversation item only
       const currentTasks: Record<string, TaskState> = {};
-      let responseId: string | undefined;
 
       // Process each event from the stream
       for await (const event of stream as unknown as AsyncIterable<StreamEvent>) {
         console.log('Received event:', event);
-        // Get response ID from created event
-        if (event.type === 'response.created' && event.response?.id) {
-          responseId = event.response.id;
-          // Update the response ID in conversation
-          setConversation(prev => {
-            const newConv = [...prev];
-            const lastItem = newConv[newConv.length - 1];
-            if (lastItem.type === 'tasks') {
-              lastItem.responseId = responseId;
-            }
-            return newConv;
-          });
-        }
+        // response ID will be set from response.completed event (uses main task ID)
 
         if (event.type === 'response.output_text.delta') {
           const { item_id, delta } = event;
@@ -214,24 +208,53 @@ export default function Home() {
             const finalResult = event.item.content?.[event.item.content.length - 1]?.text;
 
             if (finalResult) {
+              // Always update the task's final result
+              task.finalResult = finalResult;
+              
               // Update the conversation with the final result
               setConversation(prev => {
                 const newConv = [...prev];
                 const lastItem = newConv[newConv.length - 1];
                 if (lastItem.type === 'tasks') {
-                  // For first task, set the conversation's final result and hide loading
+                  // For first task, hide loading
                   if (firstTaskId.current === taskId) {
-                    lastItem.finalResult = finalResult;
                     lastItem.showLoading = false;
                     lastItem.hasFirstResponse = true;
                   }
-                  // Always update the task's final result
-                  task.finalResult = finalResult;
+                  // Update tasks object
                   lastItem.tasks = { ...currentTasks };
                 }
                 return newConv;
               });
             }
+          }
+        } else if (event.type === 'response.completed' && event.response?.output) {
+          // When all tasks are complete, aggregate all results in order
+          const allResults: string[] = [];
+          
+          // Use the output array from response which maintains proper order
+          for (const outputItem of event.response.output) {
+            const taskId = outputItem.id.split('_')[1];
+            const task = currentTasks[taskId];
+            if (task?.finalResult) {
+              allResults.push(task.finalResult);
+            }
+          }
+          
+          // Update conversation with all results and the correct response ID
+          if (event.response) {
+            setConversation(prev => {
+              const newConv = [...prev];
+              const lastItem = newConv[newConv.length - 1];
+              if (lastItem.type === 'tasks' && event.response) {
+                lastItem.finalResult = allResults.join('\n\n---\n\n');
+                lastItem.showLoading = false;
+                lastItem.hasFirstResponse = true;
+                // Update to use the main task's response ID (not the first subtask)
+                lastItem.responseId = event.response.id;
+              }
+              return newConv;
+            });
           }
         }
       }

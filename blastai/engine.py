@@ -218,9 +218,10 @@ class Engine:
                 logger.warning(f"Previous task {prev_task_id} not found")
                 prev_task_id = None
             
-        # Create queues if interactive mode
+        # Create queues if interactive mode or mark as streaming session
+        # Both modes support follow-up questions and need browser kept alive
         interactive_queues = None
-        if mode == "interactive":
+        if mode in ("interactive", "stream"):
             to_client: asyncio.Queue = asyncio.Queue()
             from_client: asyncio.Queue = asyncio.Queue()
             interactive_queues = {

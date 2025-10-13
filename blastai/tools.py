@@ -58,8 +58,8 @@ class Tools:
         if human_request_queue and human_response_queue:
             self._register_human_tools()
             self.interactive_queues = {
-                "human_request": human_request_queue,
-                "human_response": human_response_queue
+                "to_client": human_request_queue,  # to_client is for sending TO client (human requests)
+                "from_client": human_response_queue  # from_client is for receiving FROM client (human responses)
             }
 
     async def _get_first_subtask_result(self, scheduler: Scheduler, task_ids: List[str], as_final: bool = False) -> ActionResult:
@@ -408,20 +408,34 @@ Explain the content of the chunk and that the requested information is not avail
                 # Combine results
                 combined_results = []
                 all_successful = True
+                failed_tasks = []
+                successful_tasks = []
+                
                 for task_id, result in zip(task_ids, results):
                     if isinstance(result, Exception):
                         combined_results.append(f"  Subtask {task_id}: Failed - {str(result)}")
+                        failed_tasks.append(task_id)
                         all_successful = False
                     elif result:
-                        combined_results.append(f"  Subtask {task_id}: {result.final_result()}")
+                        result_text = result.final_result()
+                        combined_results.append(f"  Subtask {task_id}: {result_text}")
+                        successful_tasks.append(task_id)
                     else:
                         combined_results.append(f"  Subtask {task_id}: No result available")
+                        failed_tasks.append(task_id)
                         all_successful = False
 
                 if not all_successful:
+                    # Log summary to help debug truncation issues
+                    summary = f"Completed: {len(successful_tasks)}/{len(task_ids)} tasks. "
+                    if successful_tasks:
+                        summary += f"Success: {','.join(successful_tasks)}. "
+                    if failed_tasks:
+                        summary += f"Failed/Incomplete: {','.join(failed_tasks)}"
+                    
                     return ActionResult(
                         success=False,
-                        error="Not all subtasks completed successfully:\n" + "\n".join(combined_results)
+                        error=f"{summary}\n\n" + "\n".join(combined_results)
                     )
                 
                 return ActionResult(
@@ -467,7 +481,7 @@ Explain the content of the chunk and that the requested information is not avail
                 )
                 await self.human_request_queue.put(request)
 
-                # Wait for response
+                # Wait for response  
                 response = await self.human_response_queue.get()
                 if not isinstance(response, HumanResponse) or response.task_id != self.task_id:
                     return ActionResult(

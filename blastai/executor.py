@@ -189,7 +189,7 @@ class Executor:
                     # Get the current page URL from the browser session
                     # This ensures we're working with the tab the user is currently on
                     current_page = await self.agent.browser_session.get_current_page()
-                    current_url = current_page.url if current_page else None
+                    current_url = await self.agent.browser_session.get_current_page_url() if current_page else None
                     
                     # Only navigate to URL if explicitly provided for this task
                     # Otherwise, we'll use the current page that the user is on
@@ -289,10 +289,10 @@ class Executor:
             List of AgentReasoning objects, one each for goal, memory, and screenshot.
             Empty list if agent is not running or has no state.
         """
-        if not self.agent or not self.agent.state or not self.agent.state.history:
+        if not self.agent or not self.agent.state or not self.agent.history:
             return []
             
-        thoughts = self.agent.state.history.model_thoughts()
+        thoughts = self.agent.history.model_thoughts()
         if not thoughts:
             return []
             
@@ -321,7 +321,7 @@ class Executor:
         
         # Create separate reasoning for screenshot if available
         try:
-            state = await self.browser_session.get_state_summary(cache_clickable_elements_hashes=True)
+            state = await self.browser_session.get_browser_state_summary(cached=True, include_screenshot=True)
             if state and state.screenshot:
                 reasonings.append(AgentReasoning(
                     task_id=self.task_id,

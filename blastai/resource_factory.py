@@ -7,7 +7,6 @@ from typing import Optional, Dict, Any
 
 from browser_use import Agent
 from browser_use.browser import BrowserSession
-from patchright.async_api import async_playwright as async_patchright
 
 # Import moved to line 27
 
@@ -115,11 +114,16 @@ async def create_executor(
                 return None
 
         # Otherwise use regular browser session
+        # Check if this is an interactive task (web interface or realtime API)
+        task = scheduler.tasks.get(task_id)
+        is_interactive = task and task.interactive_queues is not None
+        logger.info(f"Task {task_id}: is_interactive={is_interactive}, has_queues={task.interactive_queues is not None if task else False}")
+        
         # Configure regular browser session
         browser_args = {
             'headless': constraints.require_headless,
             'user_data_dir': None,  # Use ephemeral profile for security
-            'keep_alive': False,  # Set to False so agent.close() can clean up
+            'keep_alive': is_interactive,  # Keep browser alive for interactive sessions to support follow-up questions
             'highlight_elements': False,  # Disable element highlighting
         }
         
@@ -143,9 +147,8 @@ async def create_executor(
 
         # Initialize patchright if required
         if constraints.require_patchright:
-            playwright = await async_patchright().start()
-            browser_args['playwright'] = playwright
-            
+            logger.info("Patchright is no longer supported starting in Browser Use v0.6.0rc1. Creating browser session without patchright.")
+        
             # Get stealth profile directory path
             stealth_dir = get_stealth_profile_dir(task_id)
             browser_args['user_data_dir'] = stealth_dir
@@ -156,7 +159,7 @@ async def create_executor(
         # Create and start browser session
         browser_session = BrowserSession(**browser_args)
         await browser_session.start()
-        
+    
         # Create and return regular executor
         logger.debug(f"Created new executor for task {task_id}")
         return Executor(

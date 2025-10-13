@@ -23,6 +23,6 @@ constraints:
   allow_vision: true
   require_headless: true
   require_patchright: true
-  require_human_in_loop: true
+  require_human_in_loop: false
   share_browser_process: false  # Whether to share browser process between contexts
   allowed_domains: null  # List of allowed domains, null means all domains are allowed
