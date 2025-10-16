@@ -1,0 +1,382 @@
+import { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import remarkEmoji from 'remark-emoji';
+import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
+import rehypeRaw from 'rehype-raw';
+import DOMPurify from 'dompurify';
+import mermaid from 'mermaid';
+import 'katex/dist/katex.min.css';
+
+interface MarkdownRendererProps {
+  content: string;
+  className?: string;
+}
+
+// Initialize Mermaid
+if (typeof window !== 'undefined') {
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    securityLevel: 'loose',
+    themeVariables: {
+      primaryColor: '#ffe067',
+      primaryTextColor: '#1f1f1f',
+      primaryBorderColor: '#ffd040',
+      lineColor: '#ffe067',
+      secondaryColor: '#2a2a2a',
+      tertiaryColor: '#262626',
+      background: '#1f1f1f',
+      mainBkg: '#262626',
+      secondBkg: '#2a2a2a',
+      textColor: '#e5e5e5',
+      border1: '#444',
+      border2: '#555',
+    }
+  });
+}
+
+// Code block with copy button and language badge
+const CodeBlock = ({ inline, className, children, ...props }: any) => {
+  const [copied, setCopied] = useState(false);
+  const match = /language-(\w+)/.exec(className || '');
+  const language = match ? match[1] : '';
+  const codeString = String(children).replace(/\n$/, '');
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(codeString);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (inline) {
+    return (
+      <code
+        className="bg-[#2a2a2a] text-[#ffe067] px-1.5 py-0.5 rounded text-sm font-mono"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  }
+
+  return (
+    <div className="relative group mb-4">
+      {language && (
+        <div className="absolute top-2 left-3 text-xs text-gray-400 font-mono bg-[#1a1a1a] px-2 py-1 rounded">
+          {language}
+        </div>
+      )}
+      <button
+        onClick={handleCopy}
+        className="absolute top-2 right-2 px-3 py-1 text-xs bg-[#2a2a2a] hover:bg-[#333] text-gray-300 rounded opacity-0 group-hover:opacity-100 transition-all duration-200 border border-gray-600"
+        aria-label="Copy code"
+      >
+        {copied ? '✓ Copied!' : 'Copy'}
+      </button>
+      <pre className="bg-[#161616] rounded-lg overflow-x-auto !mt-0 !mb-0">
+        <code
+          className={`block p-4 text-sm ${className || ''} ${language ? 'pt-10' : ''}`}
+          {...props}
+        >
+          {children}
+        </code>
+      </pre>
+    </div>
+  );
+};
+
+// Mermaid diagram component
+const MermaidDiagram = ({ chart }: { chart: string }) => {
+  const [svg, setSvg] = useState<string>('');
+  const [error, setError] = useState<string>('');
+
+  useEffect(() => {
+    const renderDiagram = async () => {
+      try {
+        const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`;
+        const { svg: renderedSvg } = await mermaid.render(id, chart);
+        setSvg(renderedSvg);
+      } catch (err: any) {
+        setError(err.message || 'Failed to render diagram');
+        console.error('Mermaid rendering error:', err);
+      }
+    };
+
+    if (chart && typeof window !== 'undefined') {
+      renderDiagram();
+    }
+  }, [chart]);
+
+  if (error) {
+    return (
+      <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-4 mb-4 text-red-300 text-sm">
+        <strong>Diagram Error:</strong> {error}
+      </div>
+    );
+  }
+
+  return (
+    <div 
+      className="mermaid-diagram my-4 flex justify-center bg-[#262626] rounded-lg p-4 overflow-x-auto"
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
+};
+
+// Custom pre component to detect mermaid diagrams
+const PreComponent = ({ children, ...props }: any) => {
+  const childProps = children?.props;
+  const className = childProps?.className || '';
+  const match = /language-mermaid/.exec(className);
+  
+  if (match) {
+    const code = String(childProps?.children || '').replace(/\n$/, '');
+    return <MermaidDiagram chart={code} />;
+  }
+
+  return <pre {...props}>{children}</pre>;
+};
+
+export const MarkdownRenderer = ({ content, className = '' }: MarkdownRendererProps) => {
+  // Sanitize content to prevent XSS attacks
+  const sanitizedContent = typeof window !== 'undefined' 
+    ? DOMPurify.sanitize(content, {
+        ADD_TAGS: ['iframe', 'details', 'summary'],
+        ADD_ATTR: ['allow', 'allowfullscreen', 'frameborder', 'scrolling', 'target'],
+      })
+    : content;
+
+  return (
+    <div className={`markdown-content ${className}`}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath, remarkEmoji]}
+        rehypePlugins={[rehypeRaw, rehypeKatex, rehypeHighlight]}
+        components={{
+        // Headings
+        h1: ({ node, ...props }) => (
+          <h1 className="text-3xl font-bold mb-4 mt-6 text-gray-100 border-b border-gray-700 pb-2" {...props} />
+        ),
+        h2: ({ node, ...props }) => (
+          <h2 className="text-2xl font-bold mb-3 mt-5 text-gray-100 border-b border-gray-800 pb-2" {...props} />
+        ),
+        h3: ({ node, ...props }) => (
+          <h3 className="text-xl font-bold mb-2 mt-4 text-gray-100" {...props} />
+        ),
+        h4: ({ node, ...props }) => (
+          <h4 className="text-lg font-semibold mb-2 mt-3 text-gray-200" {...props} />
+        ),
+        h5: ({ node, ...props }) => (
+          <h5 className="text-base font-semibold mb-2 mt-3 text-gray-200" {...props} />
+        ),
+        h6: ({ node, ...props }) => (
+          <h6 className="text-sm font-semibold mb-2 mt-3 text-gray-300" {...props} />
+        ),
+        
+        // Paragraphs
+        p: ({ node, ...props }) => (
+          <p className="mb-4 text-gray-300 leading-relaxed" {...props} />
+        ),
+        
+        // Lists
+        ul: ({ node, ...props }) => (
+          <ul className="list-disc list-inside mb-4 space-y-2 text-gray-300 ml-4" {...props} />
+        ),
+        ol: ({ node, ...props }) => (
+          <ol className="list-decimal list-inside mb-4 space-y-2 text-gray-300 ml-4" {...props} />
+        ),
+        li: ({ node, children, ...props }) => {
+          // Check if this is a task list item
+          const hasCheckbox = typeof children === 'object' && 
+            Array.isArray(children) && 
+            children.some((child: any) => child?.type === 'input');
+          
+          return (
+            <li className={`text-gray-300 ${hasCheckbox ? 'list-none -ml-4' : ''}`} {...props}>
+              {children}
+            </li>
+          );
+        },
+        
+        // Code blocks with copy button and language badge
+        code: CodeBlock,
+        pre: PreComponent,
+        
+        // Blockquotes
+        blockquote: ({ node, ...props }) => (
+          <blockquote
+            className="border-l-4 border-[#ffe067] pl-4 py-2 mb-4 text-gray-400 italic bg-[#262626] rounded-r"
+            {...props}
+          />
+        ),
+        
+        // Links
+        a: ({ node, ...props }) => (
+          <a
+            className="text-[#ffe067] hover:text-[#ffd040] underline transition-colors break-words"
+            target="_blank"
+            rel="noopener noreferrer"
+            {...props}
+          />
+        ),
+        
+        // Horizontal rule
+        hr: ({ node, ...props }) => (
+          <hr className="border-gray-700 my-8" {...props} />
+        ),
+        
+        // Tables
+        table: ({ node, ...props }) => (
+          <div className="overflow-x-auto mb-4 rounded-lg border border-gray-700">
+            <table className="min-w-full divide-y divide-gray-700" {...props} />
+          </div>
+        ),
+        thead: ({ node, ...props }) => (
+          <thead className="bg-[#262626]" {...props} />
+        ),
+        tbody: ({ node, ...props }) => (
+          <tbody className="bg-[#1f1f1f] divide-y divide-gray-700" {...props} />
+        ),
+        tr: ({ node, ...props }) => (
+          <tr className="hover:bg-[#2a2a2a] transition-colors" {...props} />
+        ),
+        th: ({ node, ...props }) => (
+          <th
+            className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider"
+            {...props}
+          />
+        ),
+        td: ({ node, ...props }) => (
+          <td className="px-6 py-4 text-sm text-gray-400 whitespace-nowrap" {...props} />
+        ),
+        
+        // Strong (bold)
+        strong: ({ node, ...props }) => (
+          <strong className="font-bold text-gray-100" {...props} />
+        ),
+        
+        // Emphasis (italic)
+        em: ({ node, ...props }) => (
+          <em className="italic text-gray-200" {...props} />
+        ),
+        
+        // Delete (strikethrough)
+        del: ({ node, ...props }) => (
+          <del className="line-through text-gray-500" {...props} />
+        ),
+        
+        // Images
+        img: ({ node, ...props }) => (
+          <img
+            className="rounded-lg max-w-full h-auto my-4 border border-gray-700"
+            {...props}
+            alt={props.alt || ''}
+          />
+        ),
+        
+        // Superscript and subscript
+        sup: ({ node, ...props }) => (
+          <sup className="text-xs align-super" {...props} />
+        ),
+        sub: ({ node, ...props }) => (
+          <sub className="text-xs align-sub" {...props} />
+        ),
+        
+        // Underline (from HTML)
+        u: ({ node, ...props }) => (
+          <u className="underline decoration-gray-400" {...props} />
+        ),
+        
+        // Mark/highlight (from HTML)
+        mark: ({ node, ...props }) => (
+          <mark className="bg-[#ffe067] text-black px-1 py-0.5 rounded" {...props} />
+        ),
+        
+        // Keyboard
+        kbd: ({ node, ...props }) => (
+          <kbd className="bg-[#2a2a2a] border border-gray-600 text-gray-300 px-2 py-1 rounded text-sm font-mono shadow-sm" {...props} />
+        ),
+        
+        // Details/Summary (collapsible)
+        details: ({ node, ...props }) => (
+          <details className="bg-[#262626] rounded-lg p-4 mb-4 border border-gray-700 hover:border-gray-600 transition-colors" {...props} />
+        ),
+        summary: ({ node, ...props }) => (
+          <summary className="cursor-pointer font-semibold text-gray-200 hover:text-[#ffe067] transition-colors select-none" {...props} />
+        ),
+        
+        // Abbreviation
+        abbr: ({ node, ...props }) => (
+          <abbr className="border-b border-dotted border-gray-500 cursor-help" {...props} />
+        ),
+        
+        // Definition list
+        dl: ({ node, ...props }) => (
+          <dl className="mb-4 space-y-2" {...props} />
+        ),
+        dt: ({ node, ...props }) => (
+          <dt className="font-bold text-gray-200 mt-2" {...props} />
+        ),
+        dd: ({ node, ...props }) => (
+          <dd className="ml-6 text-gray-400 mb-2 pl-4 border-l-2 border-gray-700" {...props} />
+        ),
+        
+        // Figure and figcaption
+        figure: ({ node, ...props }) => (
+          <figure className="my-4" {...props} />
+        ),
+        figcaption: ({ node, ...props }) => (
+          <figcaption className="text-sm text-gray-500 text-center mt-2 italic" {...props} />
+        ),
+        
+        // Break
+        br: ({ node, ...props }) => (
+          <br {...props} />
+        ),
+        
+        // Span (for custom styling)
+        span: ({ node, ...props }) => (
+          <span {...props} />
+        ),
+        
+        // Div (for custom containers)
+        div: ({ node, ...props }) => (
+          <div {...props} />
+        ),
+        
+        // Small text
+        small: ({ node, ...props }) => (
+          <small className="text-xs text-gray-500" {...props} />
+        ),
+        
+        // Section
+        section: ({ node, ...props }) => (
+          <section className="my-4" {...props} />
+        ),
+        
+        // Article
+        article: ({ node, ...props }) => (
+          <article className="my-4" {...props} />
+        ),
+        
+        // Aside
+        aside: ({ node, ...props }) => (
+          <aside className="border-l-4 border-gray-600 pl-4 my-4 text-gray-400 bg-[#262626] py-2 rounded-r" {...props} />
+        ),
+        
+        // Input (for checkboxes in task lists)
+        input: ({ node, ...props }) => (
+          <input
+            className="mr-2 accent-[#ffe067] cursor-pointer"
+            {...props}
+          />
+        ),
+      }}
+      >
+        {sanitizedContent}
+      </ReactMarkdown>
+    </div>
+  );
+};

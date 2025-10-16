@@ -6,6 +6,7 @@ import { Header } from '../components/Header';
 import { ChatInput } from '../components/ChatInput';
 import { TaskBox } from '../components/TaskBox';
 import { LoadingLogo } from '../components/LoadingLogo';
+import { MarkdownRenderer } from '../components/MarkdownRenderer';
 
 // Initialize OpenAI client with custom base URL
 // Get server port from environment variable or use default
@@ -371,10 +372,10 @@ export default function Home() {
                                 <motion.div
                                   initial={{ opacity: 0 }}
                                   animate={{ opacity: 1 }}
-                                  className="text-gray-300 mt-4 whitespace-pre-wrap"
+                                  className="mt-4"
                                   transition={{ duration: 0.1 }}
                                 >
-                                  {item.finalResult}
+                                  <MarkdownRenderer content={item.finalResult} />
                                 </motion.div>
                               )}
                             </motion.div>
