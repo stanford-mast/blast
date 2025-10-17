@@ -6,6 +6,7 @@ import remarkEmoji from 'remark-emoji';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import mermaid from 'mermaid';
 import 'katex/dist/katex.min.css';
 
@@ -19,7 +20,7 @@ if (typeof window !== 'undefined') {
   mermaid.initialize({
     startOnLoad: true,
     theme: 'dark',
-    securityLevel: 'loose',
+    securityLevel: 'strict',
     themeVariables: {
       primaryColor: '#ffe067',
       primaryTextColor: '#1f1f1f',
@@ -37,6 +38,32 @@ if (typeof window !== 'undefined') {
   });
 }
 
+// Custom sanitization schema to allow safe HTML elements while preventing XSS
+const sanitizeSchema = {
+  ...defaultSchema,
+  tagNames: [
+    ...(defaultSchema.tagNames || []),
+    // Add safe HTML elements that we use in the component
+    'u', 'mark', 'kbd', 'details', 'summary', 'abbr',
+    'dl', 'dt', 'dd', 'figure', 'figcaption', 'small',
+    'section', 'article', 'aside', 'sup', 'sub',
+  ],
+  attributes: {
+    ...defaultSchema.attributes,
+    // Allow specific safe attributes
+    '*': ['className', 'id', 'style'],
+    'abbr': ['title'],
+    'input': ['type', 'checked', 'disabled'],
+    'details': ['open'],
+  },
+  // Explicitly strip dangerous protocols
+  protocols: {
+    ...defaultSchema.protocols,
+    href: ['http', 'https', 'mailto'],
+    src: ['http', 'https'],
+  },
+};
+
 // Mermaid diagram component
 const MermaidDiagram = ({ chart }: { chart: string }) => {
   const [svg, setSvg] = useState<string>('');
@@ -45,7 +72,7 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
   useEffect(() => {
     const renderDiagram = async () => {
       try {
-        const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`;
+        const id = `mermaid-${Math.random().toString(36).slice(2, 11)}`;
         const { svg: renderedSvg } = await mermaid.render(id, chart);
         setSvg(renderedSvg);
       } catch (err: any) {
@@ -91,14 +118,46 @@ const extractText = (children: any): string => {
 // Code block with copy button and language badge
 const CodeBlock = ({ inline, className, children, ...props }: any) => {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   const match = /language-(\w+)/.exec(className || '');
   const language = match ? match[1] : '';
   const codeString = extractText(children).replace(/\n$/, '');
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(codeString);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      // Try modern clipboard API first
+      await navigator.clipboard.writeText(codeString);
+      setCopied(true);
+      setCopyError(false);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      // Fallback to older execCommand method
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = codeString;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        if (successful) {
+          setCopied(true);
+          setCopyError(false);
+          setTimeout(() => setCopied(false), 2000);
+        } else {
+          throw new Error('execCommand failed');
+        }
+      } catch (fallbackErr) {
+        // Both methods failed
+        console.error('Failed to copy text:', err, fallbackErr);
+        setCopyError(true);
+        setTimeout(() => setCopyError(false), 2000);
+      }
+    }
   };
 
   if (inline) {
@@ -121,22 +180,33 @@ const CodeBlock = ({ inline, className, children, ...props }: any) => {
     <div className="relative group mb-4">
       <button
         onClick={handleCopy}
-        className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10"
-        aria-label="Copy code"
+        className={`absolute top-2 right-2 p-1.5 rounded-md hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10 ${
+          copyError ? 'opacity-100' : ''
+        }`}
+        aria-label={copyError ? 'Failed to copy code' : copied ? 'Code copied!' : 'Copy code'}
+        title={copyError ? 'Failed to copy code' : copied ? 'Copied!' : 'Copy to clipboard'}
       >
         <svg
           width="18"
           height="18"
           viewBox="0 0 20 20"
           fill="none"
-          className="text-gray-400"
+          className={copyError ? 'text-red-400' : copied ? 'text-green-400' : 'text-gray-400'}
         >
-          {copied ? (
+          {copyError ? (
+            // Error X icon
+            <path
+              d="M10 18C14.4183 18 18 14.4183 18 10C18 5.58172 14.4183 2 10 2C5.58172 2 2 5.58172 2 10C2 14.4183 5.58172 18 10 18ZM7.70711 6.29289C7.31658 5.90237 6.68342 5.90237 6.29289 6.29289C5.90237 6.68342 5.90237 7.31658 6.29289 7.70711L8.58579 10L6.29289 12.2929C5.90237 12.6834 5.90237 13.3166 6.29289 13.7071C6.68342 14.0976 7.31658 14.0976 7.70711 13.7071L10 11.4142L12.2929 13.7071C12.6834 14.0976 13.3166 14.0976 13.7071 13.7071C14.0976 13.3166 14.0976 12.6834 13.7071 12.2929L11.4142 10L13.7071 7.70711C14.0976 7.31658 14.0976 6.68342 13.7071 6.29289C13.3166 5.90237 12.6834 5.90237 12.2929 6.29289L10 8.58579L7.70711 6.29289Z"
+              fill="currentColor"
+            />
+          ) : copied ? (
+            // Success checkmark icon
             <path
               d="M15.1883 5.10908C15.3699 4.96398 15.6346 4.96153 15.8202 5.11592C16.0056 5.27067 16.0504 5.53125 15.9403 5.73605L15.8836 5.82003L8.38354 14.8202C8.29361 14.9279 8.16242 14.9925 8.02221 14.9989C7.88203 15.0051 7.74545 14.9526 7.64622 14.8534L4.14617 11.3533L4.08172 11.2752C3.95384 11.0811 3.97542 10.817 4.14617 10.6463C4.31693 10.4755 4.58105 10.4539 4.77509 10.5818L4.85321 10.6463L7.96556 13.7586L15.1161 5.1794L15.1883 5.10908Z"
               fill="currentColor"
             />
           ) : (
+            // Copy icon
             <>
               <rect x="8" y="8" width="9" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
               <path d="M5 12V5C5 3.89543 5.89543 3 7 3H12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -197,7 +267,12 @@ export const MarkdownRenderer = ({ content, className = '' }: MarkdownRendererPr
     <div className={`markdown-content ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath, remarkEmoji]}
-        rehypePlugins={[rehypeRaw, rehypeKatex, rehypeHighlight]}
+        rehypePlugins={[
+          rehypeRaw,
+          [rehypeSanitize, sanitizeSchema],
+          rehypeKatex,
+          rehypeHighlight,
+        ]}
         components={{
           // Headings
           h1: ({ node, ...props }) => (
