@@ -68,11 +68,24 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
   }
 
   return (
-    <div 
+    <div
       className="mermaid-diagram my-4 flex justify-center bg-[#262626] rounded-lg p-4 overflow-x-auto"
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   );
+};
+
+const extractText = (children: any): string => {
+  if (typeof children === 'string') {
+    return children;
+  }
+  if (Array.isArray(children)) {
+    return children.map(extractText).join('');
+  }
+  if (children?.props?.children) {
+    return extractText(children.props.children);
+  }
+  return '';
 };
 
 // Code block with copy button and language badge
@@ -80,7 +93,7 @@ const CodeBlock = ({ inline, className, children, ...props }: any) => {
   const [copied, setCopied] = useState(false);
   const match = /language-(\w+)/.exec(className || '');
   const language = match ? match[1] : '';
-  const codeString = String(children).replace(/\n$/, '');
+  const codeString = extractText(children).replace(/\n$/, '');
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(codeString);
@@ -105,49 +118,61 @@ const CodeBlock = ({ inline, className, children, ...props }: any) => {
   }
 
   return (
-    <div className="rounded-lg overflow-hidden mb-4 border border-gray-700">
-      {/* Header bar with language and copy button */}
-      <div className="flex items-center justify-between bg-[#0d0d0d] px-4 py-2 border-b border-gray-700">
-        <span className="text-xs text-gray-400 font-mono">
-          {language || 'code'}
-        </span>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
-          aria-label="Copy code"
+    <div className="relative group mb-4">
+      <button
+        onClick={handleCopy}
+        className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10"
+        aria-label="Copy code"
+      >
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 20 20"
+          fill="none"
+          className="text-gray-400"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            {copied ? (
-              <path d="M20 6L9 17l-5-5" />
-            ) : (
-              <>
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </>
-            )}
-          </svg>
-          <span>{copied ? 'Copied!' : 'Copy code'}</span>
-        </button>
+          {copied ? (
+            <path
+              d="M15.1883 5.10908C15.3699 4.96398 15.6346 4.96153 15.8202 5.11592C16.0056 5.27067 16.0504 5.53125 15.9403 5.73605L15.8836 5.82003L8.38354 14.8202C8.29361 14.9279 8.16242 14.9925 8.02221 14.9989C7.88203 15.0051 7.74545 14.9526 7.64622 14.8534L4.14617 11.3533L4.08172 11.2752C3.95384 11.0811 3.97542 10.817 4.14617 10.6463C4.31693 10.4755 4.58105 10.4539 4.77509 10.5818L4.85321 10.6463L7.96556 13.7586L15.1161 5.1794L15.1883 5.10908Z"
+              fill="currentColor"
+            />
+          ) : (
+            <>
+              <rect x="8" y="8" width="9" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M5 12V5C5 3.89543 5.89543 3 7 3H12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </>
+          )}
+        </svg>
+      </button>
+
+      <div className="rounded-lg overflow-hidden border border-[#2a2a2a] bg-[#1a1a1a]">
+        {language && (
+          <div className="px-4 pt-3 pb-1">
+            <span className="text-[12px] text-gray-500 font-mono tracking-wide">
+              {language}
+            </span>
+          </div>
+        )}
+        <pre className="bg-[#1a1a1a] overflow-x-auto !mt-0 !mb-0">
+          <code
+            className={`block px-4 ${language ? 'pt-1 pb-4' : 'py-4'} text-[13px] leading-relaxed !bg-transparent ${className || ''}`}
+            style={{ background: 'transparent' }}
+            {...props}
+          >
+            {children}
+          </code>
+        </pre>
       </div>
-      {/* Code content */}
-      <pre className="bg-[#0d0d0d] overflow-x-auto !mt-0 !mb-0">
-        <code
-          className={`block p-4 text-sm ${className || ''}`}
-          {...props}
-        >
-          {children}
-        </code>
-      </pre>
     </div>
   );
 };
 
-// Custom pre component to detect mermaid diagrams
+// Custom precomponent to detect mermaid diagrams
 const PreComponent = ({ children, ...props }: any) => {
   const childProps = children?.props;
   const className = childProps?.className || '';
   const match = /language-mermaid/.exec(className);
-  
+
   if (match) {
     const code = String(childProps?.children || '').replace(/\n$/, '');
     return <MermaidDiagram chart={code} />;
@@ -168,234 +193,231 @@ export const MarkdownRenderer = ({ content, className = '' }: MarkdownRendererPr
     return <div className={`markdown-content ${className}`} />;
   }
 
-  // Note: We don't use DOMPurify here because ReactMarkdown handles security
-  // by escaping HTML by default. rehypeRaw is used to allow specific safe HTML elements.
-
   return (
     <div className={`markdown-content ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath, remarkEmoji]}
         rehypePlugins={[rehypeRaw, rehypeKatex, rehypeHighlight]}
         components={{
-        // Headings
-        h1: ({ node, ...props }) => (
-          <h1 className="text-3xl font-bold mb-4 mt-6 text-gray-100 border-b border-gray-700 pb-2" {...props} />
-        ),
-        h2: ({ node, ...props }) => (
-          <h2 className="text-2xl font-bold mb-3 mt-5 text-gray-100 border-b border-gray-800 pb-2" {...props} />
-        ),
-        h3: ({ node, ...props }) => (
-          <h3 className="text-xl font-bold mb-2 mt-4 text-gray-100" {...props} />
-        ),
-        h4: ({ node, ...props }) => (
-          <h4 className="text-lg font-semibold mb-2 mt-3 text-gray-200" {...props} />
-        ),
-        h5: ({ node, ...props }) => (
-          <h5 className="text-base font-semibold mb-2 mt-3 text-gray-200" {...props} />
-        ),
-        h6: ({ node, ...props }) => (
-          <h6 className="text-sm font-semibold mb-2 mt-3 text-gray-300" {...props} />
-        ),
-        
-        // Paragraphs
-        p: ({ node, ...props }) => (
-          <p className="mb-4 text-gray-300 leading-relaxed" {...props} />
-        ),
-        
-        // Lists
-        ul: ({ node, ...props }) => (
-          <ul className="list-disc list-inside mb-4 space-y-2 text-gray-300 ml-4" {...props} />
-        ),
-        ol: ({ node, ...props }) => (
-          <ol className="list-decimal list-inside mb-4 space-y-2 text-gray-300 ml-4" {...props} />
-        ),
-        li: ({ node, children, ...props }) => {
-          // Check if this is a task list item
-          const hasCheckbox = typeof children === 'object' && 
-            Array.isArray(children) && 
-            children.some((child: any) => child?.type === 'input');
-          
-          return (
-            <li className={`text-gray-300 ${hasCheckbox ? 'list-none -ml-4' : ''}`} {...props}>
-              {children}
-            </li>
-          );
-        },
-        
-        // Code blocks with copy button and language badge
-        code: CodeBlock,
-        pre: PreComponent,
-        
-        // Blockquotes
-        blockquote: ({ node, ...props }) => (
-          <blockquote
-            className="border-l-4 border-[#ffe067] pl-4 py-2 mb-4 text-gray-400 italic bg-[#262626] rounded-r"
-            {...props}
-          />
-        ),
-        
-        // Links
-        a: ({ node, ...props }) => (
-          <a
-            className="text-[#ffe067] hover:text-[#ffd040] underline transition-colors break-words"
-            target="_blank"
-            rel="noopener noreferrer"
-            {...props}
-          />
-        ),
-        
-        // Horizontal rule
-        hr: ({ node, ...props }) => (
-          <hr className="border-gray-700 my-8" {...props} />
-        ),
-        
-        // Tables
-        table: ({ node, ...props }) => (
-          <div className="overflow-x-auto mb-4 rounded-lg border border-gray-700">
-            <table className="min-w-full divide-y divide-gray-700" {...props} />
-          </div>
-        ),
-        thead: ({ node, ...props }) => (
-          <thead className="bg-[#262626]" {...props} />
-        ),
-        tbody: ({ node, ...props }) => (
-          <tbody className="bg-[#1f1f1f] divide-y divide-gray-700" {...props} />
-        ),
-        tr: ({ node, ...props }) => (
-          <tr className="hover:bg-[#2a2a2a] transition-colors" {...props} />
-        ),
-        th: ({ node, ...props }) => (
-          <th
-            className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider"
-            {...props}
-          />
-        ),
-        td: ({ node, ...props }) => (
-          <td className="px-6 py-4 text-sm text-gray-400 whitespace-nowrap" {...props} />
-        ),
-        
-        // Strong (bold)
-        strong: ({ node, ...props }) => (
-          <strong className="font-bold text-gray-100" {...props} />
-        ),
-        
-        // Emphasis (italic)
-        em: ({ node, ...props }) => (
-          <em className="italic text-gray-200" {...props} />
-        ),
-        
-        // Delete (strikethrough)
-        del: ({ node, ...props }) => (
-          <del className="line-through text-gray-500" {...props} />
-        ),
-        
-        // Images
-        img: ({ node, ...props }) => (
-          <img
-            className="rounded-lg max-w-full h-auto my-4 border border-gray-700"
-            {...props}
-            alt={props.alt || ''}
-          />
-        ),
-        
-        // Superscript and subscript
-        sup: ({ node, ...props }) => (
-          <sup className="text-xs align-super" {...props} />
-        ),
-        sub: ({ node, ...props }) => (
-          <sub className="text-xs align-sub" {...props} />
-        ),
-        
-        // Underline (from HTML)
-        u: ({ node, ...props }) => (
-          <u className="underline decoration-gray-400" {...props} />
-        ),
-        
-        // Mark/highlight (from HTML)
-        mark: ({ node, ...props }) => (
-          <mark className="bg-[#ffe067] text-black px-1 py-0.5 rounded" {...props} />
-        ),
-        
-        // Keyboard
-        kbd: ({ node, ...props }) => (
-          <kbd className="bg-[#2a2a2a] border border-gray-600 text-gray-300 px-2 py-1 rounded text-sm font-mono shadow-sm" {...props} />
-        ),
-        
-        // Details/Summary (collapsible)
-        details: ({ node, ...props }) => (
-          <details className="bg-[#262626] rounded-lg p-4 mb-4 border border-gray-700 hover:border-gray-600 transition-colors" {...props} />
-        ),
-        summary: ({ node, ...props }) => (
-          <summary className="cursor-pointer font-semibold text-gray-200 hover:text-[#ffe067] transition-colors select-none" {...props} />
-        ),
-        
-        // Abbreviation
-        abbr: ({ node, ...props }) => (
-          <abbr className="border-b border-dotted border-gray-500 cursor-help" {...props} />
-        ),
-        
-        // Definition list
-        dl: ({ node, ...props }) => (
-          <dl className="mb-4 space-y-2" {...props} />
-        ),
-        dt: ({ node, ...props }) => (
-          <dt className="font-bold text-gray-200 mt-2" {...props} />
-        ),
-        dd: ({ node, ...props }) => (
-          <dd className="ml-6 text-gray-400 mb-2 pl-4 border-l-2 border-gray-700" {...props} />
-        ),
-        
-        // Figure and figcaption
-        figure: ({ node, ...props }) => (
-          <figure className="my-4" {...props} />
-        ),
-        figcaption: ({ node, ...props }) => (
-          <figcaption className="text-sm text-gray-500 text-center mt-2 italic" {...props} />
-        ),
-        
-        // Break
-        br: ({ node, ...props }) => (
-          <br {...props} />
-        ),
-        
-        // Span (for custom styling)
-        span: ({ node, ...props }) => (
-          <span {...props} />
-        ),
-        
-        // Div (for custom containers)
-        div: ({ node, ...props }) => (
-          <div {...props} />
-        ),
-        
-        // Small text
-        small: ({ node, ...props }) => (
-          <small className="text-xs text-gray-500" {...props} />
-        ),
-        
-        // Section
-        section: ({ node, ...props }) => (
-          <section className="my-4" {...props} />
-        ),
-        
-        // Article
-        article: ({ node, ...props }) => (
-          <article className="my-4" {...props} />
-        ),
-        
-        // Aside
-        aside: ({ node, ...props }) => (
-          <aside className="border-l-4 border-gray-600 pl-4 my-4 text-gray-400 bg-[#262626] py-2 rounded-r" {...props} />
-        ),
-        
-        // Input (for checkboxes in task lists)
-        input: ({ node, ...props }) => (
-          <input
-            className="mr-2 accent-[#ffe067] cursor-pointer"
-            {...props}
-          />
-        ),
-      }}
+          // Headings
+          h1: ({ node, ...props }) => (
+            <h1 className="text-3xl font-bold mb-4 mt-6 text-gray-100 border-b border-gray-700 pb-2" {...props} />
+          ),
+          h2: ({ node, ...props }) => (
+            <h2 className="text-2xl font-bold mb-3 mt-5 text-gray-100 border-b border-gray-800 pb-2" {...props} />
+          ),
+          h3: ({ node, ...props }) => (
+            <h3 className="text-xl font-bold mb-2 mt-4 text-gray-100" {...props} />
+          ),
+          h4: ({ node, ...props }) => (
+            <h4 className="text-lg font-semibold mb-2 mt-3 text-gray-200" {...props} />
+          ),
+          h5: ({ node, ...props }) => (
+            <h5 className="text-base font-semibold mb-2 mt-3 text-gray-200" {...props} />
+          ),
+          h6: ({ node, ...props }) => (
+            <h6 className="text-sm font-semibold mb-2 mt-3 text-gray-300" {...props} />
+          ),
+
+          // Paragraphs
+          p: ({ node, ...props }) => (
+            <p className="mb-4 text-gray-300 leading-relaxed" {...props} />
+          ),
+
+          // Lists
+          ul: ({ node, ...props }) => (
+            <ul className="list-disc list-inside mb-4 space-y-2 text-gray-300 ml-4" {...props} />
+          ),
+          ol: ({ node, ...props }) => (
+            <ol className="list-decimal list-inside mb-4 space-y-2 text-gray-300 ml-4" {...props} />
+          ),
+          li: ({ node, children, ...props }) => {
+            // Check if this is a task list item
+            const hasCheckbox = typeof children === 'object' &&
+              Array.isArray(children) &&
+              children.some((child: any) => child?.type === 'input');
+
+            return (
+              <li className={`text-gray-300 ${hasCheckbox ? 'list-none -ml-4' : ''}`} {...props}>
+                {children}
+              </li>
+            );
+          },
+
+          // Code blocks with copy button and language badge
+          code: CodeBlock,
+          pre: PreComponent,
+
+          // Blockquotes
+          blockquote: ({ node, ...props }) => (
+            <blockquote
+              className="border-l-4 border-[#ffe067] pl-4 py-2 mb-4 text-gray-400 italic bg-[#262626] rounded-r"
+              {...props}
+            />
+          ),
+
+          // Links
+          a: ({ node, ...props }) => (
+            <a
+              className="text-[#ffe067] hover:text-[#ffd040] underline transition-colors break-words"
+              target="_blank"
+              rel="noopener noreferrer"
+              {...props}
+            />
+          ),
+
+          // Horizontal rule
+          hr: ({ node, ...props }) => (
+            <hr className="border-gray-700 my-8" {...props} />
+          ),
+
+          // Tables
+          table: ({ node, ...props }) => (
+            <div className="overflow-x-auto mb-4 rounded-lg border border-gray-700">
+              <table className="min-w-full divide-y divide-gray-700" {...props} />
+            </div>
+          ),
+          thead: ({ node, ...props }) => (
+            <thead className="bg-[#262626]" {...props} />
+          ),
+          tbody: ({ node, ...props }) => (
+            <tbody className="bg-[#1f1f1f] divide-y divide-gray-700" {...props} />
+          ),
+          tr: ({ node, ...props }) => (
+            <tr className="hover:bg-[#2a2a2a] transition-colors" {...props} />
+          ),
+          th: ({ node, ...props }) => (
+            <th
+              className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider"
+              {...props}
+            />
+          ),
+          td: ({ node, ...props }) => (
+            <td className="px-6 py-4 text-sm text-gray-400 whitespace-nowrap" {...props} />
+          ),
+
+          // Strong (bold)
+          strong: ({ node, ...props }) => (
+            <strong className="font-bold text-gray-100" {...props} />
+          ),
+
+          // Emphasis (italic)
+          em: ({ node, ...props }) => (
+            <em className="italic text-gray-200" {...props} />
+          ),
+
+          // Delete (strikethrough)
+          del: ({ node, ...props }) => (
+            <del className="line-through text-gray-500" {...props} />
+          ),
+
+          // Images
+          img: ({ node, ...props }) => (
+            <img
+              className="rounded-lg max-w-full h-auto my-4 border border-gray-700"
+              {...props}
+              alt={props.alt || ''}
+            />
+          ),
+
+          // Superscript and subscript
+          sup: ({ node, ...props }) => (
+            <sup className="text-xs align-super" {...props} />
+          ),
+          sub: ({ node, ...props }) => (
+            <sub className="text-xs align-sub" {...props} />
+          ),
+
+          // Underline (from HTML)
+          u: ({ node, ...props }) => (
+            <u className="underline decoration-gray-400" {...props} />
+          ),
+
+          // Mark/highlight (from HTML)
+          mark: ({ node, ...props }) => (
+            <mark className="bg-[#ffe067] text-black px-1 py-0.5 rounded" {...props} />
+          ),
+
+          // Keyboard
+          kbd: ({ node, ...props }) => (
+            <kbd className="bg-[#2a2a2a] border border-gray-600 text-gray-300 px-2 py-1 rounded text-sm font-mono shadow-sm" {...props} />
+          ),
+
+          // Details/Summary (collapsible)
+          details: ({ node, ...props }) => (
+            <details className="bg-[#262626] rounded-lg p-4 mb-4 border border-gray-700 hover:border-gray-600 transition-colors" {...props} />
+          ),
+          summary: ({ node, ...props }) => (
+            <summary className="cursor-pointer font-semibold text-gray-200 hover:text-[#ffe067] transition-colors select-none" {...props} />
+          ),
+
+          // Abbreviation
+          abbr: ({ node, ...props }) => (
+            <abbr className="border-b border-dotted border-gray-500 cursor-help" {...props} />
+          ),
+
+          // Definition list
+          dl: ({ node, ...props }) => (
+            <dl className="mb-4 space-y-2" {...props} />
+          ),
+          dt: ({ node, ...props }) => (
+            <dt className="font-bold text-gray-200 mt-2" {...props} />
+          ),
+          dd: ({ node, ...props }) => (
+            <dd className="ml-6 text-gray-400 mb-2 pl-4 border-l-2 border-gray-700" {...props} />
+          ),
+
+          // Figure and figcaption
+          figure: ({ node, ...props }) => (
+            <figure className="my-4" {...props} />
+          ),
+          figcaption: ({ node, ...props }) => (
+            <figcaption className="text-sm text-gray-500 text-center mt-2 italic" {...props} />
+          ),
+
+          // Break
+          br: ({ node, ...props }) => (
+            <br {...props} />
+          ),
+
+          // Span (for custom styling)
+          span: ({ node, ...props }) => (
+            <span {...props} />
+          ),
+
+          // Div (for custom containers)
+          div: ({ node, ...props }) => (
+            <div {...props} />
+          ),
+
+          // Small text
+          small: ({ node, ...props }) => (
+            <small className="text-xs text-gray-500" {...props} />
+          ),
+
+          // Section
+          section: ({ node, ...props }) => (
+            <section className="my-4" {...props} />
+          ),
+
+          // Article
+          article: ({ node, ...props }) => (
+            <article className="my-4" {...props} />
+          ),
+
+          // Aside
+          aside: ({ node, ...props }) => (
+            <aside className="border-l-4 border-gray-600 pl-4 my-4 text-gray-400 bg-[#262626] py-2 rounded-r" {...props} />
+          ),
+
+          // Input (for checkboxes in task lists)
+          input: ({ node, ...props }) => (
+            <input
+              className="mr-2 accent-[#ffe067] cursor-pointer"
+              {...props}
+            />
+          ),
+        }}
       >
         {content}
       </ReactMarkdown>
