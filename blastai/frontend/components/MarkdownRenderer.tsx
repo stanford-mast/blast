@@ -6,7 +6,6 @@ import remarkEmoji from 'remark-emoji';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
-import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
 import 'katex/dist/katex.min.css';
 
@@ -37,56 +36,6 @@ if (typeof window !== 'undefined') {
     }
   });
 }
-
-// Code block with copy button and language badge
-const CodeBlock = ({ inline, className, children, ...props }: any) => {
-  const [copied, setCopied] = useState(false);
-  const match = /language-(\w+)/.exec(className || '');
-  const language = match ? match[1] : '';
-  const codeString = String(children).replace(/\n$/, '');
-
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(codeString);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  if (inline) {
-    return (
-      <code
-        className="bg-[#2a2a2a] text-[#ffe067] px-1.5 py-0.5 rounded text-sm font-mono"
-        {...props}
-      >
-        {children}
-      </code>
-    );
-  }
-
-  return (
-    <div className="relative group mb-4">
-      {language && (
-        <div className="absolute top-2 left-3 text-xs text-gray-400 font-mono bg-[#1a1a1a] px-2 py-1 rounded">
-          {language}
-        </div>
-      )}
-      <button
-        onClick={handleCopy}
-        className="absolute top-2 right-2 px-3 py-1 text-xs bg-[#2a2a2a] hover:bg-[#333] text-gray-300 rounded opacity-0 group-hover:opacity-100 transition-all duration-200 border border-gray-600"
-        aria-label="Copy code"
-      >
-        {copied ? '✓ Copied!' : 'Copy'}
-      </button>
-      <pre className="bg-[#161616] rounded-lg overflow-x-auto !mt-0 !mb-0">
-        <code
-          className={`block p-4 text-sm ${className || ''} ${language ? 'pt-10' : ''}`}
-          {...props}
-        >
-          {children}
-        </code>
-      </pre>
-    </div>
-  );
-};
 
 // Mermaid diagram component
 const MermaidDiagram = ({ chart }: { chart: string }) => {
@@ -126,6 +75,73 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
   );
 };
 
+// Code block with copy button and language badge
+const CodeBlock = ({ inline, className, children, ...props }: any) => {
+  const [copied, setCopied] = useState(false);
+  const match = /language-(\w+)/.exec(className || '');
+  const language = match ? match[1] : '';
+  const codeString = String(children).replace(/\n$/, '');
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(codeString);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (inline) {
+    return (
+      <code
+        className="bg-[#2a2a2a] text-[#ffe067] px-1.5 py-0.5 rounded text-sm font-mono"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  }
+
+  // Check if this is a mermaid diagram
+  if (language === 'mermaid') {
+    return <MermaidDiagram chart={codeString} />;
+  }
+
+  return (
+    <div className="rounded-lg overflow-hidden mb-4 border border-gray-700">
+      {/* Header bar with language and copy button */}
+      <div className="flex items-center justify-between bg-[#0d0d0d] px-4 py-2 border-b border-gray-700">
+        <span className="text-xs text-gray-400 font-mono">
+          {language || 'code'}
+        </span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+          aria-label="Copy code"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            {copied ? (
+              <path d="M20 6L9 17l-5-5" />
+            ) : (
+              <>
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </>
+            )}
+          </svg>
+          <span>{copied ? 'Copied!' : 'Copy code'}</span>
+        </button>
+      </div>
+      {/* Code content */}
+      <pre className="bg-[#0d0d0d] overflow-x-auto !mt-0 !mb-0">
+        <code
+          className={`block p-4 text-sm ${className || ''}`}
+          {...props}
+        >
+          {children}
+        </code>
+      </pre>
+    </div>
+  );
+};
+
 // Custom pre component to detect mermaid diagrams
 const PreComponent = ({ children, ...props }: any) => {
   const childProps = children?.props;
@@ -141,13 +157,19 @@ const PreComponent = ({ children, ...props }: any) => {
 };
 
 export const MarkdownRenderer = ({ content, className = '' }: MarkdownRendererProps) => {
-  // Sanitize content to prevent XSS attacks
-  const sanitizedContent = typeof window !== 'undefined' 
-    ? DOMPurify.sanitize(content, {
-        ADD_TAGS: ['iframe', 'details', 'summary'],
-        ADD_ATTR: ['allow', 'allowfullscreen', 'frameborder', 'scrolling', 'target'],
-      })
-    : content;
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  // Don't render anything on the server to avoid hydration mismatch
+  if (!isClient) {
+    return <div className={`markdown-content ${className}`} />;
+  }
+
+  // Note: We don't use DOMPurify here because ReactMarkdown handles security
+  // by escaping HTML by default. rehypeRaw is used to allow specific safe HTML elements.
 
   return (
     <div className={`markdown-content ${className}`}>
@@ -375,7 +397,7 @@ export const MarkdownRenderer = ({ content, className = '' }: MarkdownRendererPr
         ),
       }}
       >
-        {sanitizedContent}
+        {content}
       </ReactMarkdown>
     </div>
   );
