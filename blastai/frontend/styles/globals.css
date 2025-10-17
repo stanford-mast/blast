@@ -130,3 +130,10 @@ body {
 .chat-input {
   caret-color: white;
 }
+
+/* Override highlight.js backgrounds for code block styling */
+.markdown-content pre,
+.markdown-content pre code,
+.markdown-content pre code.hljs {
+  background: transparent !important;
+}

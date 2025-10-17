@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { XCircleIcon, ArrowsPointingOutIcon } from '@heroicons/react/24/solid';
 import { motion, AnimatePresence } from 'framer-motion';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 const formatTime = (ms: number) => {
   const seconds = Math.floor(ms / 1000);
@@ -193,7 +194,9 @@ const TaskModal = ({ isOpen, onClose, updates, finalResult, taskId }: TaskModalP
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.1, delay: index * 0.05 }}
                 >
-                  <p className="text-sm text-gray-300">{thought.content}</p>
+                  <div className="text-sm">
+                    <MarkdownRenderer content={thought.content} />
+                  </div>
                   {index === thoughts.length - 1 && (
                     <p className="text-xs text-gray-500 mt-1">Last Result</p>
                   )}
@@ -274,7 +277,9 @@ export const TaskBox = ({ taskId, updates, finalResult, mainTaskFinalResult, onC
             </div>
           )}
         </div>
-        <p className="text-sm text-gray-300 line-clamp-2">{latestThought}</p>
+        <div className="text-sm line-clamp-2">
+          <MarkdownRenderer content={latestThought} />
+        </div>
       </motion.div>
 
       <TaskModal
