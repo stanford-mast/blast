@@ -1,0 +1,312 @@
+{
+  "description": "",
+  "tools": [
+    {
+      "name": "goto_restaurants_list",
+      "title": "Goto Restaurants List",
+      "description": "Navigates to the restaurants list by clicking the Home button.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether navigation to the restaurants list was successful."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const homeBtn = Array.from(document.querySelectorAll('[role=button]')).find(el => el.textContent.trim()==='Home'); return homeBtn ? true : [false, 'Home button not found'];",
+      "is_correct": "return output.success === true ? true : [false, 'Navigation did not succeed'];",
+      "execute": "const homeBtn = Array.from(document.querySelectorAll('[role=button]')).find(el => el.textContent.trim()==='Home'); if(homeBtn){homeBtn.click(); return {success:true};} return {success:false};",
+      "pre_path": "https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/*",
+      "pre": {},
+      "post": {
+        "page": "list"
+      },
+      "type": "gotoItem"
+    },
+    {
+      "name": "list_restaurant_categories",
+      "title": "List Restaurant Categories",
+      "description": "Lists available restaurant categories and section headers from the current page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "An array of objects, each representing either a restaurant category ({category: string}) or a section header ({section: string})."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const cats = Array.from(document.querySelectorAll('p')).filter(p => [\"Ramen\",\"Breakfast\",\"Fast Food\",\"Coffee\",\"Pizza\",\"Chinese\",\"Bakery\",\"Indian\",\"Mexican\",\"Smoothie\",\"Chicken\",\"Vegan\",\"Asian\",\"Thai\",\"Burgers\",\"Healthy\",\"Soup\",\"Sushi\",\"Desserts\"].includes(p.textContent.trim())); return cats.length > 0 ? true : [false, 'No category <p> elements found'];",
+      "is_correct": "return Array.isArray(output.items) && output.items.length > 0 ? true : [false, 'Output missing or empty items array'];",
+      "execute": "const categories = Array.from(document.querySelectorAll('p')).filter(p => [\"Ramen\",\"Breakfast\",\"Fast Food\",\"Coffee\",\"Pizza\",\"Chinese\",\"Bakery\",\"Indian\",\"Mexican\",\"Smoothie\",\"Chicken\",\"Vegan\",\"Asian\",\"Thai\",\"Burgers\",\"Healthy\",\"Soup\",\"Sushi\",\"Desserts\"].includes(p.textContent.trim())).map(p => ({category: p.textContent.trim()})); const headers = Array.from(document.querySelectorAll('button')).filter(btn => btn.textContent.trim().endsWith('See all')).map(btn => ({section: btn.parentElement.previousSibling ? btn.parentElement.previousSibling.textContent.trim() : ''})); return {items: [...categories, ...headers]};",
+      "pre_path": "https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/*",
+      "pre": {
+        "page": "list"
+      },
+      "post": {},
+      "type": "listItems"
+    },
+    {
+      "name": "list_restaurants",
+      "title": "List Restaurants",
+      "description": "Lists restaurants with their name, rating, and delivery fee from the current page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "A unique identifier for the restaurant, derived from its name."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The name of the restaurant."
+                },
+                "rating": {
+                  "type": "string",
+                  "description": "The rating of the restaurant."
+                },
+                "delivery_fee": {
+                  "type": "string",
+                  "description": "The delivery fee for the restaurant."
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "rating",
+                "delivery_fee"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const cards = Array.from(document.querySelectorAll('div')).filter(div => div.querySelector('h6') && div.textContent.includes('delivery fee'));\nreturn cards.length > 0 ? true : [false, 'No restaurant cards found on page'];",
+      "is_correct": "return Array.isArray(output.items) ? true : [false, 'Output missing items array'];",
+      "execute": "const cards = Array.from(document.querySelectorAll('div')).filter(div => div.querySelector('h6') && div.textContent.includes('delivery fee'));\nconst items = cards.map(card => {\n  const nameEl = card.querySelector('h6');\n  const ratingEl = card.querySelector('h6 + div h6');\n  const feeEl = Array.from(card.querySelectorAll('p')).find(p => p.textContent.includes('delivery fee'));\n  return {\n    id: nameEl ? nameEl.textContent.trim().replace(/\\s+/g,'_').toLowerCase() : null,\n    name: nameEl ? nameEl.textContent.trim() : null,\n    rating: ratingEl ? ratingEl.textContent.trim() : null,\n    delivery_fee: feeEl ? feeEl.textContent.trim() : null\n  };\n});\nreturn {items};",
+      "pre_path": "https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/*",
+      "pre": {
+        "page": "list"
+      },
+      "post": {},
+      "type": "listItems"
+    },
+    {
+      "name": "observe_site",
+      "title": "Observe Site",
+      "description": "Determines the current page type and selected restaurant ID based on the website's URL path.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "description": "The type of page currently being viewed (list, detail, or other)."
+          },
+          "selectedId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ID of the selected restaurant if on a detail page, otherwise null."
+          },
+          "selectedCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The selected category, always null in this context."
+          }
+        },
+        "required": [
+          "page",
+          "selectedId",
+          "selectedCategory"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return !!document.body;",
+      "is_correct": "return typeof output.page === 'string';",
+      "execute": "const pathname = window.location.pathname;\nif (pathname === '/' || pathname === '/restaurants') {\n  return {page: 'list', selectedId: null, selectedCategory: null};\n}\nconst match = pathname.match(/^\\/restaurants\\/([^/]+)$/);\nif (match) {\n  return {page: 'detail', selectedId: match[1], selectedCategory: null};\n}\nreturn {page: 'other', selectedId: null, selectedCategory: null};",
+      "pre_path": "https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/*",
+      "pre": {},
+      "post": {},
+      "type": "observe"
+    },
+    {
+      "name": "get_restaurant_details",
+      "title": "Get Restaurant Details",
+      "description": "Retrieves details about a restaurant, including its name, star rating, number of reviews, and menu items with prices.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The name of the restaurant."
+                },
+                "star_rating": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "description": "The star rating of the restaurant."
+                },
+                "num_reviews": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "description": "The number of reviews for the restaurant."
+                },
+                "menu_items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The name of the menu item."
+                      },
+                      "price": {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "description": "The price of the menu item."
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "price"
+                    ]
+                  },
+                  "description": "List of menu items with their names and prices."
+                }
+              },
+              "required": [
+                "name",
+                "star_rating",
+                "num_reviews",
+                "menu_items"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('h3.MuiTypography-root.MuiTypography-h3.css-14rhbiz') || document.querySelector('main h3') ? true : [false,'Restaurant name not found'];",
+      "is_correct": "return Array.isArray(output.items) && output.items.length > 0 && typeof output.items[0].name === 'string' ? true : [false,'Output missing items array or restaurant name'];",
+      "execute": "const name = document.querySelector('h3.MuiTypography-root.MuiTypography-h3.css-14rhbiz')?.textContent.trim() || document.querySelector('main h3')?.textContent.trim() || null;\nconst ratingEl = document.querySelector('p.MuiTypography-root.MuiTypography-body1.css-1blxmo9');\nconst star_rating = ratingEl ? parseFloat(ratingEl.textContent.trim()) : null;\nlet num_reviews = null;\nconst reviewsText = Array.from(document.querySelectorAll('p')).find(el => /\\d+\\+? ratings/.test(el.textContent));\nif (reviewsText) {\n  const match = reviewsText.textContent.match(/\\d+/);\n  if (match) num_reviews = parseInt(match[0], 10);\n} else {\n  const reviewsSectionText = document.querySelector('#reviews-section p')?.textContent;\n  if (reviewsSectionText) {\n    const match = reviewsSectionText.match(/\\d+/);\n    if (match) num_reviews = parseInt(match[0], 10);\n  }\n}\nconst menuCards = document.querySelectorAll('#full-menu-section .MuiCard-root');\nconst menu_items = Array.from(menuCards).map(card => {\n    const item_name = card.querySelector('h6')?.textContent.trim();\n    const price_text = card.querySelector('p')?.textContent.trim();\n    let price = null;\n    if (price_text) {\n      price = parseFloat(price_text.replace(/[^\\d.]/g, ''));\n    }\n    return {name: item_name, price};\n});\nreturn {items: [{name, star_rating, num_reviews, menu_items}]};",
+      "pre_path": "https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/*",
+      "pre": {
+        "page": "detail"
+      },
+      "post": {},
+      "type": "getFields"
+    },
+    {
+      "name": "goto_restaurant_detail",
+      "title": "Goto Restaurant Detail",
+      "description": "Navigates to the detail page of a restaurant given its name.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "restaurantName": {
+            "type": "string",
+            "description": "The exact name of the restaurant to view details for."
+          }
+        },
+        "required": [
+          "restaurantName"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether navigation to the restaurant detail page was successful."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const cards = document.querySelectorAll('.MuiGrid-root .MuiStack-root.css-1324fe3'); let found = false; for (const card of cards) { const title = card.querySelector('h6.MuiTypography-root.MuiTypography-subtitle1.css-1rej1nr'); if (title && title.textContent.trim() === inputs.restaurantName) { found = true; break; } } return found ? true : [false, `No clickable restaurant card found for name ${inputs.restaurantName}`];",
+      "is_correct": "return output.success === true ? true : [false,'Navigation did not succeed'];",
+      "execute": "const cards = document.querySelectorAll('.MuiGrid-root .MuiStack-root.css-1324fe3'); let targetCard = null; for (const card of cards) { const title = card.querySelector('h6.MuiTypography-root.MuiTypography-subtitle1.css-1rej1nr'); if (title && title.textContent.trim() === inputs.restaurantName) { targetCard = card; break; } } if (targetCard) { targetCard.click(); return {success:true}; } return {success:false};",
+      "pre_path": "https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/*",
+      "pre": {
+        "page": "list"
+      },
+      "post": {
+        "page": "detail",
+        "selectedId": "*"
+      },
+      "type": "gotoItem"
+    }
+  ],
+  "is_ready_timeout_ms": 30000
+}
