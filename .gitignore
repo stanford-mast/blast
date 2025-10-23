@@ -74,3 +74,14 @@ browser-use/**
 ourera/
 
 todo.md
+
+*mcp-traces/
+*mcp-registries/
+steel-contexts/
+steel-python/
+results/
+*demo/
+*app/
+notes/
+logs/
+cdp-use/

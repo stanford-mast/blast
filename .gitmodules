@@ -7,3 +7,6 @@
 [submodule "workflow-use"]
 	path = workflow-use
 	url = git@github.com:browser-use/workflow-use.git
+[submodule "smolagents"]
+	path = smolagents
+	url = https://github.com/huggingface/smolagents.git
