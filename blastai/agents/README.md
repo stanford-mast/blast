@@ -5,7 +5,7 @@ Agent system with SMCP (State Machine Control Protocol) tools for web automation
 ## Components
 
 - **Agent**: Container for tools and description
-- **SMCPTool**: JS-based tools with is_ready/execute/is_correct phases, URL preconditions, pre/post AbstractState
+- **SMCPTool**: JS-based tools with is_ready/execute/is_completed phases, URL preconditions, pre/post AbstractState
 - **CoreTool**: Meta-tools (update_smcp_tool, remove_smcp_tool, list_smcp_tools, ask_html)
 - **AgentExecutor**: Runs agents in loop mode (browser-use) or code mode (LLM codegen → LocalPythonExecutor)
 

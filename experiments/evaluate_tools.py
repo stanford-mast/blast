@@ -24,7 +24,7 @@ from dataclasses import dataclass, asdict
 # This prevents blastai from capturing/filtering logging output
 # Pass 'DEBUG' to see all browser-use logs (or set BLASTAI_LOG_LEVEL=DEBUG)
 from blastai.logging_setup import enable_standalone_mode
-enable_standalone_mode(browser_use_log_level="DEBUG")
+enable_standalone_mode(browser_use_log_level="INFO")
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -149,6 +149,17 @@ async def run_single_evaluation(
     mode_label = "with tools" if with_tools else "baseline"
     print(f"\n[Run {run_number}] Evaluating {task_id} ({mode_label}, {mode} mode)...")
     
+    # Show agent info BEFORE creating executor
+    smcp_count = sum(1 for t in agent.tools if hasattr(t, 'tool_executor_type') and t.tool_executor_type.value == 'smcp')
+    print(f"  Agent has {len(agent.tools)} tools ({smcp_count} SMCP)")
+    
+    # Debug: Print each tool's type
+    for tool in agent.tools:
+        if hasattr(tool, 'tool_executor_type'):
+            print(f"    - {tool.name}: {tool.tool_executor_type} (type attr: {type(tool.tool_executor_type)})")
+        else:
+            print(f"    - {tool.name}: NO tool_executor_type attribute!")
+    
     executor = AgentExecutor(agent)
     
     # Task is just the goal - executor handles initial_url navigation separately
@@ -201,7 +212,8 @@ async def evaluate_task(
     task_data: Dict[str, Any],
     tools_path: str,
     num_runs: int,
-    test_code_mode: bool = False
+    test_code_mode: bool = False,
+    skip_baseline: bool = False
 ) -> EvaluationSummary:
     """
     Evaluate a task with and without tools, in loop mode (and optionally code mode).
@@ -229,23 +241,33 @@ async def evaluate_task(
         print(f"\nLoading tools from: {tools_path}")
         agent_with_tools = Agent.from_json(tools_path)
         print(f"Loaded {len(agent_with_tools.tools)} tools")
+        
+        # Print tool details
+        for tool in agent_with_tools.tools:
+            tool_type = tool.tool_executor_type.value if hasattr(tool, 'tool_executor_type') else 'unknown'
+            print(f"  - {tool.name} ({tool_type}): {tool.description[:80]}...")
     else:
         print(f"\nWarning: Tools file not found: {tools_path}")
         print("Will only run baseline evaluation")
     
     # Create baseline agent
-    baseline_agent = Agent(description="Web automation agent", tools=[])
+    baseline_agent = Agent(description="", tools=[])
     
     # Run baseline evaluations
-    print(f"\n{'='*60}")
-    print("BASELINE EVALUATION (no tools)")
-    print(f"{'='*60}")
     baseline_runs = []
-    for i in range(num_runs):
-        result = await run_single_evaluation(
-            task_id, task_data, baseline_agent, i + 1, with_tools=False, mode="loop"
-        )
-        baseline_runs.append(result)
+    if not skip_baseline:
+        print(f"\n{'='*60}")
+        print("BASELINE EVALUATION (no tools)")
+        print(f"{'='*60}")
+        for i in range(num_runs):
+            result = await run_single_evaluation(
+                task_id, task_data, baseline_agent, i + 1, with_tools=False, mode="loop"
+            )
+            baseline_runs.append(result)
+    else:
+        print(f"\n{'='*60}")
+        print("SKIPPING BASELINE EVALUATION (--skip-baseline)")
+        print(f"{'='*60}")
     
     # Run loop mode with-tools evaluations
     loop_tools_runs = []
@@ -343,9 +365,20 @@ async def main():
         help="Also test code mode in addition to loop mode"
     )
     parser.add_argument(
+        "--skip-baseline",
+        action="store_true",
+        help="Skip baseline evaluation (only run with tools)"
+    )
+    parser.add_argument(
         "--tasks-file",
         help="Path to tasks YAML file",
         default="experiments/tasks/agisdk/agisdk.yaml"
+    )
+    parser.add_argument(
+        "--incremental",
+        action="store_true",
+        default=True,
+        help="Accumulate results in existing output file instead of overwriting"
     )
     parser.add_argument(
         "--output",
@@ -387,7 +420,8 @@ async def main():
         task_data,
         tools_path,
         args.runs,
-        test_code_mode=args.code_mode
+        test_code_mode=args.code_mode,
+        skip_baseline=args.skip_baseline
     )
     
     # Print summary
@@ -401,8 +435,61 @@ async def main():
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = str(output_dir / f"{args.task_id}_evaluation.json")
     
+    if args.incremental and Path(output_path).exists():
+        # Load existing results and merge
+        with open(output_path, 'r') as f:
+            existing = json.load(f)
+        
+        # Append new runs
+        existing['baseline_runs'].extend([r.to_dict() for r in summary.baseline_runs])
+        existing['loop_tools_runs'].extend([r.to_dict() for r in summary.loop_tools_runs])
+        existing['code_tools_runs'].extend([r.to_dict() for r in summary.code_tools_runs])
+        
+        # Recalculate stats
+        def recalc_stats(runs_key: str):
+            runs = [EvaluationResult(**r) for r in existing[runs_key]]
+            if not runs:
+                prefix = runs_key.split('_')[0]
+                existing[f'{prefix}_avg_latency'] = 0.0
+                existing[f'{prefix}_success_rate'] = 0.0
+                existing[f'{prefix}_avg_actions'] = 0.0
+                return
+            success_rate = sum(1 for r in runs if r.success) / len(runs)
+            avg_latency = sum(r.latency_seconds for r in runs) / len(runs)
+            avg_actions = sum(r.num_actions for r in runs) / len(runs)
+            prefix = runs_key.split('_')[0]
+            existing[f'{prefix}_avg_latency'] = avg_latency
+            existing[f'{prefix}_success_rate'] = success_rate
+            existing[f'{prefix}_avg_actions'] = avg_actions
+        
+        recalc_stats('baseline_runs')
+        recalc_stats('loop_tools_runs')
+        recalc_stats('code_tools_runs')
+        
+        # Recalculate improvements
+        baseline_latency = existing['baseline_avg_latency']
+        baseline_success = existing['baseline_success_rate']
+        baseline_actions = existing['baseline_avg_actions']
+        loop_latency = existing['loop_tools_avg_latency']
+        loop_success = existing['loop_tools_success_rate']
+        loop_actions = existing['loop_tools_avg_actions']
+        code_latency = existing['code_tools_avg_latency']
+        code_success = existing['code_tools_success_rate']
+        code_actions = existing['code_tools_avg_actions']
+        
+        existing['loop_latency_improvement'] = ((baseline_latency - loop_latency) / baseline_latency * 100) if baseline_latency > 0 else 0
+        existing['loop_success_improvement'] = ((loop_success - baseline_success) / baseline_success * 100) if baseline_success > 0 else 0
+        existing['loop_actions_reduction'] = ((baseline_actions - loop_actions) / baseline_actions * 100) if baseline_actions > 0 else 0
+        existing['code_latency_improvement'] = ((baseline_latency - code_latency) / baseline_latency * 100) if baseline_latency > 0 and code_latency > 0 else 0
+        existing['code_success_improvement'] = ((code_success - baseline_success) / baseline_success * 100) if baseline_success > 0 and code_success > 0 else 0
+        existing['code_actions_reduction'] = ((baseline_actions - code_actions) / baseline_actions * 100) if baseline_actions > 0 and code_actions > 0 else 0
+        
+        data = existing
+    else:
+        data = summary.to_dict()
+    
     with open(output_path, 'w') as f:
-        json.dump(summary.to_dict(), f, indent=2)
+        json.dump(data, f, indent=2)
     
     print(f"Saved detailed results to: {output_path}")
 
