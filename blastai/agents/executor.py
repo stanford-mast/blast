@@ -78,7 +78,7 @@ class AgentExecutor:
         from browser_use.llm.openai.chat import ChatOpenAI
         
         api_key = os.getenv("OPENAI_API_KEY")
-        model = os.getenv("OPENAI_MODEL", "gpt-4")
+        model = os.getenv("OPENAI_MODEL", "gpt-4.1")
         
         return ChatOpenAI(
             model=model,
@@ -116,7 +116,9 @@ class AgentExecutor:
     
     def _setup_tools(self):
         """Set up all tools from the agent."""
+        logger.info(f"Setting up {len(self.agent.tools)} tools from agent")
         for tool in self.agent.tools:
+            logger.info(f"  Setting up tool: {tool.name} (type: {tool.tool_executor_type})")
             if tool.tool_executor_type == ToolExecutorType.SMCP:
                 self._add_smcp_tool(tool)
             elif tool.tool_executor_type == ToolExecutorType.CORE:
@@ -124,6 +126,8 @@ class AgentExecutor:
     
     def _add_smcp_tool(self, tool: SMCPTool):
         """Add an SMCP tool to browser-use with unique registration."""
+        
+        logger.info(f"Adding SMCP tool: {tool.name}")
         
         # Create the tool function that takes inputs dict and returns ActionResult
         async def tool_func(inputs: Dict[str, Any]) -> ActionResult:
@@ -224,10 +228,12 @@ class AgentExecutor:
         # Store reference
         self._dynamic_tools[tool.name] = tool_func
         self._registered_tool_names.add(tool.name)
+        
+        logger.info(f"Successfully registered SMCP tool: {tool.name}")
     
     async def _execute_smcp_tool(self, tool: SMCPTool, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute an SMCP tool with is_ready -> execute -> check phases.
+        Execute an SMCP tool with is_ready -> execute -> is_completed phases.
         
         EFFICIENT: Makes only 3 CDP calls total by wrapping loops in JavaScript.
         
@@ -279,8 +285,8 @@ class AgentExecutor:
             total_timeout_ms = self.agent.is_ready_timeout_ms
             delay_ms = total_timeout_ms // max_attempts
             
-            stabilize_code = f"""
-(function() {{
+            is_ready_code = f"""
+(async function() {{
     const inputs = {inputs_json};
     const maxAttempts = {max_attempts};
     const delayMs = {delay_ms};
@@ -303,21 +309,20 @@ class AgentExecutor:
         }}
         attempts++;
         
-        // Synchronous delay (blocking but simple)
-        const start = Date.now();
-        while (Date.now() - start < delayMs) {{}}
+        // Async delay - yields to event loop
+        await new Promise(resolve => setTimeout(resolve, delayMs));
     }}
     
-    return {{ success: false, attempts: attempts, error: "Stabilization timeout", reason: lastReason }};
+    return {{ success: false, attempts: attempts, error: "is_ready timeout", reason: lastReason }};
 }})()
 """
-            result = await evaluate_js(stabilize_code)
+            result = await evaluate_js(is_ready_code)
             if not result.get('success'):
                 reason = result.get('reason', 'Unknown reason')
-                error_msg = f"Failed to is_ready after {result.get('attempts', 0)} attempts over {total_timeout_ms}ms. Last reason: {reason}"
+                error_msg = f"is_ready failed after {result.get('attempts', 0)} attempts over {total_timeout_ms}ms. Last reason: {reason}"
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
-            logger.info(f"Stabilized after {result.get('attempts')} attempts")
+            logger.info(f"is_ready passed after {result.get('attempts')} attempts")
         
         # Phase 2: Execute (ONE CDP call)
         logger.info(f"Executing {tool.name} with inputs: {inputs}")
@@ -342,7 +347,7 @@ class AgentExecutor:
 }})()
 """
         else:
-            # Function body - wrap like is_ready/is_correct for consistency
+            # Function body - wrap like is_ready/is_completed for consistency
             execute_code = f"""
 (function() {{
     try {{
@@ -360,12 +365,14 @@ class AgentExecutor:
         
         logger.info(f"Execute output: {output}")
         
-        # Phase 3: Is_correct (ONE CDP call with while loop in JS)
-        if tool.is_correct:
-            logger.info(f"Running check phase for {tool.name}")
+        # Phase 3: Is_completed (ONE CDP call with while loop in JS)
+        if tool.is_completed:
+            logger.info(f"Running is_completed phase for {tool.name}")
             output_json = json.dumps(output)
-            check_code = f"""
-(function() {{
+            inputs_json = json.dumps(inputs)
+            is_completed_code = f"""
+(async function() {{
+    const inputs = {inputs_json};
     const output = {output_json};
     const maxAttempts = 30;
     const delayMs = 500;
@@ -374,36 +381,35 @@ class AgentExecutor:
     
     while (attempts < maxAttempts) {{
         try {{
-            const result = (function(output) {{ {tool.is_correct} }})(output);
+            const result = (function(inputs, output) {{ {tool.is_completed} }})(inputs, output);
             // Handle both true/false and [false, "reason"] formats
             if (result === true) {{
                 return {{ success: true, attempts: attempts + 1 }};
             }} else if (Array.isArray(result) && result[0] === false) {{
                 lastReason = result[1] || "Unknown reason";
             }} else if (result === false) {{
-                lastReason = "Check returned false";
+                lastReason = "is_completed returned false";
             }}
         }} catch (e) {{
             lastReason = e.message || e.toString();
         }}
         attempts++;
         
-        // Synchronous delay
-        const start = Date.now();
-        while (Date.now() - start < delayMs) {{}}
+        // Async delay - yields to event loop
+        await new Promise(resolve => setTimeout(resolve, delayMs));
     }}
     
-    return {{ success: false, attempts: attempts, error: "Check timeout", reason: lastReason }};
+    return {{ success: false, attempts: attempts, error: "is_completed timeout", reason: lastReason }};
 }})()
 """
             
-            result = await evaluate_js(check_code)
+            result = await evaluate_js(is_completed_code)
             if not result.get('success'):
                 reason = result.get('reason', 'Unknown reason')
-                error_msg = f"Check failed after {result.get('attempts', 0)} attempts. Last reason: {reason}"
+                error_msg = f"is_completed failed after {result.get('attempts', 0)} attempts. Last reason: {reason}"
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
-            logger.info(f"Check passed after {result.get('attempts')} attempts")
+            logger.info(f"is_completed passed after {result.get('attempts')} attempts")
         
         return output
     
@@ -434,7 +440,7 @@ class AgentExecutor:
                 type=(str, Field(..., description="One of: observe, listItems, getFields, setFilter, setFields, gotoItem, gotoField")),
                 execute=(str, Field(..., description="JavaScript BODY (has access to 'inputs' object)")),
                 is_ready=(str, Field(..., description="JavaScript BODY returning true when ready, or [false, 'reason'] when not ready (empty string if not needed)")),
-                is_correct=(str, Field(..., description="JavaScript BODY returning true when valid, or [false, 'reason'] when invalid (empty string if not needed)")),
+                is_completed=(str, Field(..., description="JavaScript BODY returning true when valid, or [false, 'reason'] when invalid (empty string if not needed)")),
                 preconditions=(List[StateEntry], Field(..., description="State before running as list of {key, value} pairs (empty list [] if none)")),
                 postconditions=(List[StateEntry], Field(..., description="State after running as list of {key, value} pairs (empty list [] if none)")),
                 input_parameters=(List[str], Field(..., description="Array of param names (empty list [] if none)"))
@@ -455,7 +461,7 @@ class AgentExecutor:
                     type_str = params.type  # type: ignore
                     execute = params.execute  # type: ignore
                     is_ready = params.is_ready  # type: ignore
-                    check = params.is_correct  # type: ignore
+                    check = params.is_completed  # type: ignore
                     preconditions_list = params.preconditions  # type: ignore - List[StateEntry]
                     postconditions_list = params.postconditions  # type: ignore - List[StateEntry]
                     input_parameters = params.input_parameters  # type: ignore
@@ -608,7 +614,7 @@ For output_schema: Analyze the execute script's return value. Common patterns:
                         tool_executor_type=ToolExecutorType.SMCP,
                         lang=lang,
                         is_ready=is_ready,
-                        is_correct=check,
+                        is_completed=check,
                         execute=execute,
                         pre_path=pre_path,
                         pre=preconditions,
@@ -753,14 +759,14 @@ For output_schema: Analyze the execute script's return value. Common patterns:
                     tool_info.append("  ```")
                     tool_info.append("")
                     
-                    if t.is_correct:
-                        tool_info.append("  IS_CORRECT (validates output; returns true or [false, reason]):")
+                    if t.is_completed:
+                        tool_info.append("  IS_COMPLETED (validates output; returns true or [false, reason]):")
                         tool_info.append("  ```javascript")
-                        tool_info.append(f"  {t.is_correct}")
+                        tool_info.append(f"  {t.is_completed}")
                         tool_info.append("  ```")
                         tool_info.append("")
                     else:
-                        tool_info.append("  IS_CORRECT: (not defined)")
+                        tool_info.append("  IS_COMPLETED: (not defined)")
                         tool_info.append("")
                 
                 return tool_info
@@ -771,7 +777,7 @@ For output_schema: Analyze the execute script's return value. Common patterns:
                 List all SMCP tools with their signatures and example usage.
                 
                 Args:
-                    get_code_for: Optional tool name to get detailed code for (includes is_ready/execute/is_correct scripts)
+                    get_code_for: Optional tool name to get detailed code for (includes is_ready/execute/is_completed scripts)
                 """
                 smcp_tools_data = [
                     t for t in self.agent.tools
@@ -901,7 +907,7 @@ HTML:
                         from browser_use.llm.openai.chat import ChatOpenAI
                         
                         api_key = os.getenv("OPENAI_API_KEY")
-                        model = os.getenv("OPENAI_MODEL", "gpt-4o")
+                        model = os.getenv("OPENAI_MODEL", "gpt-4.1")
                         
                         # Create a dedicated LLM instance for this ask_html call
                         ask_html_llm = ChatOpenAI(
@@ -1223,8 +1229,11 @@ HTML:
         Returns:
             The result of execution
         """
-        # Prepend agent description to task
-        full_task = f"{self.agent.description}{task}" if self.agent.description else task
+        # Prepend agent description to task (with space if description exists)
+        if self.agent.description:
+            full_task = f"{self.agent.description} {task}"
+        else:
+            full_task = task
         
         if mode == "loop":
             return await self._run_loop_mode(full_task, initial_url)
@@ -1249,6 +1258,18 @@ HTML:
             if initial_url:
                 logger.info(f"Setting initial URL: {initial_url}")
                 initial_actions = [{'navigate': {'url': initial_url, 'new_tab': False}}]
+            
+            # Append SMCP tool names to task
+            logger.info(f"Agent has {len(self.agent.tools)} tools total")
+            smcp_tool_names = [t.name for t in self.agent.tools if t.tool_executor_type == ToolExecutorType.SMCP]
+            logger.info(f"Found {len(smcp_tool_names)} SMCP tools: {smcp_tool_names}")
+            if smcp_tool_names:
+                task += " You may use " + ", ".join(smcp_tool_names) + "."
+                logger.info(f"Added {len(smcp_tool_names)} SMCP tools to task prompt: {smcp_tool_names}")
+            else:
+                logger.info("No SMCP tools available to add to task prompt")
+            
+            logger.info(f"Final task for BrowserUseAgent: {task}")
             
             # Create a fresh browser-use agent for this run
             # Note: We can reuse the same BrowserSession instance across multiple agents

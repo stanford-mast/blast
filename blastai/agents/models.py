@@ -84,7 +84,7 @@ class SMCPTool(Tool):
     
     # JavaScript code strings for execution phases
     is_ready: str = ""  # Returns true when ready, or [false, "reason"] when not ready
-    is_correct: str = ""  # Returns true when valid, or [false, "reason"] when invalid
+    is_completed: str = ""  # Returns true when valid, or [false, "reason"] when invalid
     execute: str = ""  # Main execution logic matching input/output schema
     
     # Pre-conditions
@@ -234,7 +234,7 @@ class Agent:
         3. Core tools for updating/removing/listing SMCP tools
         
         The synthesis agent can use evaluate() to execute JavaScript for
-        is_ready/execute/is_correct phases and create complete SMCP tools.
+        is_ready/execute/is_completed phases and create complete SMCP tools.
         """
         synthesis_description = self.description + """
 
@@ -256,31 +256,29 @@ Complete the TASK using ONLY SMCP actions.
 Use `ask_html` to query the current page HTML for specific guidance:
 
 Examples: 
-- {{"ask_html": {{"query": "What selector finds all restaurant cards and how to extract their IDs?"}}}}
+- {{"ask_html": {{"query": "What selector finds all restaurant cards and how to extract their names?"}}}}
 - {{"ask_html": {{"query": "How to include the name of each restaurant?", "max_length": 200000}}}} (for larger pages)
 
 Default max_length is 100000 chars (~100KB). Increase if page is large or truncation is affecting results.
 </ask_html_usage>
 
 <javascript_requirements>
-is_ready, execute, and is_correct are FUNCTION BODIES ONLY:
+is_ready, execute, and is_completed are FUNCTION BODIES ONLY:
 
 ✓ CORRECT:
-   is_ready: "return !!document.body;"
-   is_ready: "return document.body ? true : [false, 'Body not loaded'];"
+   is_ready: "return document.querySelector('#elementRequiredForExecute') ? true : [false, 'Body not loaded'];"
    execute: "return {items: []};"
-   is_correct: "return Array.isArray(output.items);"
-   is_correct: "return output.items ? true : [false, 'Missing items array'];"
+   is_completed: "return document.querySelector('h3').textContent.includes(inputs.restaurantName) ? true : [false, 'Wrong restaurant loaded'];"
 
 ✗ WRONG:
-   is_ready: "(function(){return !!document.body;})()"
-   execute: "async function() { return {items: []}; }"
+   is_ready: "(function(){ })()"
+   execute: "async function() {  }"
 
 For async: "const data = await fetch(...); return data;"
 </javascript_requirements>
 
 <tool_types>
-- observe: Returns state (page, selectedId, etc.) - ONE per domain
+- observe: Returns state (page, selectedRestaurant, etc.) - ONE per domain
 - listItems: Returns {items: [...]}
 - getFields: Returns field values object
 - setFilter: Changes filter/category
@@ -292,12 +290,12 @@ For async: "const data = await fetch(...); return data;"
 <update_smcp_tool_required>
 name: Tool identifier (e.g. "list_restaurants")
 type: One of: observe, listItems, getFields, setFilter, setFields, gotoItem, gotoField
-is_ready: JS function BODY that validates PRECONDITIONS before execute runs (e.g. for gotoItem: verify the item to click exists) (has access to `inputs` object)
+is_ready: JS function BODY that checks DOM to validate PRECONDITIONS before execute runs (e.g. for gotoItem: verify the item to click exists in DOM) (has access to `inputs` object)
 execute: JS function BODY that performs the action (has access to `inputs`)
-is_correct: JS function BODY that validates OUTPUT after execute runs (e.g. for gotoItem: verify navigation succeeded) (has access to `output`)
+is_completed: JS function BODY that checks DOM to validate OUTPUT after execute runs (e.g. for gotoItem: verify navigation succeeded by checking DOM) (has access to `inputs` and `output`)
 preconditions: AbstractState dict before running (e.g. {"page": "list"})
 postconditions: AbstractState dict after running (e.g. {"page": "detail"})
-input_parameters: Array of param names (e.g. ["restaurantId", "limit"]) or []
+input_parameters: Array of param names (e.g. ["restaurantName", "limit"]) or []
 </update_smcp_tool_required>
 
 <abstract_state>
@@ -310,15 +308,15 @@ Patterns can be:
 </abstract_state>
 
 <examples>
-Here are examples of tools. Use them as reference but never copy them directly.
+Here are examples of tools. Use them as reference but NEVER copy them directly.
 
 observe (no params):
-  name: "observe_site"
+  name: "observe_some_app"
   type: "observe"
   input_parameters: []
-  is_ready: "return !!document.body;"
+  is_ready: "return document.querySelector('#someAppHeader') ? true : [false, 'App header not loaded yet'];"
   execute: "const page = location.pathname === '/' ? 'home' : 'detail'; return {page};"
-  is_correct: "return typeof output.page === 'string';"
+  is_completed: "return true;"
   preconditions: {}
   postconditions: {}
 
@@ -327,20 +325,20 @@ listItems (no params):
   type: "listItems"
   input_parameters: []
   is_ready: "const items = document.querySelectorAll('.item'); return items.length > 0 ? true : [false, 'No items found on page'];"
-  execute: "const items = Array.from(document.querySelectorAll('.item')).map(el => ({id: el.id, name: el.textContent})); return {items};"
-  is_correct: "return Array.isArray(output.items) ? true : [false, 'Output missing items array'];"
+  execute: "const items = Array.from(document.querySelectorAll('.item')).map(el => ({name: el.textContent})); return {items};"
+  is_completed: "return true;"
   preconditions: {}
   postconditions: {}
 
 gotoItem (with params):
-  name: "goto_restaurant"
+  name: "goto_product"
   type: "gotoItem"
-  input_parameters: ["restaurantId"]
+  input_parameters: ["productName"]
   preconditions: {"page": "list"}
-  postconditions: {"page": "detail", "selectedId": "$restaurantId"}
-  is_ready: "const items = document.querySelectorAll('[data-restaurant-id]'); return items.length > 0 ? true : [false, 'Restaurant list not loaded'];"
-  execute: "const link = document.querySelector(`[data-restaurant-id='${inputs.restaurantId}']`); if (link) link.click(); return {success: !!link};"
-  is_correct: "return output.success === true ? true : [false, 'Navigation did not succeed'];"
+  postconditions: {"page": "detail", "selectedProduct": "$productName"}
+  is_ready: "const link = document.querySelector(`.product-link:contains('${inputs.productName}')`); return link ? true : [false, 'Product link not found'];"
+  execute: "const items = document.querySelectorAll('.product-link'); const link = Array.from(items).find(el => el.textContent.includes(inputs.productName)); if (link) link.click(); return {success: !!link};"
+  is_completed: "return document.querySelector('.product-detail h1').textContent.includes(inputs.productName) ? true : [false, 'Detail page not loaded'];"
 </examples>
 
 TASK: """
@@ -349,7 +347,7 @@ TASK: """
         synthesis_agent = Agent(
             description=synthesis_description,
             tools=self.tools.copy(),
-            is_ready_timeout_ms=5000  # Fast 5s timeout for synthesis agents
+            is_ready_timeout_ms=15000  # Fast 5s timeout for synthesis agents
         )
         
         # Add core tools for managing SMCP tools
