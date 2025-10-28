@@ -257,9 +257,7 @@ Use `ask_html` to query the current page HTML for specific guidance:
 
 Examples: 
 - {{"ask_html": {{"query": "What selector finds all restaurant cards and how to extract their names?"}}}}
-- {{"ask_html": {{"query": "How to include the name of each restaurant?", "max_length": 200000}}}} (for larger pages)
-
-Default max_length is 100000 chars (~100KB). Increase if page is large or truncation is affecting results.
+- {{"ask_html": {{"query": "What selector lets get me all the input fields' values and set them for currently open dialog?"}}}}
 </ask_html_usage>
 
 <javascript_requirements>
@@ -281,9 +279,9 @@ For async: "const data = await fetch(...); return data;"
 - observe: Returns state (page, selectedRestaurant, etc.) - ONE per domain
 - listItems: Returns {items: [...]}
 - getFields: Returns field values object
-- setFilter: Changes filter/category
+- setFilter: Filter items by something (e.g. search query, category)
 - setFields: Fills form fields  
-- gotoItem: Navigates to item
+- gotoItem: Navigates to item - must work for any item returned by listItems (even if not visible in viewport)
 - gotoField: Opens/focuses field
 </tool_types>
 
@@ -302,9 +300,10 @@ input_parameters: Array of param names (e.g. ["restaurantName", "limit"]) or []
 AbstractState is a mapping from state variable names to concrete values or patterns
 Patterns can be:
 - Concrete value (str, int, bool, etc.)
-- "*" - can be any value
+- "*" - can be any non-null value
 - "val1|val2|val3" - can be one of these values
-- "$fieldName" - must match input/output field with this name
+- "$parameterName" - must match input/output parameter with this name
+- "" - must be null
 </abstract_state>
 
 <examples>

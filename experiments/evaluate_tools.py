@@ -37,12 +37,19 @@ from blastai.agents import Agent, AgentExecutor
 class EvaluationResult:
     """Result of a single evaluation run."""
     task_id: str
-    with_tools: bool
+    config: str  # 'loop', 'loop-smcp', 'code-smcp', etc.
+    run_number: int
     success: bool
     latency_seconds: float
     num_actions: int
     error: str = ""
     result: str = ""
+    # Code mode metrics
+    codegen_overhead_seconds: float = 0.0  # Total time spent on LLM code generation
+    time_to_first_token_seconds: float = 0.0  # Average TTFT across LLM calls
+    num_llm_calls: int = 0  # Number of LLM calls made
+    # TODO: Track LLM inference time vs execution time vs browser state retrieval time
+    # TODO: Track cost (tokens * rate) and accuracy metrics
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -50,76 +57,67 @@ class EvaluationResult:
 
 @dataclass
 class EvaluationSummary:
-    """Summary of evaluation across multiple runs."""
-    task_id: str
-    task_goal: str
+    """Summary of evaluation across multiple runs and configs."""
+    task_ids: List[str]  # All tasks evaluated
+    configs: List[str]  # All configs tested
     
-    # Without tools
-    baseline_runs: List[EvaluationResult]
-    baseline_avg_latency: float
-    baseline_success_rate: float
-    baseline_avg_actions: float
+    # Raw results
+    results: List[EvaluationResult]
     
-    # With tools (loop mode)
-    loop_tools_runs: List[EvaluationResult]
-    loop_tools_avg_latency: float
-    loop_tools_success_rate: float
-    loop_tools_avg_actions: float
+    # Aggregated stats per config (averaged across all runs and tasks for that config)
+    config_stats: Dict[str, Dict[str, float]]  # config -> {success_rate, avg_latency, avg_actions}
     
-    # With tools (code mode) - optional
-    code_tools_runs: List[EvaluationResult]
-    code_tools_avg_latency: float
-    code_tools_success_rate: float
-    code_tools_avg_actions: float
-    
-    # Comparisons
-    loop_latency_improvement: float  # Percentage
-    loop_success_improvement: float  # Percentage
-    loop_actions_reduction: float  # Percentage
-    
-    code_latency_improvement: float  # Percentage
-    code_success_improvement: float  # Percentage
-    code_actions_reduction: float  # Percentage
+    # Per-task per-config stats (averaged across runs)
+    task_config_stats: Dict[str, Dict[str, Dict[str, float]]]  # task_id -> config -> stats
     
     def to_dict(self) -> Dict[str, Any]:
-        result = asdict(self)
-        result['baseline_runs'] = [r.to_dict() for r in self.baseline_runs]
-        result['loop_tools_runs'] = [r.to_dict() for r in self.loop_tools_runs]
-        result['code_tools_runs'] = [r.to_dict() for r in self.code_tools_runs]
-        return result
+        return {
+            'task_ids': self.task_ids,
+            'configs': self.configs,
+            'results': [r.to_dict() for r in self.results],
+            'config_stats': self.config_stats,
+            'task_config_stats': self.task_config_stats
+        }
     
     def print_summary(self):
         """Print human-readable summary."""
         print(f"\n{'='*80}")
-        print(f"EVALUATION SUMMARY: {self.task_id}")
+        print(f"EVALUATION SUMMARY")
         print(f"{'='*80}")
-        print(f"Goal: {self.task_goal}")
+        print(f"Tasks: {', '.join(self.task_ids)}")
+        print(f"Configs: {', '.join(self.configs)}")
+        print(f"Total runs: {len(self.results)}")
         print()
         
-        print(f"BASELINE (no tools):")
-        print(f"  Success Rate: {self.baseline_success_rate:.1%}")
-        print(f"  Avg Latency: {self.baseline_avg_latency:.2f}s")
-        print(f"  Avg Actions: {self.baseline_avg_actions:.1f}")
-        print()
-        
-        print(f"LOOP MODE WITH TOOLS:")
-        print(f"  Success Rate: {self.loop_tools_success_rate:.1%}")
-        print(f"  Avg Latency: {self.loop_tools_avg_latency:.2f}s")
-        print(f"  Avg Actions: {self.loop_tools_avg_actions:.1f}")
-        print(f"  Latency Improvement: {self.loop_latency_improvement:+.1%}")
-        print(f"  Success Improvement: {self.loop_success_improvement:+.1%}")
-        print(f"  Actions Reduction: {self.loop_actions_reduction:+.1%}")
-        print()
-        
-        if self.code_tools_runs:
-            print(f"CODE MODE WITH TOOLS:")
-            print(f"  Success Rate: {self.code_tools_success_rate:.1%}")
-            print(f"  Avg Latency: {self.code_tools_avg_latency:.2f}s")
-            print(f"  Avg Actions: {self.code_tools_avg_actions:.1f}")
-            print(f"  Latency Improvement: {self.code_latency_improvement:+.1%}")
-            print(f"  Success Improvement: {self.code_success_improvement:+.1%}")
-            print(f"  Actions Reduction: {self.code_actions_reduction:+.1%}")
+        # Print per-config aggregated stats
+        for config in self.configs:
+            stats = self.config_stats.get(config, {})
+            print(f"{config.upper()}:")
+            print(f"  Success Rate: {stats.get('success_rate', 0):.1%}")
+            print(f"  Avg Latency: {stats.get('avg_latency', 0):.2f}s")
+            print(f"  Avg Actions: {stats.get('avg_actions', 0):.1f}")
+            
+            # Code mode metrics
+            if 'code' in config and stats.get('avg_codegen_overhead', 0) > 0:
+                print(f"  Avg Codegen Overhead: {stats.get('avg_codegen_overhead', 0):.2f}s")
+                print(f"  Avg TTFT: {stats.get('avg_ttft', 0):.3f}s")
+                print(f"  Avg LLM Calls: {stats.get('avg_llm_calls', 0):.1f}")
             print()
+        
+        # Print per-task breakdown if multiple tasks
+        if len(self.task_ids) > 1:
+            print(f"{'='*80}")
+            print("PER-TASK BREAKDOWN:")
+            print(f"{'='*80}")
+            for task_id in self.task_ids:
+                print(f"\nTask: {task_id}")
+                task_stats = self.task_config_stats.get(task_id, {})
+                for config in self.configs:
+                    stats = task_stats.get(config, {})
+                    if stats:
+                        print(f"  {config}: Success={stats.get('success_rate', 0):.1%}, "
+                              f"Latency={stats.get('avg_latency', 0):.1f}s, "
+                              f"Actions={stats.get('avg_actions', 0):.1f}")
         
         print(f"{'='*80}\n")
 
@@ -129,8 +127,7 @@ async def run_single_evaluation(
     task_data: Dict[str, Any],
     agent: Agent,
     run_number: int,
-    with_tools: bool,
-    mode: str = "loop"
+    config: str
 ) -> EvaluationResult:
     """
     Run a single evaluation.
@@ -140,14 +137,16 @@ async def run_single_evaluation(
         task_data: Task data with initial_url and goal
         agent: Agent to use
         run_number: Run number for logging
-        with_tools: Whether using generated tools
-        mode: "loop" or "code" execution mode
+        config: Config name (e.g., "loop", "loop-smcp", "code-smcp")
         
     Returns:
         EvaluationResult with metrics
     """
-    mode_label = "with tools" if with_tools else "baseline"
-    print(f"\n[Run {run_number}] Evaluating {task_id} ({mode_label}, {mode} mode)...")
+    # Parse config to determine mode and whether using tools
+    mode = "code" if config.startswith("code") else "loop"
+    with_tools = "smcp" in config
+    
+    print(f"\n[Run {run_number}] Evaluating {task_id} ({config})...")
     
     # Show agent info BEFORE creating executor
     smcp_count = sum(1 for t in agent.tools if hasattr(t, 'tool_executor_type') and t.tool_executor_type.value == 'smcp')
@@ -170,7 +169,12 @@ async def run_single_evaluation(
     num_actions = 0
     success = False
     error = ""
-    result = ""
+    result_str = ""  # Initialize to avoid UnboundLocalError
+    
+    # Code mode metrics (TODO: implement collection)
+    codegen_overhead = 0.0
+    ttft = 0.0
+    num_llm_calls = 0
     
     try:
         # Run agent
@@ -180,16 +184,32 @@ async def run_single_evaluation(
             initial_url=initial_url
         )
         
-        # TODO: Extract num_actions from browser_use agent history
-        # For now, estimate based on result
-        num_actions = len(str(result).split('\n'))
+        # Extract actual metrics from AgentHistoryList
+        if result and hasattr(result, 'number_of_steps'):
+            num_actions = result.number_of_steps()
+        else:
+            num_actions = 0
+        
+        # Get final result string (not truncated)
+        if result and hasattr(result, 'final_result'):
+            final_result = result.final_result()
+            result_str = final_result if final_result else str(result)
+        else:
+            result_str = str(result)
+        
+        # TODO: Extract code mode metrics from executor
+        # codegen_overhead = executor.get_codegen_overhead()
+        # ttft = executor.get_time_to_first_token()
+        # num_llm_calls = executor.get_num_llm_calls()
         
         success = True
-        print(f"  ✓ Success in {time.time() - start_time:.2f}s")
+        print(f"  ✓ Success in {time.time() - start_time:.2f}s ({num_actions} steps)")
         
     except Exception as e:
         error = str(e)
         print(f"  ✗ Failed: {error}")
+        import traceback
+        traceback.print_exc()  # Print full traceback for debugging
         
     finally:
         await executor.cleanup()
@@ -198,12 +218,16 @@ async def run_single_evaluation(
     
     return EvaluationResult(
         task_id=task_id,
-        with_tools=with_tools,
+        config=config,
+        run_number=run_number,
         success=success,
         latency_seconds=latency,
         num_actions=num_actions,
         error=error,
-        result=str(result)[:500]  # Truncate
+        result=result_str,  # Full result, not truncated
+        codegen_overhead_seconds=codegen_overhead,
+        time_to_first_token_seconds=ttft,
+        num_llm_calls=num_llm_calls
     )
 
 
@@ -212,27 +236,26 @@ async def evaluate_task(
     task_data: Dict[str, Any],
     tools_path: str,
     num_runs: int,
-    test_code_mode: bool = False,
-    skip_baseline: bool = False
+    configs: List[str]
 ) -> EvaluationSummary:
     """
-    Evaluate a task with and without tools, in loop mode (and optionally code mode).
+    Evaluate a task across multiple configurations.
     
     Args:
         task_id: Task identifier
         task_data: Task data with initial_url and goal
         tools_path: Path to generated tools JSON
         num_runs: Number of runs for each configuration
-        test_code_mode: Whether to also test code mode (default False)
+        configs: List of config names to test (e.g., ["loop", "loop-smcp", "code-smcp"])
         
     Returns:
-        EvaluationSummary with comparison
+        EvaluationSummary with comparison across configs
     """
     print(f"\n{'='*80}")
     print(f"EVALUATING: {task_id}")
     print(f"Goal: {task_data.get('goal')}")
     print(f"Runs per configuration: {num_runs}")
-    print(f"Test code mode: {test_code_mode}")
+    print(f"Configs: {', '.join(configs)}")
     print(f"{'='*80}")
     
     # Load tools if provided
@@ -248,96 +271,78 @@ async def evaluate_task(
             print(f"  - {tool.name} ({tool_type}): {tool.description[:80]}...")
     else:
         print(f"\nWarning: Tools file not found: {tools_path}")
-        print("Will only run baseline evaluation")
+        print("Will only run configs without tools")
     
-    # Create baseline agent
+    # Create baseline agent (no tools)
     baseline_agent = Agent(description="", tools=[])
     
-    # Run baseline evaluations
-    baseline_runs = []
-    if not skip_baseline:
-        print(f"\n{'='*60}")
-        print("BASELINE EVALUATION (no tools)")
-        print(f"{'='*60}")
-        for i in range(num_runs):
-            result = await run_single_evaluation(
-                task_id, task_data, baseline_agent, i + 1, with_tools=False, mode="loop"
-            )
-            baseline_runs.append(result)
-    else:
-        print(f"\n{'='*60}")
-        print("SKIPPING BASELINE EVALUATION (--skip-baseline)")
-        print(f"{'='*60}")
+    # Collect all results
+    all_results: List[EvaluationResult] = []
     
-    # Run loop mode with-tools evaluations
-    loop_tools_runs = []
-    if agent_with_tools:
+    # Run each config
+    for config in configs:
         print(f"\n{'='*60}")
-        print("LOOP MODE WITH TOOLS EVALUATION")
+        print(f"RUNNING CONFIG: {config}")
         print(f"{'='*60}")
-        for i in range(num_runs):
-            result = await run_single_evaluation(
-                task_id, task_data, agent_with_tools, i + 1, with_tools=True, mode="loop"
-            )
-            loop_tools_runs.append(result)
-    
-    # Run code mode with-tools evaluations (optional)
-    code_tools_runs = []
-    if agent_with_tools and test_code_mode:
-        print(f"\n{'='*60}")
-        print("CODE MODE WITH TOOLS EVALUATION")
-        print(f"{'='*60}")
-        for i in range(num_runs):
-            result = await run_single_evaluation(
-                task_id, task_data, agent_with_tools, i + 1, with_tools=True, mode="code"
-            )
-            code_tools_runs.append(result)
-    
-    # Calculate statistics
-    def calc_stats(runs: List[EvaluationResult]):
-        if not runs:
-            return 0.0, 0.0, 0.0
         
-        success_rate = sum(1 for r in runs if r.success) / len(runs)
-        avg_latency = sum(r.latency_seconds for r in runs) / len(runs)
-        avg_actions = sum(r.num_actions for r in runs) / len(runs)
-        return success_rate, avg_latency, avg_actions
+        # Determine which agent to use
+        needs_tools = "smcp" in config
+        if needs_tools and not agent_with_tools:
+            print(f"Skipping {config} - no tools loaded")
+            continue
+        
+        agent = agent_with_tools if needs_tools else baseline_agent
+        
+        # Run all iterations for this config
+        for i in range(num_runs):
+            result = await run_single_evaluation(
+                task_id, task_data, agent, i + 1, config
+            )
+            all_results.append(result)
     
-    baseline_success, baseline_latency, baseline_actions = calc_stats(baseline_runs)
-    loop_success, loop_latency, loop_actions = calc_stats(loop_tools_runs)
-    code_success, code_latency, code_actions = calc_stats(code_tools_runs)
+    # Calculate aggregated statistics
+    def calc_config_stats(results: List[EvaluationResult]) -> Dict[str, float]:
+        """Calculate stats for a set of results."""
+        if not results:
+            return {}
+        
+        success_rate = sum(1 for r in results if r.success) / len(results)
+        avg_latency = sum(r.latency_seconds for r in results) / len(results)
+        avg_actions = sum(r.num_actions for r in results) / len(results)
+        
+        stats = {
+            'success_rate': success_rate,
+            'avg_latency': avg_latency,
+            'avg_actions': avg_actions
+        }
+        
+        # Add code mode metrics if applicable
+        code_results = [r for r in results if r.num_llm_calls > 0]
+        if code_results:
+            stats['avg_codegen_overhead'] = sum(r.codegen_overhead_seconds for r in code_results) / len(code_results)
+            stats['avg_ttft'] = sum(r.time_to_first_token_seconds for r in code_results) / len(code_results)
+            stats['avg_llm_calls'] = sum(r.num_llm_calls for r in code_results) / len(code_results)
+        
+        return stats
     
-    # Calculate improvements for loop mode
-    loop_latency_improvement = ((baseline_latency - loop_latency) / baseline_latency * 100) if baseline_latency > 0 else 0
-    loop_success_improvement = ((loop_success - baseline_success) / baseline_success * 100) if baseline_success > 0 else 0
-    loop_actions_reduction = ((baseline_actions - loop_actions) / baseline_actions * 100) if baseline_actions > 0 else 0
+    # Aggregate by config
+    config_stats = {}
+    for config in configs:
+        config_results = [r for r in all_results if r.config == config]
+        if config_results:
+            config_stats[config] = calc_config_stats(config_results)
     
-    # Calculate improvements for code mode
-    code_latency_improvement = ((baseline_latency - code_latency) / baseline_latency * 100) if baseline_latency > 0 and code_latency > 0 else 0
-    code_success_improvement = ((code_success - baseline_success) / baseline_success * 100) if baseline_success > 0 and code_success > 0 else 0
-    code_actions_reduction = ((baseline_actions - code_actions) / baseline_actions * 100) if baseline_actions > 0 and code_actions > 0 else 0
+    # Aggregate by task and config (useful when evaluating multiple tasks)
+    task_config_stats = {
+        task_id: config_stats  # For now, just one task per call
+    }
     
     summary = EvaluationSummary(
-        task_id=task_id,
-        task_goal=task_data.get('goal', ''),
-        baseline_runs=baseline_runs,
-        baseline_avg_latency=baseline_latency,
-        baseline_success_rate=baseline_success,
-        baseline_avg_actions=baseline_actions,
-        loop_tools_runs=loop_tools_runs,
-        loop_tools_avg_latency=loop_latency,
-        loop_tools_success_rate=loop_success,
-        loop_tools_avg_actions=loop_actions,
-        code_tools_runs=code_tools_runs,
-        code_tools_avg_latency=code_latency,
-        code_tools_success_rate=code_success,
-        code_tools_avg_actions=code_actions,
-        loop_latency_improvement=loop_latency_improvement,
-        loop_success_improvement=loop_success_improvement,
-        loop_actions_reduction=loop_actions_reduction,
-        code_latency_improvement=code_latency_improvement,
-        code_success_improvement=code_success_improvement,
-        code_actions_reduction=code_actions_reduction
+        task_ids=[task_id],
+        configs=configs,
+        results=all_results,
+        config_stats=config_stats,
+        task_config_stats=task_config_stats
     )
     
     return summary
@@ -345,9 +350,14 @@ async def evaluate_task(
 
 async def main():
     parser = argparse.ArgumentParser(
-        description="Evaluate task performance with and without generated tools"
+        description="Evaluate task performance across different configurations"
     )
-    parser.add_argument("task_id", help="Task ID to evaluate (e.g., dashdish-1)")
+    parser.add_argument(
+        "task_prefix", 
+        nargs='?',
+        default="",
+        help="Task ID prefix to evaluate (e.g., 'dashdish' or 'dashdish-deepresearch1'). Empty = all tasks."
+    )
     parser.add_argument(
         "--tools",
         help="Path to generated tools JSON",
@@ -360,14 +370,10 @@ async def main():
         help="Number of runs per configuration (default: 3)"
     )
     parser.add_argument(
-        "--code-mode",
-        action="store_true",
-        help="Also test code mode in addition to loop mode"
-    )
-    parser.add_argument(
-        "--skip-baseline",
-        action="store_true",
-        help="Skip baseline evaluation (only run with tools)"
+        "--configs",
+        nargs='+',
+        default=["loop-smcp"],
+        help="Configs to test (e.g., 'loop', 'loop-smcp', 'code-smcp'). Default: loop-smcp"
     )
     parser.add_argument(
         "--tasks-file",
@@ -395,33 +401,39 @@ async def main():
         sys.exit(1)
     
     with open(tasks_file, 'r') as f:
-        tasks = yaml.safe_load(f)
+        all_tasks = yaml.safe_load(f)
     
-    # Find task
-    task_data = None
-    for task in tasks:
-        if task.get('id') == args.task_id:
-            task_data = task
-            break
+    # Filter tasks by prefix
+    if args.task_prefix:
+        matching_tasks = [t for t in all_tasks if t.get('id', '').startswith(args.task_prefix)]
+        if not matching_tasks:
+            print(f"Error: No tasks matching prefix '{args.task_prefix}' found in {tasks_file}")
+            sys.exit(1)
+        print(f"Found {len(matching_tasks)} task(s) matching prefix '{args.task_prefix}'")
+    else:
+        matching_tasks = all_tasks
+        print(f"Evaluating all {len(matching_tasks)} tasks")
     
-    if task_data is None:
-        print(f"Error: Task ID '{args.task_id}' not found in {tasks_file}")
-        sys.exit(1)
+    # For now, handle single task (can extend to multiple later)
+    if len(matching_tasks) > 1:
+        print(f"Note: Multi-task evaluation not yet supported, using first match only")
+    
+    task_data = matching_tasks[0]
+    task_id = task_data.get('id')
     
     # Determine tools path
     tools_path = args.tools
     if not tools_path:
         # Default to experiments/tools/<task_id>.json
-        tools_path = f"experiments/tools/{args.task_id}.json"
+        tools_path = f"experiments/tools/{task_id}.json"
     
     # Run evaluation
     summary = await evaluate_task(
-        args.task_id,
+        task_id,
         task_data,
         tools_path,
         args.runs,
-        test_code_mode=args.code_mode,
-        skip_baseline=args.skip_baseline
+        configs=args.configs
     )
     
     # Print summary
@@ -433,58 +445,63 @@ async def main():
     else:
         output_dir = Path("experiments/results")
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = str(output_dir / f"{args.task_id}_evaluation.json")
+        output_path = str(output_dir / f"{task_id}_evaluation.json")
     
     if args.incremental and Path(output_path).exists():
         # Load existing results and merge
         with open(output_path, 'r') as f:
             existing = json.load(f)
         
-        # Append new runs
-        existing['baseline_runs'].extend([r.to_dict() for r in summary.baseline_runs])
-        existing['loop_tools_runs'].extend([r.to_dict() for r in summary.loop_tools_runs])
-        existing['code_tools_runs'].extend([r.to_dict() for r in summary.code_tools_runs])
+        # Merge results
+        existing_results = [EvaluationResult(**r) for r in existing.get('results', [])]
+        all_results = existing_results + summary.results
+        
+        # Rebuild summary with all results
+        all_task_ids = list(set([r.task_id for r in all_results]))
+        all_configs = list(set([r.config for r in all_results]))
         
         # Recalculate stats
-        def recalc_stats(runs_key: str):
-            runs = [EvaluationResult(**r) for r in existing[runs_key]]
-            if not runs:
-                prefix = runs_key.split('_')[0]
-                existing[f'{prefix}_avg_latency'] = 0.0
-                existing[f'{prefix}_success_rate'] = 0.0
-                existing[f'{prefix}_avg_actions'] = 0.0
-                return
-            success_rate = sum(1 for r in runs if r.success) / len(runs)
-            avg_latency = sum(r.latency_seconds for r in runs) / len(runs)
-            avg_actions = sum(r.num_actions for r in runs) / len(runs)
-            prefix = runs_key.split('_')[0]
-            existing[f'{prefix}_avg_latency'] = avg_latency
-            existing[f'{prefix}_success_rate'] = success_rate
-            existing[f'{prefix}_avg_actions'] = avg_actions
+        def calc_config_stats(results: List[EvaluationResult]) -> Dict[str, float]:
+            if not results:
+                return {}
+            success_rate = sum(1 for r in results if r.success) / len(results)
+            avg_latency = sum(r.latency_seconds for r in results) / len(results)
+            avg_actions = sum(r.num_actions for r in results) / len(results)
+            stats = {
+                'success_rate': success_rate,
+                'avg_latency': avg_latency,
+                'avg_actions': avg_actions
+            }
+            code_results = [r for r in results if r.num_llm_calls > 0]
+            if code_results:
+                stats['avg_codegen_overhead'] = sum(r.codegen_overhead_seconds for r in code_results) / len(code_results)
+                stats['avg_ttft'] = sum(r.time_to_first_token_seconds for r in code_results) / len(code_results)
+                stats['avg_llm_calls'] = sum(r.num_llm_calls for r in code_results) / len(code_results)
+            return stats
         
-        recalc_stats('baseline_runs')
-        recalc_stats('loop_tools_runs')
-        recalc_stats('code_tools_runs')
+        config_stats = {}
+        for config in all_configs:
+            config_results = [r for r in all_results if r.config == config]
+            if config_results:
+                config_stats[config] = calc_config_stats(config_results)
         
-        # Recalculate improvements
-        baseline_latency = existing['baseline_avg_latency']
-        baseline_success = existing['baseline_success_rate']
-        baseline_actions = existing['baseline_avg_actions']
-        loop_latency = existing['loop_tools_avg_latency']
-        loop_success = existing['loop_tools_success_rate']
-        loop_actions = existing['loop_tools_avg_actions']
-        code_latency = existing['code_tools_avg_latency']
-        code_success = existing['code_tools_success_rate']
-        code_actions = existing['code_tools_avg_actions']
+        task_config_stats = {}
+        for task in all_task_ids:
+            task_config_stats[task] = {}
+            for config in all_configs:
+                task_config_results = [r for r in all_results if r.task_id == task and r.config == config]
+                if task_config_results:
+                    task_config_stats[task][config] = calc_config_stats(task_config_results)
         
-        existing['loop_latency_improvement'] = ((baseline_latency - loop_latency) / baseline_latency * 100) if baseline_latency > 0 else 0
-        existing['loop_success_improvement'] = ((loop_success - baseline_success) / baseline_success * 100) if baseline_success > 0 else 0
-        existing['loop_actions_reduction'] = ((baseline_actions - loop_actions) / baseline_actions * 100) if baseline_actions > 0 else 0
-        existing['code_latency_improvement'] = ((baseline_latency - code_latency) / baseline_latency * 100) if baseline_latency > 0 and code_latency > 0 else 0
-        existing['code_success_improvement'] = ((code_success - baseline_success) / baseline_success * 100) if baseline_success > 0 and code_success > 0 else 0
-        existing['code_actions_reduction'] = ((baseline_actions - code_actions) / baseline_actions * 100) if baseline_actions > 0 and code_actions > 0 else 0
+        merged_summary = EvaluationSummary(
+            task_ids=all_task_ids,
+            configs=all_configs,
+            results=all_results,
+            config_stats=config_stats,
+            task_config_stats=task_config_stats
+        )
         
-        data = existing
+        data = merged_summary.to_dict()
     else:
         data = summary.to_dict()
     
