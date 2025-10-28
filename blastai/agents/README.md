@@ -50,9 +50,19 @@ python experiments/generate_tools.py --prompt "My custom task" --output experime
 python experiments/generate_tools.py --prompt "My custom instructions" --output experiments/tools/dashdish.json
 ```
 
-Evaluate performance (baseline vs. tools, optional --code-mode):
+Evaluate performance across configs (loop, loop-smcp, code-smcp):
 ```bash
-python experiments/evaluate_tools.py dashdish-1 --tools experiments/tools/dashdish-1.json --runs 3
+# Single config (loop mode with SMCP tools)
+python experiments/evaluate_tools.py dashdish-deepresearch1 --configs code-smcp --runs 1
+
+# Multiple configs (baseline, loop+tools, code+tools)
+python experiments/evaluate_tools.py dashdish-deepresearch1 --configs loop loop-smcp code-smcp --runs 5
+
+# All tasks matching prefix
+python experiments/evaluate_tools.py dashdish --configs loop-smcp --runs 3
+
+# Custom tools path and output
+python experiments/evaluate_tools.py dashdish-1 --tools experiments/tools/dashdish.json --output results/custom.json --runs 3
 ```
 
 ## Execution Modes
