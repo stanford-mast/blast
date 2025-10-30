@@ -97,7 +97,8 @@ class AgentExecutor:
         
         return ChatOpenAI(
             model=model,
-            api_key=api_key
+            api_key=api_key,
+            temperature=0.5 # non-zero temperature for variation
         )
     
     def _create_browser(self):
