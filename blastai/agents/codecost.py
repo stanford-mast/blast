@@ -4,6 +4,20 @@ Code cost computation for ranking code candidates.
 Provides functions to compute cost/quality scores for generated code.
 Lower costs are better. Cost is based on estimated latency of tool calls
 considering loop nesting levels via CFG traversal.
+
+Loop depth calculation:
+- For/while loops: Detected via CFG blocks containing ast.For/ast.While
+- Comprehensions: Tracked via comprehension_depth in BasicBlock.calls
+- Multi-generator comprehensions: depth = number of generators
+- Total depth = loop_depth (from CFG) + comprehension_depth
+- Cost multiplier = LOOP_MULTIPLIER ^ total_depth
+
+Examples:
+- await ai_eval("x"): 10s (depth 0)
+- for x in items: await ai_eval("x"): 100s (loop_depth 1)
+- [await ai_eval(x) for x in items]: 100s (comp_depth 1)
+- for x in items: [await ai_eval(y) for y in x.children]: 1000s (depth 1+1=2)
+- [await ai_eval(x) for x in items for y in subitems]: 1000s (comp_depth 2)
 """
 
 import ast
@@ -41,27 +55,21 @@ def compute_block_cost(block: BasicBlock, loop_depth: int = 0) -> float:
     
     Args:
         block: Basic block with tool calls
-        loop_depth: Current loop nesting depth
+        loop_depth: Current loop nesting depth (from for/while loops)
         
     Returns:
         Total cost for this block in seconds
     """
     total_cost = 0.0
-    multiplier = LOOP_MULTIPLIER ** loop_depth
     
-    for func_name, call_node in block.calls:
+    for func_name, call_node, comp_depth in block.calls:
+        # Total depth = loop depth from for/while + comprehension depth
+        total_depth = loop_depth + comp_depth
+        multiplier = LOOP_MULTIPLIER ** total_depth
+        
         base_latency = TOOL_LATENCIES.get(func_name, 0.0)
         cost = base_latency * multiplier
         total_cost += cost
-        
-        if cost > 0:
-            logger.debug(
-                f"Tool call: {func_name}, "
-                f"base_latency={base_latency}s, "
-                f"loop_depth={loop_depth}, "
-                f"multiplier={multiplier}, "
-                f"cost={cost}s"
-            )
     
     return total_cost
 
@@ -71,7 +79,8 @@ def traverse_cfg_for_cost(
     start_block: BasicBlock,
     loop_depth: int = 0,
     visited: Set[int] = None,
-    loop_headers: Set[int] = None
+    loop_headers: Set[int] = None,
+    current_loop_header: int = None
 ) -> float:
     """
     Traverse CFG and compute total estimated cost.
@@ -85,6 +94,7 @@ def traverse_cfg_for_cost(
         loop_depth: Current loop nesting depth
         visited: Set of visited block IDs (to prevent infinite loops)
         loop_headers: Set of block IDs that are loop headers (have back-edges)
+        current_loop_header: The loop header we're currently inside (None if not in loop)
         
     Returns:
         Total estimated latency cost in seconds
@@ -94,13 +104,18 @@ def traverse_cfg_for_cost(
     
     if loop_headers is None:
         # Detect loop headers on first call
-        # A block is a loop header if it has a back-edge (successor -> header)
+        # A block is a loop header if there's a path from the block back to itself
+        # (true loop), not just any backward edge (which can be if/else merges)
         loop_headers = set()
+        
+        # Only blocks with for/while statements can be loop headers
         for bid, block in blocks.items():
-            # Check if any successor points back to an earlier or same block
-            for next_bid in block.next:
-                if next_bid <= bid:  # Back edge detected
-                    loop_headers.add(next_bid)
+            # Check if this block contains a For or While statement
+            if block.stmts:
+                for stmt in block.stmts:
+                    if isinstance(stmt, (ast.For, ast.While)):
+                        loop_headers.add(bid)
+                        break
     
     # Prevent infinite recursion
     if start_block.bid in visited:
@@ -123,13 +138,16 @@ def traverse_cfg_for_cost(
         
         # If this is a forward edge to a block we haven't visited yet
         if next_bid not in visited:
-            # Check if we're entering a loop body (next block is after a loop header)
-            # If current block is a loop header, successors with higher bid are loop bodies
             next_depth = loop_depth
-            if start_block.bid in loop_headers and next_bid > start_block.bid:
-                next_depth = loop_depth + 1
+            next_loop_header = current_loop_header
             
-            successor_cost = traverse_cfg_for_cost(blocks, next_block, next_depth, visited.copy(), loop_headers)
+            # Increment depth only when entering a NEW loop header
+            # (not when re-entering the current loop or continuing in same loop)
+            if next_bid in loop_headers and next_bid != current_loop_header:
+                next_depth = loop_depth + 1
+                next_loop_header = next_bid
+            
+            successor_cost = traverse_cfg_for_cost(blocks, next_block, next_depth, visited.copy(), loop_headers, next_loop_header)
             max_successor_cost = max(max_successor_cost, successor_cost)
     
     return block_cost + max_successor_cost
@@ -167,7 +185,6 @@ def compute_code_cost(code: str) -> float:
         # Traverse CFG to compute cost
         cost = traverse_cfg_for_cost(blocks, start_block)
         
-        logger.debug(f"Total estimated latency: {cost}s")
         return cost
         
     except SyntaxError as e:

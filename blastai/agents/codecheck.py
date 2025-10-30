@@ -3,7 +3,7 @@ Code validation and verification for generated Python code.
 
 Provides functions to check code syntax and safety before execution.
 Includes CFG-based validation to ensure tool ordering respects preconditions.
-Includes mypy type checking for full type safety.
+Includes ty type checking for full type safety (Rust-based, extremely fast ~9ms startup).
 """
 
 import ast
@@ -187,11 +187,12 @@ def check_tool_ordering(
     return valid, error
 
 
-def check_mypy_types(full_code: str) -> Tuple[bool, Optional[str]]:
+def check_basedpyright_types(full_code: str) -> Tuple[bool, Optional[str]]:
     """
-    Run mypy type checking on the full code (definition + generated).
+    Run basedpyright type checking on the full code (definition + generated).
     
-    Creates a temporary file with the code and runs mypy on it.
+    Creates a temporary file with the code and runs basedpyright on it.
+    Basedpyright is 3-5x faster than mypy and has better type checking capabilities.
     
     Args:
         full_code: Complete Python code including definitions and generated code
@@ -200,37 +201,52 @@ def check_mypy_types(full_code: str) -> Tuple[bool, Optional[str]]:
         Tuple of (is_valid, error_message)
     """
     try:
-        # Create a temporary file with the code
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            f.write(full_code)
-            temp_path = f.name
-        
-        try:
-            # Run mypy with balanced type checking flags:
+        # Create a temporary directory with both the code file and a config file
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir)
+            code_path = temp_dir_path / "code.py"
+            config_path = temp_dir_path / "pyrightconfig.json"
+            
+            # Write the code
+            code_path.write_text(full_code)
+            
+            # Write basedpyright config to balance strictness with LLM-generated code
             # Key goals:
-            # 1. Catch wrong attribute access (e.g., details.price when price is in details.items[0].menu_items[0])
+            # 1. Catch wrong attribute access (e.g., details.price when price is nested)
             # 2. Catch dict access on Pydantic models (e.g., details["items"] instead of details.items)
             # 3. Catch type mismatches (e.g., int assigned to str field)
-            # 4. Allow reasonable Optional narrowing patterns in list comprehensions/lambdas
-            # 5. Don't require type annotations in user-generated code (LLMs don't always add them)
-            #
-            # --check-untyped-defs: Type check function bodies even without annotations
-            # --disallow-any-unimported: Catch missing imports/typos
-            # --no-strict-optional: Don't error on Optional[T] narrowing in comprehensions/lambdas
-            #                       (this is overly pedantic for LLM-generated code)
-            # --no-error-summary: Clean output format
-            # --show-column-numbers: Show column positions
-            # --no-pretty: Simpler error format
-            # Note: NOT using --warn-return-any or --disallow-untyped-defs for flexibility
+            # 4. Allow unannotated functions (LLMs don't always add annotations)
+            # 5. Allow classes without __init__ (using dataclass/pydantic patterns)
+            config_content = {
+                "typeCheckingMode": "basic",  # Basic mode, not strict
+                "reportMissingImports": "error",
+                "reportUndefinedVariable": "error",
+                "reportAttributeAccessIssue": "error",  # Catch wrong attr access
+                "reportIndexIssue": "error",  # Catch dict access on non-dict types
+                "reportAssignmentType": "error",  # Catch type mismatches
+                "reportCallIssue": "none",  # Allow flexible function calls (dataclass constructors)
+                "reportGeneralTypeIssues": "error",
+                "reportUninitializedInstanceVariable": "none",  # Allow dataclass/pydantic patterns
+                "reportUnknownParameterType": "none",  # Allow unannotated parameters
+                "reportUnknownArgumentType": "none",  # Allow unannotated arguments
+                "reportUnknownVariableType": "none",  # Allow unannotated variables
+                "reportUnknownMemberType": "none",  # Allow unannotated class members
+                "reportMissingParameterType": "none",  # Don't require param annotations
+                "reportMissingTypeArgument": "none",  # Allow generic types without args
+                "reportOptionalMemberAccess": "error",  # Catch optional access issues
+                "reportOptionalSubscript": "error",
+                "reportOptionalCall": "error",
+            }
+            
+            import json
+            config_path.write_text(json.dumps(config_content, indent=2))
+            
+            # Run basedpyright with the config
             result = subprocess.run(
-                ['mypy', 
-                 '--check-untyped-defs',
-                 '--disallow-any-unimported',
-                 '--no-strict-optional',  # Allow Optional narrowing
-                 '--no-error-summary', 
-                 '--show-column-numbers', 
-                 '--no-pretty', 
-                 temp_path],
+                ['basedpyright',
+                 '--outputjson',
+                 '--project', str(config_path),
+                 str(code_path)],
                 capture_output=True,
                 text=True,
                 timeout=10
@@ -239,29 +255,142 @@ def check_mypy_types(full_code: str) -> Tuple[bool, Optional[str]]:
             if result.returncode == 0:
                 return True, None
             else:
-                # Parse mypy errors and make them more readable
-                errors = result.stdout.strip()
-                if not errors:
-                    errors = result.stderr.strip()
-                
-                # Remove temp file path from errors
-                errors = errors.replace(temp_path, "<code>")
-                
-                return False, f"Type checking errors:\n{errors}"
-        finally:
-            # Clean up temp file
-            Path(temp_path).unlink(missing_ok=True)
+                # Parse basedpyright JSON output
+                try:
+                    output = json.loads(result.stdout)
+                    errors = []
+                    
+                    for diag in output.get('generalDiagnostics', []):
+                        if diag['severity'] == 'error':
+                            line = diag['range']['start']['line'] + 1  # Convert to 1-based
+                            col = diag['range']['start']['character'] + 1
+                            msg = diag['message']
+                            rule = diag.get('rule', '')
+                            rule_str = f" [{rule}]" if rule else ""
+                            errors.append(f"Line {line}, Col {col}: {msg}{rule_str}")
+                    
+                    if not errors:
+                        # Fallback to raw output if no structured errors found
+                        errors_str = result.stdout.strip() or result.stderr.strip()
+                        errors_str = errors_str.replace(str(code_path), "<code>")
+                        return False, f"Type checking errors:\n{errors_str}"
+                    
+                    return False, f"Type checking errors:\n" + "\n".join(errors)
+                except json.JSONDecodeError:
+                    # Fallback to raw output if JSON parsing fails
+                    errors_str = result.stdout.strip() or result.stderr.strip()
+                    errors_str = errors_str.replace(str(code_path), "<code>")
+                    return False, f"Type checking errors:\n{errors_str}"
             
     except FileNotFoundError:
-        # mypy not installed - skip type checking
-        logger.debug("mypy not found, skipping type checking")
+        # basedpyright not installed - skip type checking
+        logger.debug("basedpyright not found, skipping type checking")
         return True, None
     except subprocess.TimeoutExpired:
         return False, "Type checking timed out"
     except Exception as e:
         logger.warning(f"Type checking failed with exception: {e}")
-        # Don't fail validation if mypy check fails
+        # Don't fail validation if basedpyright check fails
         return True, None
+
+
+def check_ty_types(full_code: str) -> Tuple[bool, Optional[str]]:
+    """
+    Run ty type checking on the full code (definition + generated).
+    
+    Creates a temporary file with the code and runs ty (Astral's Rust-based type checker) on it.
+    ty is extremely fast (~9ms startup) and has excellent Pydantic support.
+    
+    Args:
+        full_code: Complete Python code including definitions and generated code
+    
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    try:
+        # Create a temporary directory with both the code file and a config file
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir)
+            code_path = temp_dir_path / "code.py"
+            pyproject_path = temp_dir_path / "pyproject.toml"
+            
+            # Write the code
+            code_path.write_text(full_code)
+            
+            # Write ty config to balance strictness with LLM-generated code
+            # Key goals:
+            # 1. Catch wrong attribute access (e.g., details.price when price is nested)
+            # 2. Catch dict access on Pydantic models (e.g., details["items"] instead of details.items)
+            # 3. Catch type mismatches (e.g., int assigned to str field)
+            # 4. Allow possibly-unresolved references in LLM patterns (e.g., Optional narrowing in comprehensions)
+            # 5. Allow possibly-missing attributes/imports (LLM code often has conditional definitions)
+            #
+            # Rules configuration:
+            # - Error level: unresolved-attribute (wrong attrs), invalid-key (dict access on Pydantic),
+            #                invalid-assignment (type mismatches), invalid-argument-type, invalid-return-type
+            # - Ignore level: possibly-* rules (too strict for LLM code with conditionals)
+            config_content = """
+[tool.ty.rules]
+# Error on definite type errors
+unresolved-attribute = "error"
+invalid-key = "error"
+invalid-assignment = "error"
+invalid-argument-type = "error"
+invalid-return-type = "error"
+non-subscriptable = "error"
+call-non-callable = "error"
+missing-argument = "error"
+unknown-argument = "error"
+
+# Ignore "possibly" errors (too strict for LLM code patterns)
+possibly-unresolved-reference = "ignore"
+possibly-missing-attribute = "ignore"
+possibly-missing-import = "ignore"
+possibly-missing-implicit-call = "ignore"
+"""
+            pyproject_path.write_text(config_content)
+            
+            # Run ty with concise output for easier parsing
+            # Use --project to specify directory (ty will find pyproject.toml)
+            result = subprocess.run(
+                ["ty", "check", "--project", str(temp_dir_path), "--output-format", "concise", str(code_path)],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            # ty exits with code 1 if there are errors
+            if result.returncode != 0:
+                # Parse concise output (format: file:line:col: [rule] message)
+                error_lines = []
+                for line in result.stdout.strip().split('\n'):
+                    if line and ':' in line:
+                        # Extract line number and message from concise format
+                        parts = line.split(':', 3)
+                        if len(parts) >= 4:
+                            line_num = parts[1]
+                            message = parts[3].strip()
+                            error_lines.append(f"Line {line_num}: {message}")
+                        else:
+                            error_lines.append(line)
+                
+                if error_lines:
+                    return False, "\n".join(error_lines)
+                else:
+                    # Fallback if parsing fails - just return stdout
+                    return False, result.stdout.strip() or "Type checking failed"
+            
+            # No errors found
+            return True, None
+            
+    except subprocess.TimeoutExpired:
+        return False, "Type checking timed out (>10s)"
+    except FileNotFoundError:
+        logger.debug("ty not found, skipping type checking")
+        return True, None  # Skip silently if not installed
+    except Exception as e:
+        logger.warning(f"Type checking failed with exception: {e}")
+        return True, None  # Don't fail validation if ty check fails
 
 
 def check_code_candidate(
@@ -275,7 +404,7 @@ def check_code_candidate(
     
     Performs:
     1. Syntax validation
-    2. Optional mypy type checking (if definition_code provided)
+    2. Optional basedpyright type checking (if definition_code provided)
     3. CFG construction
     4. Tool ordering validation via CFG traversal with precondition/postcondition checking
     
@@ -294,7 +423,7 @@ def check_code_candidate(
     except SyntaxError as e:
         return False, f"Syntax error at line {e.lineno}: {e.msg}"
     
-    # 2. Optional mypy type checking if we have definition code
+    # 2. Optional basedpyright type checking if we have definition code
     if definition_code is not None:
         # Wrap user code in async function to allow await statements
         # Use Any return type since generated code may return different types
@@ -303,7 +432,7 @@ async def _user_generated_code() -> Any:
 {chr(10).join('    ' + line for line in code.split(chr(10)))}
 """
         full_code = definition_code + "\n\n" + wrapped_code
-        is_valid, type_error = check_mypy_types(full_code)
+        is_valid, type_error = check_ty_types(full_code)
         if not is_valid:
             return False, type_error
     

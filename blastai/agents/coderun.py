@@ -537,7 +537,7 @@ async def {tool.name}():
         Evaluate an expression by asking the LLM.
         """
         from browser_use.llm.messages import UserMessage
-        messages = [UserMessage(content=expr)]
+        messages = [UserMessage(content=expr + "\nRespond with ONLY exactly what is requested.")]
         response = await llm.ainvoke(messages)
         return response.completion
 
