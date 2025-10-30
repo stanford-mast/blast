@@ -136,12 +136,27 @@ Respond with valid JSON only:
 }}
 }}
 
+CRITICAL: For array types, ALWAYS specify the items schema with full detail!
+
 For input_schema: Use parameters {input_parameters}. Each needs type (string/number/boolean/array/object) and description.
+
 For output_schema: Analyze the execute script's return value. Common patterns:
-- listItems type: {{"items": {{"type": "array"}}}}
-- observe type: {{"page": {{"type": "string"}}, ...}}
-- getFields type: field objects
-- setFields/setFilter/gotoItem/gotoField: {{"success": {{"type": "boolean"}}}}"""
+- listItems type: {{"items": {{"type": "array", "items": {{"type": "object", "properties": {{...}}, "required": [...]}}}}}}
+- observe type: {{"page": {{"type": "string", "enum": ["a", "b", "other"]}}, ...}}
+- getFields type: {{"items": {{"type": "array", "items": {{"type": "object", "properties": {{...}}, "required": [...]}}}}}}
+- setFields/setFilter/gotoItem/gotoField: {{"success": {{"type": "boolean"}}}}
+
+Examples of GOOD output schemas:
+1. For listItems returning [{{"name": "X", "price": "Y"}}]:
+   {{"items": {{"type": "array", "items": {{"type": "object", "properties": {{"name": {{"type": "string"}}, "price": {{"type": "string"}}}}, "required": ["name", "price"]}}}}}}
+
+2. For getFields returning [{{"title": "X", "rating": 4.5}}]:
+   {{"items": {{"type": "array", "items": {{"type": "object", "properties": {{"title": {{"type": "string"}}, "rating": {{"type": "number"}}}}, "required": ["title", "rating"]}}}}}}
+
+BAD: {{"items": {{"type": "array"}}}} (no items schema!)
+BAD: {{"items": {{"type": "array", "description": "..."}}}} (description without items schema!)
+
+If the execute script returns an array, ALWAYS analyze what properties each array element has and specify them fully."""
                         
                         # Call LLM
                         from browser_use.llm.messages import SystemMessage, UserMessage

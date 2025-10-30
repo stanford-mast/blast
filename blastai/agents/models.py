@@ -249,7 +249,8 @@ Complete the TASK using ONLY SMCP actions.
    c. Optionally call `ask_html` for just the current tool
    d. Create tool with `update_smcp_tool`
    e. Then call the new tool
-4. Loop until TASK complete
+4. If no observe tool exists with pre_path matching current URL or it exists but doesn't return correctly for current page (even if it's login page), update with `update_smcp_tool`
+5. Loop until TASK complete
 </workflow>
 
 <ask_html_usage>

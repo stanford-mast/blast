@@ -127,7 +127,8 @@ async def run_single_evaluation(
     task_data: Dict[str, Any],
     agent: Agent,
     run_number: int,
-    config: str
+    config: str,
+    codegen_only: bool = False
 ) -> EvaluationResult:
     """
     Run a single evaluation.
@@ -138,6 +139,7 @@ async def run_single_evaluation(
         agent: Agent to use
         run_number: Run number for logging
         config: Config name (e.g., "loop", "loop-smcp", "code-smcp")
+        codegen_only: If True, only generate code without executing it (for code-* configs)
         
     Returns:
         EvaluationResult with metrics
@@ -178,32 +180,69 @@ async def run_single_evaluation(
     
     try:
         # Run agent
-        result = await executor.run(
-            task, 
-            mode=mode,
-            initial_url=initial_url
-        )
-        
-        # Extract actual metrics from AgentHistoryList
-        if result and hasattr(result, 'number_of_steps'):
-            num_actions = result.number_of_steps()
+        if codegen_only and mode == "code":
+            # Only generate code without executing it
+            print(f"  Generating code only (not executing)...")
+            
+            # Access the code generator to generate code
+            from blastai.agents.codegen import CodeGenerator
+            
+            # Create code generator
+            code_generator = CodeGenerator(
+                agent=agent,
+                llm=executor.codegen_llm,
+                num_candidates=executor.parallel_codegen,
+                state_aware=executor.state_aware
+            )
+            
+            # Generate code
+            code = await code_generator.generate_code(
+                task=task,
+                history=[],
+                error=None
+            )
+            
+            if code:
+                print(f"  ✓ Code generated successfully ({len(code)} chars)")
+                print(f"\n{'='*80}")
+                print(f"GENERATED CODE:")
+                print(f"{'='*80}")
+                print(code)
+                print(f"{'='*80}\n")
+                success = True
+                result_str = f"Code generated: {len(code)} chars"
+            else:
+                print(f"  ✗ Code generation failed")
+                error = "Code generation failed - no valid code produced"
+                result_str = "Code generation failed"
         else:
-            num_actions = 0
-        
-        # Get final result string (not truncated)
-        if result and hasattr(result, 'final_result'):
-            final_result = result.final_result()
-            result_str = final_result if final_result else str(result)
-        else:
-            result_str = str(result)
-        
-        # TODO: Extract code mode metrics from executor
-        # codegen_overhead = executor.get_codegen_overhead()
-        # ttft = executor.get_time_to_first_token()
-        # num_llm_calls = executor.get_num_llm_calls()
-        
-        success = True
-        print(f"  ✓ Success in {time.time() - start_time:.2f}s ({num_actions} steps)")
+            # Normal execution
+            result = await executor.run(
+                task, 
+                mode=mode,
+                initial_url=initial_url
+            )
+            
+            # Extract actual metrics from AgentHistoryList
+            if result and hasattr(result, 'number_of_steps'):
+                num_actions = result.number_of_steps()
+            else:
+                num_actions = 0
+            
+            # Get final result string (not truncated)
+            if result and hasattr(result, 'final_result'):
+                final_result = result.final_result()
+                result_str = final_result if final_result else str(result)
+            else:
+                result_str = str(result)
+            
+            # TODO: Extract code mode metrics from executor
+            # codegen_overhead = executor.get_codegen_overhead()
+            # ttft = executor.get_time_to_first_token()
+            # num_llm_calls = executor.get_num_llm_calls()
+            
+            success = True
+            print(f"  ✓ Success in {time.time() - start_time:.2f}s ({num_actions} steps)")
         
     except Exception as e:
         error = str(e)
@@ -236,7 +275,8 @@ async def evaluate_task(
     task_data: Dict[str, Any],
     tools_path: str,
     num_runs: int,
-    configs: List[str]
+    configs: List[str],
+    codegen_only: bool = False
 ) -> EvaluationSummary:
     """
     Evaluate a task across multiple configurations.
@@ -247,6 +287,7 @@ async def evaluate_task(
         tools_path: Path to generated tools JSON
         num_runs: Number of runs for each configuration
         configs: List of config names to test (e.g., ["loop", "loop-smcp", "code-smcp"])
+        codegen_only: If True, only generate code without executing it (for code-* configs)
         
     Returns:
         EvaluationSummary with comparison across configs
@@ -296,7 +337,7 @@ async def evaluate_task(
         # Run all iterations for this config
         for i in range(num_runs):
             result = await run_single_evaluation(
-                task_id, task_data, agent, i + 1, config
+                task_id, task_data, agent, i + 1, config, codegen_only=codegen_only
             )
             all_results.append(result)
     
@@ -391,6 +432,11 @@ async def main():
         help="Output path for evaluation results JSON",
         default=None
     )
+    parser.add_argument(
+        "--codegen-only",
+        action="store_true",
+        help="Only generate code without executing it (for code-* configs)"
+    )
     
     args = parser.parse_args()
     
@@ -433,7 +479,8 @@ async def main():
         task_data,
         tools_path,
         args.runs,
-        configs=args.configs
+        configs=args.configs,
+        codegen_only=args.codegen_only
     )
     
     # Print summary

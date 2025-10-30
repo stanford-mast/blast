@@ -9,25 +9,58 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 from browser_use.llm.base import BaseChatModel
 from browser_use.llm.messages import SystemMessage, AssistantMessage, UserMessage, BaseMessage
 
 from .models import ToolExecutorType, SMCPTool
-from .local_python_executor import verify_code
+from .codecheck import check_code_candidate
+from .codecost import compute_code_cost
+from .schema_utils import snake_to_pascal, json_type_to_python, generate_nested_pydantic_classes
 
 logger = logging.getLogger(__name__)
 
 
 # Example code showing realistic patterns
+# TODO: add example of logging in via ai_exec when on login page
 EXAMPLE_CODE = """
-x = await tool_a()
-d = []
-for y in x.z:
-    if y.p:
-        d += y.q
-result = await ask(f"Summarize {d}")
+E1: immediate return
+```python
+result = "The response to the user's task can be immediately returned"
+```
+
+E2: call single tool with handling of empty tool result
+```python
+x = await tool_a(42)
+result = f"It is {x.items[0].field1} and {x.items[0].field2}" if x.items else "<user-friendly message about no results>"
+```
+
+E3: result with ai_eval
+```python
+x = await tool_b(param="value")
+response = await ai_eval(f"Summary of {x.content}")
+```
+
+E4: ordering tool calls based on current STATE and tool preconditions/postconditions, passing previous tools results into next tool call either by direct access or ai_eval, using ai_eval to match a user-provided term to an option in a list
+```python
+await tool_c()
+x = await tool_d(id=123)
+y = await tool_e(p1=x.data)
+z = await tool_f(ai_eval(f"Name in {y.options} closest to 'the ttanic'"))
+result = ai_eval(f"Response telling user about {z.info} since they asked about the titanic")
+```
+
+E5: control flow with loops and conditionals
+```python
+await tool_c()
+x = await tool_e(123)
+results = [await tool_f(item_name=item.name) for item in x.items if item.value > 3]
+result = ai_eval(f"Summary of {results} for whatever specific goal user had")
+"""
+
+RULES = """
+- Do not generate comments
 """
 
 @dataclass
@@ -97,9 +130,16 @@ class CodeGenerator:
         """
         lines = []
         
-        # Import Pydantic for type definitions
+        # Import Pydantic for type definitions and other required modules
         lines.append("from pydantic import BaseModel, Field")
-        lines.append("from typing import Optional, List, Dict, Any")
+        lines.append("from typing import Optional, List, Dict, Any, Union")
+        lines.append("import re")
+        lines.append("")
+        
+        # Add stub for _call_tool_impl (provided at runtime)
+        lines.append("async def _call_tool_impl(name: str, params: Dict[str, Any]) -> Dict[str, Any]:")
+        lines.append('    """Runtime implementation (provided by executor)."""')
+        lines.append("    raise NotImplementedError('Provided at runtime')")
         lines.append("")
         
         # Initialize STATE dictionary dynamically from all tools' pre/post variables
@@ -111,21 +151,16 @@ class CodeGenerator:
                     state_keys.update(t.pre.keys())
                 if getattr(t, "post", None) and isinstance(t.post, dict):
                     state_keys.update(t.post.keys())
-                # If tool has a URL pre_path, we use STATE["current_url"] for matching
-                if getattr(t, "pre_path", None):
-                    state_keys.add("current_url")
+                # Note: We no longer track current_url in STATE - use get_url() instead
 
         # Make deterministic ordering
         state_keys_list = sorted(list(state_keys))
-
-        # STATE dictionary will be available at runtime (managed by LocalPythonExecutor)
-        # Document the state variables for clarity
+        
+        # Define STATE dictionary (provided at runtime)
         if state_keys_list:
-            lines.append(f"# STATE variables (tracked at runtime): {', '.join(state_keys_list)}")
-        else:
-            lines.append("# STATE variables (tracked at runtime): page, current_url")
-        lines.append("# Access STATE['key'] to read/write state")
-        lines.append("")
+            state_init = "{" + ", ".join([f'"{k}": None' for k in state_keys_list]) + "}"
+            lines.append(f"STATE: Dict[str, Any] = {state_init}")
+            lines.append("")
         
         # Add SMCP tool definitions with precondition/postcondition assertions
         for tool in self.agent.tools:
@@ -136,14 +171,14 @@ class CodeGenerator:
                 # Generate Pydantic model for input parameters if they exist
                 has_params = smcp_tool.input_schema and smcp_tool.input_schema.get("properties")
                 if has_params:
-                    model_name = f"{self._snake_to_pascal(smcp_tool.name)}Input"
+                    model_name = f"{snake_to_pascal(smcp_tool.name)}Input"
                     lines.append(f"class {model_name}(BaseModel):")
                     
                     properties = smcp_tool.input_schema["properties"]
                     required = smcp_tool.input_schema.get("required", [])
                     
                     for param_name, param_schema in properties.items():
-                        param_type = self._json_type_to_python(param_schema.get("type", "str"))
+                        param_type = json_type_to_python(param_schema.get("type", "str"))
                         is_required = param_name in required
                         param_desc = param_schema.get("description", "")
                         
@@ -154,14 +189,28 @@ class CodeGenerator:
                     
                     lines.append("")
                 
+                # Generate Pydantic model for output schema if it exists
+                has_output = smcp_tool.output_schema and smcp_tool.output_schema.get("properties")
+                output_model_name = None
+                if has_output:
+                    output_model_name = f"{snake_to_pascal(smcp_tool.name)}Output"
+                    # Use recursive generation to handle nested schemas
+                    # This will generate all nested classes and return the root class name
+                    temp_lines = []
+                    generate_nested_pydantic_classes(smcp_tool.output_schema, output_model_name, temp_lines)
+                    lines.extend(temp_lines)
+                
                 # Generate function signature with proper types (not **kwargs)
+                # Return the Pydantic model for type safety and attribute access
+                return_type = output_model_name if output_model_name else "Dict[str, Any]"
+                
                 if has_params:
                     # Build typed parameters
                     properties = smcp_tool.input_schema["properties"]
                     required = smcp_tool.input_schema.get("required", [])
                     params = []
                     for param_name, param_schema in properties.items():
-                        param_type = self._json_type_to_python(param_schema.get("type", "str"))
+                        param_type = json_type_to_python(param_schema.get("type", "str"))
                         is_required = param_name in required
                         if is_required:
                             params.append(f"{param_name}: {param_type}")
@@ -169,9 +218,9 @@ class CodeGenerator:
                             params.append(f"{param_name}: Optional[{param_type}] = None")
                     
                     params_str = ", ".join(params)
-                    lines.append(f"async def {smcp_tool.name}({params_str}) -> Dict[str, Any]:")
+                    lines.append(f"async def {smcp_tool.name}({params_str}) -> {return_type}:")
                 else:
-                    lines.append(f"async def {smcp_tool.name}() -> Dict[str, Any]:")
+                    lines.append(f"async def {smcp_tool.name}() -> {return_type}:")
                 
                 lines.append(f'    """')
                 lines.append(f'    {smcp_tool.description}')
@@ -179,12 +228,11 @@ class CodeGenerator:
                 
                 # PRECONDITIONS (assert statements checking STATE)
                 if self.state_aware:
-                    # URL pattern precondition
+                    # URL pattern precondition - use get_url() to get current URL dynamically
                     if smcp_tool.pre_path and smcp_tool.pre_path != "":
                         url_pattern = smcp_tool.pre_path.replace("*", ".*")
-                        lines.append(f'    # Precondition: URL must match "{smcp_tool.pre_path}"')
-                        lines.append(f'    assert re.match(r"{url_pattern}", STATE["current_url"]), \\')
-                        lines.append(f'        f"Expected URL matching {smcp_tool.pre_path}, got {{STATE[\\"current_url\\"]}}"')
+                        lines.append(f'    current_url = await get_url()')
+                        lines.append(f'    assert re.match(r"{url_pattern}", current_url)')
                     
                     # State preconditions with pattern support
                     if smcp_tool.pre and isinstance(smcp_tool.pre, dict):
@@ -194,29 +242,30 @@ class CodeGenerator:
                                 continue
                             assertion = self._generate_assertion(key, value, "precondition", state_check=True)
                             if assertion:
-                                lines.append(f'    # Precondition: {key} {self._pattern_description(value)}')
                                 lines.append(f'    {assertion}')
                 
                 # IMPLEMENTATION (placeholder showing it calls internal implementation)
                 lines.append(f'    ')
-                lines.append(f'    # ... implementation omitted ...')
                 
                 if has_params:
                     lines.append(f'    # Validate and call')
-                    model_name = f"{self._snake_to_pascal(smcp_tool.name)}Input"
-                    # Build kwargs from function parameters
+                    model_name = f"{snake_to_pascal(smcp_tool.name)}Input"
+                    # Build kwargs from function parameters using keyword argument syntax
                     properties = smcp_tool.input_schema["properties"]
                     param_names = list(properties.keys())
-                    kwargs_dict = ", ".join([f'"{p}": {p}' for p in param_names])
-                    lines.append(f'    params = {model_name}({kwargs_dict})')
-                    lines.append(f'    result = await _call_tool_impl("{smcp_tool.name}", params.model_dump())')
+                    kwargs_args = ", ".join([f'{p}={p}' for p in param_names])
+                    lines.append(f'    params = {model_name}({kwargs_args})')
+                    lines.append(f'    result_dict = await _call_tool_impl("{smcp_tool.name}", params.model_dump())')
                 else:
-                    lines.append(f'    result = await _call_tool_impl("{smcp_tool.name}", {{}})')
-                lines.append(f'    ')
+                    lines.append(f'    result_dict = await _call_tool_impl("{smcp_tool.name}", {{}})')
                 
-                # Update STATE from result
-                lines.append(f'    # Update STATE from result')
-                lines.append(f'    STATE.update(result)')
+                # If we have output model, validate and return Pydantic model for attribute access
+                if output_model_name:
+                    lines.append(f'    # Validate output against schema and return Pydantic model')
+                    lines.append(f'    result = {output_model_name}(**result_dict)')
+                else:
+                    lines.append(f'    result = result_dict')
+                
                 lines.append(f'    ')
                 
                 # POSTCONDITIONS (assert statements checking STATE after update)
@@ -230,13 +279,10 @@ class CodeGenerator:
                         if isinstance(value, str) and value.startswith("$"):
                             # Reference to input parameter
                             param_ref = value[1:]  # Remove $
-                            lines.append(f'    # Postcondition: {key} == input parameter {param_ref}')
-                            lines.append(f'    assert STATE["{key}"] == {param_ref}, \\')
-                            lines.append(f'        f"{key} must match parameter {param_ref}, got {{STATE[\\"{key}\\"]}}"')
+                            lines.append(f'    assert STATE["{key}"] == {param_ref}')
                         else:
                             assertion = self._generate_assertion(key, value, "postcondition", state_check=True)
                             if assertion:
-                                lines.append(f'    # Postcondition: {key} {self._pattern_description(value)}')
                                 lines.append(f'    {assertion}')
                 
                 lines.append(f'    return result')
@@ -261,37 +307,31 @@ class CodeGenerator:
                 lines.append(f'    pass')
                 lines.append('')
         
-        # Add utility functions
-        lines.append('async def run(task: str) -> Any:')
-        lines.append('    """')
-        lines.append('    Run an AI agent to complete this task. Use f-string to pass in previous results.')
-        lines.append('    """')
-        lines.append('    # ... implementation omitted ...')
-        lines.append('    pass')
+        # Add utility functions (stub implementations for type checking)
+        lines.append('async def get_url() -> str:')
+        lines.append('    """Get the current URL from the browser."""')
+        lines.append('    raise NotImplementedError("Runtime implementation")')
         lines.append('')
-        lines.append('async def ask(prompt: str) -> str:')
-        lines.append('    """Ask AI a question. Use f-string to pass in previous results."""')
-        lines.append('    # ... implementation omitted ...')
-        lines.append('    pass')
+        lines.append('async def goto(url: str) -> Dict[str, Any]:')
+        lines.append('    """')
+        lines.append('    Navigate to a URL and update STATE via matching observe tool.')
+        lines.append('    Handles login/redirect detection automatically.')
+        lines.append('    """')
+        lines.append('    raise NotImplementedError("Runtime implementation")')
+        lines.append('')
+        lines.append('async def ai_exec(subtask: str, output_schema: Optional[Dict[str, Any]] = None) -> Any:')
+        lines.append('    """')
+        lines.append('    Execute an AI agent to complete a given subtask.')
+        lines.append('    Optionally provide output_schema for structured output.')
+        lines.append('    """')
+        lines.append('    raise NotImplementedError("Runtime implementation")')
+        lines.append('')
+        lines.append('async def ai_eval(expr: str) -> str:')
+        lines.append('    """Evaluate an expression by asking AI."""')
+        lines.append('    raise NotImplementedError("Runtime implementation")')
         lines.append('')
         
         return '\n'.join(lines)
-    
-    def _snake_to_pascal(self, snake_str: str) -> str:
-        """Convert snake_case to PascalCase."""
-        return ''.join(word.capitalize() for word in snake_str.split('_'))
-    
-    def _json_type_to_python(self, json_type: str) -> str:
-        """Convert JSON schema type to Python type hint."""
-        type_map = {
-            "string": "str",
-            "number": "float",
-            "integer": "int",
-            "boolean": "bool",
-            "array": "List[Any]",
-            "object": "Dict[str, Any]"
-        }
-        return type_map.get(json_type, "Any")
     
     def _pattern_description(self, value: Any) -> str:
         """Generate human-readable description of a state pattern."""
@@ -328,42 +368,50 @@ class CodeGenerator:
         
         # Handle None/null explicitly
         if pattern is None:
-            return f'assert {var_ref} is None, f"{var_name} must be None, got {{{var_ref}}}"'
+            return f'assert {var_ref} is None'
         
         # Handle non-string patterns (numbers, booleans, etc.)
         if not isinstance(pattern, str):
-            return f'assert {var_ref} == {json.dumps(pattern)}, f"{var_name} must be {json.dumps(pattern)}, got {{{var_ref}}}"'
+            return f'assert {var_ref} == {json.dumps(pattern)}'
         
         # Handle string patterns
         if pattern == "*":
             # Must be non-null
-            return f'assert {var_ref} is not None, "{var_name} must be non-null"'
+            return f'assert {var_ref} is not None'
         elif pattern == "":
             # Must be null/empty
-            return f'assert not {var_ref}, "{var_name} must be null/empty"'
+            return f'assert not {var_ref}'
         elif "|" in pattern:
             # Must be one of the options
             options = pattern.split("|")
             options_json = json.dumps(options)
-            return f'assert {var_ref} in {options_json}, f"{var_name} must be one of {options_json}, got {{{var_ref}}}"'
+            return f'assert {var_ref} in {options_json}'
         elif pattern.startswith("$"):
             # Handled separately in caller (needs context of params)
             return None
         else:
             # Concrete value
-            return f'assert {var_ref} == {json.dumps(pattern)}, f"{var_name} must be {json.dumps(pattern)}, got {{{var_ref}}}"'
+            return f'assert {var_ref} == {json.dumps(pattern)}'
     
-    def _check_candidate(self, code: str) -> tuple[bool, Optional[str]]:
+    def _check_candidate(self, code: str, initial_state: Optional[Dict[str, Any]] = None) -> tuple[bool, Optional[str]]:
         """
         Check if generated code is valid.
         
         Args:
             code: Generated Python code
+            initial_state: Optional initial state for CFG validation
         
         Returns:
             Tuple of (is_valid, error_message)
         """
-        return verify_code(code)
+        # Get definition code for mypy type checking
+        definition_code = self._build_definition_code()
+        return check_code_candidate(
+            code, 
+            agent=self.agent, 
+            initial_state=initial_state,
+            definition_code=definition_code
+        )
     
     def _compute_candidate_cost(self, code: str) -> float:
         """
@@ -378,7 +426,7 @@ class CodeGenerator:
         Returns:
             Cost score (lower is better)
         """
-        return float(len(code))
+        return compute_code_cost(code)
     
     def _extract_code_from_response(self, response: str) -> Optional[str]:
         """Extract Python code from markdown code blocks."""
@@ -399,7 +447,9 @@ class CodeGenerator:
         self,
         task: str,
         history: List[BaseMessage],
-        error: Optional[str] = None
+        error: Optional[str] = None,
+        initial_state: Optional[Dict[str, Any]] = None,
+        current_url: Optional[str] = None
     ) -> Optional[str]:
         """
         Generate Python code to complete the task.
@@ -411,13 +461,15 @@ class CodeGenerator:
             task: Task description
             history: Conversation history as list of BaseMessage (UserMessage, AssistantMessage, SystemMessage)
             error: Optional error from previous attempt (for first iteration)
+            initial_state: Optional initial STATE values to include in generated code
+            current_url: Optional current URL to provide context to code generator
         
         Returns:
             Generated code or None if generation failed
         """
         if self.num_candidates <= 1:
             # Single candidate generation
-            candidate = await self._generate_candidate(task, history, error)
+            candidate = await self._generate_candidate(task, history, error, initial_state, current_url)
             return candidate.code if candidate and candidate.is_valid else None
         
         # Parallel candidate generation
@@ -425,7 +477,7 @@ class CodeGenerator:
         
         # Launch parallel candidate generation tasks
         tasks = [
-            self._generate_candidate(task, history, error)
+            self._generate_candidate(task, history, error, initial_state, current_url)
             for _ in range(self.num_candidates)
         ]
         
@@ -466,7 +518,9 @@ class CodeGenerator:
         self,
         task: str,
         history: List[BaseMessage],
-        initial_error: Optional[str] = None
+        initial_error: Optional[str] = None,
+        initial_state: Optional[Dict[str, Any]] = None,
+        current_url: Optional[str] = None
     ) -> Optional[CodeCandidate]:
         """
         Generate a single code candidate with iterative refinement.
@@ -480,6 +534,8 @@ class CodeGenerator:
             task: Task description
             history: Conversation history from AgentExecutor (previous code execution attempts)
             initial_error: Optional error from previous attempt
+            initial_state: Optional initial STATE values to include in generated code
+            current_url: Optional current URL to provide context to code generator
         
         Returns:
             CodeCandidate or None if generation failed
@@ -493,7 +549,19 @@ class CodeGenerator:
         
         # Add system message for this code generation session
         messages.append(
-            SystemMessage(content="You are an expert in writing code that calls tools and programatically asks AI questions.")
+            SystemMessage(content=f"""You are an expert in writing code that calls tools and programatically asks AI questions.
+<examples>
+Here are examples of good code to generate. Use them as reference but never copy them directly.
+{EXAMPLE_CODE}
+</examples>
+<rules>
+{RULES}
+</rules>
+<instructions>
+Generate completion of the given code block to implement the TASK.
+If an error is reported, fix the previously generated code accordingly.
+</instructions>
+""")
         )
 
         if history:
@@ -506,33 +574,28 @@ class CodeGenerator:
             # Build prompt with XML tags
             prompt_parts = []
             
-            prompt_parts.append("<instructions>")
-            prompt_parts.append("Generate Python code to complete the TASK. You may use functions defined below.")
-            prompt_parts.append("</instructions>")
-            prompt_parts.append("")
-            
             if error:
-                prompt_parts.append("<previous_error>")
-                prompt_parts.append(f"The previously generated code failed with error: {error}")
-                prompt_parts.append("Fix the error and generate corrected code.")
-                prompt_parts.append("</previous_error>")
-                prompt_parts.append("")
+                prompt_parts.append(error)
             else:
-                prompt_parts.append("<example>")
-                prompt_parts.append(EXAMPLE_CODE.strip())
-                prompt_parts.append("</example>")
+                prompt_parts.append("```python")
+                prompt_parts.append(definition_code)
                 prompt_parts.append("")
-            
-            prompt_parts.append(f"<task>")
-            prompt_parts.append(f"TASK: {task}")
-            prompt_parts.append("</task>")
-            prompt_parts.append("")
-            
-            prompt_parts.append("```python")
-            prompt_parts.append(definition_code)
-            prompt_parts.append("")
-            prompt_parts.append("# YOUR CODE HERE")
-            # Note: We deliberately leave the code block open - the LLM will close it
+                
+                # Initialize STATE with initial values if provided
+                if initial_state:
+                    prompt_parts.append("# Initialize STATE with current values")
+                    state_init = ", ".join([f'"{k}": {repr(v)}' for k, v in initial_state.items()])
+                    prompt_parts.append(f"STATE.update({{{state_init}}})")
+                    prompt_parts.append("")
+                
+                # Show that we've already navigated to current URL
+                if current_url:
+                    prompt_parts.append(f'await goto("{current_url}")')
+                    prompt_parts.append("")
+                
+                prompt_parts.append("# TASK: " + task)
+                prompt_parts.append("# YOUR CODE HERE")
+                # Note: We deliberately leave the code block open - the LLM will close it
             
             prompt = '\n'.join(prompt_parts)
             
@@ -542,12 +605,7 @@ class CodeGenerator:
             # Generate code
             try:
                 logger.info(f"\n{'='*80}\nCODEGEN ITERATION {iteration + 1}/{self.max_iterations}\n{'='*80}")
-                # For the first iteration show full prompt; on subsequent iterations show only the error
-                if iteration == 0:
-                    logger.info(f"LLM INPUT (last message):\n{prompt}\n{'-'*80}")
-                else:
-                    err_text = error or "[no error provided]"
-                    logger.info(f"LLM INPUT (error only):\n{err_text}\n{'-'*80}")
+                logger.info(f"LLM INPUT (last message):\n{prompt}\n{'-'*80}")
                 
                 response = await self.llm.ainvoke(messages)
                 
@@ -563,8 +621,8 @@ class CodeGenerator:
                     messages.append(AssistantMessage(content=f"[Error: {error}]"))
                     continue
                 
-                # Check candidate validity
-                is_valid, validation_error = self._check_candidate(code)
+                # Check candidate validity with initial_state for CFG validation
+                is_valid, validation_error = self._check_candidate(code, initial_state)
                 
                 if is_valid:
                     # Compute cost
