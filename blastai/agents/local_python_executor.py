@@ -11,6 +11,8 @@ import logging
 from typing import Any, Dict, Callable, Optional
 from dataclasses import dataclass
 
+from .codecheck import verify_code
+
 logger = logging.getLogger(__name__)
 
 # Maximum iterations for loops to prevent infinite loops
@@ -24,49 +26,6 @@ class CodeOutput:
     logs: str
     is_final_answer: bool = False
     error: Optional[str] = None
-
-
-def verify_code(code: str) -> tuple[bool, str]:
-    """
-    Verify code is syntactically valid and meets basic safety requirements.
-    
-    Currently checks:
-    - Valid Python syntax
-    - No AsyncFunctionDef nodes (must use top-level await instead)
-    - No obvious infinite loops (simple heuristic check)
-    
-    Args:
-        code: Python code to verify
-        
-    Returns:
-        (is_valid, error_message) tuple
-    """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError as e:
-        return False, f"Syntax error at line {e.lineno}: {e.msg}"
-    
-    # Check for disallowed constructs
-    for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef):
-            return False, (
-                "AsyncFunctionDef not allowed. Use top-level 'await' statements instead. "
-                "All provided functions are already async - just call them with 'await function_name(args)' directly."
-            )
-        
-        # Check for suspicious infinite loops (while True without break)
-        if isinstance(node, ast.While):
-            # Check if condition is constant True
-            if isinstance(node.test, ast.Constant) and node.test.value is True:
-                # Check if there's any break statement in the body
-                has_break = any(
-                    isinstance(child, ast.Break)
-                    for child in ast.walk(node)
-                )
-                if not has_break:
-                    return False, "Detected 'while True' without break - possible infinite loop"
-    
-    return True, ""
 
 
 class LocalPythonExecutor:

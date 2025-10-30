@@ -50,7 +50,17 @@
         "properties": {
           "items": {
             "type": "array",
-            "description": "Array of category objects. Each object has a 'category' key with the category name as a string value."
+            "description": "Array of category objects. Each object has a 'category' key with the category name as a string value.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "description": "The category name (e.g., 'Ramen', 'Best Near Me')"
+                }
+              },
+              "required": ["category"]
+            }
           }
         },
         "required": [
@@ -252,8 +262,8 @@
       "type": "setFilter"
     },
     {
-      "name": "observe_site",
-      "title": "Observe Site",
+      "name": "observe_dashdish",
+      "title": "Observe DashDish",
       "description": "Observes the current site page and extracts the page type, selected restaurant name, and selected category if available.",
       "input_schema": {
         "type": "object",
@@ -265,7 +275,12 @@
         "properties": {
           "page": {
             "type": "string",
-            "description": "Type of the current page: 'list', 'detail', or 'other'."
+            "description": "Type of the current page: 'list', 'detail', or 'other'.",
+            "enum": [
+              "list",
+              "detail",
+              "other"
+            ]
           },
           "selectedRestaurant": {
             "type": [
