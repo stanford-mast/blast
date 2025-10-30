@@ -8,7 +8,7 @@ class BasicBlock:
     """Represents a basic block in the control flow graph."""
     bid: int
     stmts: List[ast.AST] = field(default_factory=list)
-    calls: List[Tuple[str, ast.Call]] = field(default_factory=list)  # (function_name, call_node)
+    calls: List[Tuple[str, ast.Call, int]] = field(default_factory=list)  # (function_name, call_node, comprehension_depth)
     prev: List[int] = field(default_factory=list)
     next: List[int] = field(default_factory=list)
     
@@ -27,6 +27,7 @@ class CFGBuilder(ast.NodeVisitor):
         self.start_block: Optional[BasicBlock] = None
         self.loop_stack: List[BasicBlock] = []
         self.in_comprehension = False
+        self.comprehension_depth = 0  # Track nesting of comprehensions
         
     def new_block(self) -> BasicBlock:
         """Create a new basic block."""
@@ -59,11 +60,11 @@ class CFGBuilder(ast.NodeVisitor):
             if isinstance(node.value, ast.Call):
                 func_name = self.get_function_name(node.value.func)
                 if func_name:
-                    self.curr_block.calls.append((func_name, node.value))
+                    self.curr_block.calls.append((func_name, node.value, self.comprehension_depth))
         elif isinstance(node, ast.Call):
             func_name = self.get_function_name(node.func)
             if func_name:
-                self.curr_block.calls.append((func_name, node))
+                self.curr_block.calls.append((func_name, node, self.comprehension_depth))
             # Check arguments for nested calls
             for arg in node.args:
                 self.extract_calls_from_node(arg)
@@ -102,6 +103,23 @@ class CFGBuilder(ast.NodeVisitor):
                 self.extract_calls_from_node(node.slice)
         elif isinstance(node, ast.Attribute):
             self.extract_calls_from_node(node.value)
+        elif isinstance(node, ast.ListComp):
+            # Visit comprehension to create loop structure
+            self.visit_ListComp(node)
+        elif isinstance(node, ast.SetComp):
+            # Visit comprehension to create loop structure
+            self.visit_SetComp(node)
+        elif isinstance(node, ast.DictComp):
+            # Visit comprehension to create loop structure
+            self.visit_DictComp(node)
+        elif isinstance(node, ast.GeneratorExp):
+            # Visit comprehension to create loop structure
+            self.visit_GeneratorExp(node)
+        elif isinstance(node, ast.JoinedStr):
+            # Extract calls from f-strings
+            for value in node.values:
+                if isinstance(value, ast.FormattedValue):
+                    self.extract_calls_from_node(value.value)
     
     def visit_Expr(self, node: ast.Expr):
         """Visit expression statement - check for function calls."""
@@ -299,49 +317,72 @@ class CFGBuilder(ast.NodeVisitor):
         self.curr_block = self.new_block()
     
     def visit_ListComp(self, node: ast.ListComp):
-        """Visit list comprehension."""
+        """Visit list comprehension - extract calls but don't create loop blocks."""
         old_comp = self.in_comprehension
         self.in_comprehension = True
-        # Extract calls from generators and element expression
+        # Each generator in the comprehension adds one level of depth
+        # E.g., [x for a in b for c in d] has 2 generators = depth 2
+        num_generators = len(node.generators)
+        self.comprehension_depth += num_generators
+        
+        # Extract calls from element expression and filters
+        # These calls will be in the current block, multiplied by current loop depth + comprehension depth
         self.extract_calls_from_node(node.elt)
         for gen in node.generators:
             self.extract_calls_from_node(gen.iter)
             for if_clause in gen.ifs:
                 self.extract_calls_from_node(if_clause)
+        
+        self.comprehension_depth -= num_generators
         self.in_comprehension = old_comp
     
     def visit_SetComp(self, node: ast.SetComp):
-        """Visit set comprehension."""
+        """Visit set comprehension - extract calls but don't create loop blocks."""
         old_comp = self.in_comprehension
         self.in_comprehension = True
+        num_generators = len(node.generators)
+        self.comprehension_depth += num_generators
+        
         self.extract_calls_from_node(node.elt)
         for gen in node.generators:
             self.extract_calls_from_node(gen.iter)
             for if_clause in gen.ifs:
                 self.extract_calls_from_node(if_clause)
+        
+        self.comprehension_depth -= num_generators
         self.in_comprehension = old_comp
     
     def visit_DictComp(self, node: ast.DictComp):
-        """Visit dict comprehension."""
+        """Visit dict comprehension - extract calls but don't create loop blocks."""
         old_comp = self.in_comprehension
         self.in_comprehension = True
+        num_generators = len(node.generators)
+        self.comprehension_depth += num_generators
+        
         self.extract_calls_from_node(node.key)
         self.extract_calls_from_node(node.value)
         for gen in node.generators:
             self.extract_calls_from_node(gen.iter)
             for if_clause in gen.ifs:
                 self.extract_calls_from_node(if_clause)
+        
+        self.comprehension_depth -= num_generators
         self.in_comprehension = old_comp
     
     def visit_GeneratorExp(self, node: ast.GeneratorExp):
-        """Visit generator expression."""
+        """Visit generator expression - extract calls but don't create loop blocks."""
         old_comp = self.in_comprehension
         self.in_comprehension = True
+        num_generators = len(node.generators)
+        self.comprehension_depth += num_generators
+        
         self.extract_calls_from_node(node.elt)
         for gen in node.generators:
             self.extract_calls_from_node(gen.iter)
             for if_clause in gen.ifs:
                 self.extract_calls_from_node(if_clause)
+        
+        self.comprehension_depth -= num_generators
         self.in_comprehension = old_comp
     
     def get_function_name(self, node: ast.AST) -> Optional[str]:
