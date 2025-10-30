@@ -8,7 +8,8 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Union
 
 from browser_use.llm.base import BaseChatModel
@@ -18,8 +19,19 @@ from .models import ToolExecutorType, SMCPTool
 from .codecheck import check_code_candidate
 from .codecost import compute_code_cost
 from .schema_utils import snake_to_pascal, json_type_to_python, generate_nested_pydantic_classes
+from .codefix import apply_code_fixes
+from .llm_streaming import stream_llm_call, StreamingTiming
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LLMTiming:
+    """Detailed timing information for a single LLM call."""
+    total_seconds: float
+    time_to_first_token: Optional[float] = None  # Time until first token arrives
+    tokens_per_second: Optional[float] = None     # Average token generation speed
+    total_tokens: Optional[int] = None            # Total tokens generated
 
 
 # Example code showing realistic patterns
@@ -61,15 +73,28 @@ result = ai_eval(f"Summary of {results} for whatever specific goal user had")
 
 RULES = """
 - Do not generate comments
+- Do not assume a user-provided term will exactly match an option; use ai_eval to find the closest match
 """
 
 @dataclass
 class CodeCandidate:
-    """A generated code candidate."""
+    """A generated code candidate with detailed timing breakdown."""
     code: str
     rank: int  # Lower is better
     is_valid: bool
     validation_error: Optional[str] = None
+    iterations_used: int = 0  # Number of iterations used to get valid code (0 if never valid)
+    
+    # Detailed timing breakdown
+    total_time: float = 0.0
+    llm_time: float = 0.0          # Total time spent in LLM calls
+    validation_time: float = 0.0   # Total time spent in validation
+    fix_time: float = 0.0          # Total time spent applying fixes
+    llm_timings: List[LLMTiming] = field(default_factory=list)  # Per-iteration LLM timings
+    
+    # Iteration failure tracking
+    total_iterations: int = 0      # Total iterations attempted (including failures)
+    failed_iterations: int = 0     # Number of iterations that failed validation
 
 
 class CodeGenerator:
@@ -112,6 +137,10 @@ class CodeGenerator:
         self.accept_cost_threshold = accept_cost_threshold
         self.min_candidates_for_comparison = min_candidates_for_comparison
         self.compare_cost_threshold = compare_cost_threshold
+        
+        # Cache for definition code CFG (built once, reused across iterations)
+        self._definition_code_cache: Optional[str] = None
+        self._definition_cfg_cache: Optional[tuple] = None  # (start_block, blocks)
     
     def _build_definition_code(self) -> str:
         """
@@ -530,6 +559,8 @@ class CodeGenerator:
         code execution attempts. Each iteration of refinement appends to a local
         message list.
         
+        Tracks detailed timing for LLM calls, validation, and fixes.
+        
         Args:
             task: Task description
             history: Conversation history from AgentExecutor (previous code execution attempts)
@@ -538,10 +569,24 @@ class CodeGenerator:
             current_url: Optional current URL to provide context to code generator
         
         Returns:
-            CodeCandidate or None if generation failed
+            CodeCandidate with detailed timing breakdown
         """
-        # Build definition code
+        candidate_start_time = time.time()
+        total_llm_time = 0.0
+        total_validation_time = 0.0
+        total_fix_time = 0.0
+        llm_timings: List[LLMTiming] = []
+        total_iterations = 0
+        failed_iterations = 0
+        
+        # Build definition code (and cache CFG for validation performance)
         definition_code = self._build_definition_code()
+        
+        # Cache definition code CFG if not already cached
+        if self._definition_code_cache != definition_code:
+            self._definition_code_cache = definition_code
+            self._definition_cfg_cache = None  # Invalidate cache
+            logger.debug("Definition code changed, CFG cache invalidated")
         
         # Initialize message list for this candidate
         # Start with the broader conversation history from executor
@@ -571,6 +616,8 @@ If an error is reported, fix the previously generated code accordingly.
         error = initial_error
         
         for iteration in range(self.max_iterations):
+            total_iterations += 1
+            
             # Build prompt with XML tags
             prompt_parts = []
             
@@ -607,12 +654,26 @@ If an error is reported, fix the previously generated code accordingly.
                 logger.info(f"\n{'='*80}\nCODEGEN ITERATION {iteration + 1}/{self.max_iterations}\n{'='*80}")
                 logger.info(f"LLM INPUT (last message):\n{prompt}\n{'-'*80}")
                 
-                response = await self.llm.ainvoke(messages)
+                # Call LLM with streaming and detailed timing
+                completion, streaming_timing = await stream_llm_call(self.llm, messages)
+                total_llm_time += streaming_timing.total_seconds
                 
-                logger.info(f"LLM OUTPUT:\n{response.completion}\n{'-'*80}")
+                # Convert StreamingTiming to LLMTiming for compatibility
+                llm_timing = LLMTiming(
+                    total_seconds=streaming_timing.total_seconds,
+                    time_to_first_token=streaming_timing.time_to_first_token,
+                    tokens_per_second=streaming_timing.tokens_per_second,
+                    total_tokens=streaming_timing.total_tokens
+                )
+                llm_timings.append(llm_timing)
+                
+                # Log with detailed timing breakdown
+                ttft_str = f"TTFT={streaming_timing.time_to_first_token:.2f}s, " if streaming_timing.time_to_first_token else ""
+                speed_str = f", {streaming_timing.tokens_per_second:.1f} tok/s" if streaming_timing.tokens_per_second else ""
+                logger.info(f"LLM OUTPUT (took {streaming_timing.total_seconds:.2f}s, {ttft_str}Gen={streaming_timing.generation_seconds:.2f}s{speed_str}):\n{completion}\n{'-'*80}")
                 
                 # Extract code from response
-                code = self._extract_code_from_response(response.completion)
+                code = self._extract_code_from_response(completion)
                 
                 if not code:
                     logger.error(f"No code block found in response (iteration {iteration + 1})")
@@ -621,22 +682,47 @@ If an error is reported, fix the previously generated code accordingly.
                     messages.append(AssistantMessage(content=f"[Error: {error}]"))
                     continue
                 
+                # Apply automated fixes before validation
+                fix_start = time.time()
+                fixed_code, was_fixed = apply_code_fixes(code, tools=self.agent.tools)
+                fix_elapsed = time.time() - fix_start
+                total_fix_time += fix_elapsed
+                
+                if was_fixed:
+                    logger.info(f"Applied automated fixes to code (took {fix_elapsed:.3f}s)")
+                    code = fixed_code
+                
                 # Check candidate validity with initial_state for CFG validation
+                validation_start = time.time()
                 is_valid, validation_error = self._check_candidate(code, initial_state)
+                validation_elapsed = time.time() - validation_start
+                total_validation_time += validation_elapsed
                 
                 if is_valid:
                     # Compute cost
                     cost = self._compute_candidate_cost(code)
+                    total_time = time.time() - candidate_start_time
                     logger.info(f"✓ VALID CODE GENERATED (cost: {cost}):\n```python\n{code}\n```\n{'='*80}")
+                    logger.info(f"Timing breakdown: Total={total_time:.2f}s, LLM={total_llm_time:.2f}s ({total_llm_time/total_time*100:.1f}%), Validation={total_validation_time:.2f}s ({total_validation_time/total_time*100:.1f}%), Fix={total_fix_time:.2f}s")
+                    logger.info(f"Iteration stats: {total_iterations} total, {failed_iterations} failed ({failed_iterations/total_iterations*100:.1f}% failure rate)")
                     return CodeCandidate(
                         code=code,
                         rank=cost,
                         is_valid=True,
-                        validation_error=None
+                        validation_error=None,
+                        iterations_used=iteration + 1,
+                        total_time=total_time,
+                        llm_time=total_llm_time,
+                        validation_time=total_validation_time,
+                        fix_time=total_fix_time,
+                        llm_timings=llm_timings,
+                        total_iterations=total_iterations,
+                        failed_iterations=failed_iterations
                     )
                 else:
                     # Invalid - prepare for next iteration
-                    logger.warning(f"✗ VALIDATION FAILED: {validation_error}")
+                    failed_iterations += 1
+                    logger.warning(f"✗ VALIDATION FAILED (took {validation_elapsed:.3f}s): {validation_error}")
                     logger.warning(f"Invalid code:\n```python\n{code}\n```")
                     error = validation_error
                     # Add assistant message and error feedback to conversation
@@ -649,8 +735,25 @@ If an error is reported, fix the previously generated code accordingly.
                 continue
         
         # Max iterations reached without valid code
+        total_time = time.time() - candidate_start_time
         logger.error(f"Failed to generate valid candidate after {self.max_iterations} iterations")
-        return None
+        logger.info(f"Timing breakdown: Total={total_time:.2f}s, LLM={total_llm_time:.2f}s ({total_llm_time/total_time*100:.1f}%), Validation={total_validation_time:.2f}s ({total_validation_time/total_time*100:.1f}%), Fix={total_fix_time:.2f}s")
+        logger.info(f"Iteration stats: {total_iterations} total, {failed_iterations} failed ({failed_iterations/total_iterations*100:.1f}% failure rate)")
+        # Return the last attempt even though it's invalid
+        return CodeCandidate(
+            code=code if 'code' in locals() else "",
+            rank=0.0,
+            is_valid=False,
+            validation_error=error if 'error' in locals() else "Max iterations reached",
+            iterations_used=0,  # Never became valid
+            total_time=total_time,
+            llm_time=total_llm_time,
+            validation_time=total_validation_time,
+            fix_time=total_fix_time,
+            llm_timings=llm_timings,
+            total_iterations=total_iterations,
+            failed_iterations=failed_iterations
+        )
 
 
 __all__ = ["CodeGenerator", "CodeCandidate", "EXAMPLE_CODE"]
