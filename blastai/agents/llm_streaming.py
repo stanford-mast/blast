@@ -64,10 +64,18 @@ async def stream_llm_call(
     """
     start_time = time.time()
     
-    # Try streaming if LLM supports it (OpenAI-based models)
+    # Check provider and use appropriate streaming implementation
+    provider = getattr(llm, 'provider', None)
+    
+    # Try streaming if LLM supports it
     if hasattr(llm, 'get_client') and hasattr(llm, 'model'):
         try:
-            return await _stream_openai(llm, messages, start_time)
+            if provider == 'groq':
+                # Use Groq-specific streaming
+                return await _stream_groq(llm, messages, start_time)
+            else:
+                # Default to OpenAI-compatible streaming
+                return await _stream_openai(llm, messages, start_time)
         except Exception as e:
             logger.warning(f"Streaming failed, falling back to non-streaming: {e}")
             # Fall through to non-streaming
@@ -94,44 +102,52 @@ async def stream_llm_call(
     return response.completion, timing
 
 
-async def _stream_openai(
+async def _stream_openai_compatible(
     llm: BaseChatModel,
     messages: list[BaseMessage],
-    start_time: float
+    start_time: float,
+    serializer_class,
+    provider_name: str = "OpenAI"
 ) -> Tuple[str, StreamingTiming]:
     """
-    Stream from OpenAI-compatible LLM.
+    Stream from OpenAI-compatible LLM (OpenAI, Groq, etc.).
+    
+    This handles any LLM that uses the OpenAI-style streaming API.
     
     Args:
         llm: LLM with get_client() method
         messages: List of conversation messages
         start_time: Time when the request started
+        serializer_class: Message serializer class (e.g., OpenAIMessageSerializer, GroqMessageSerializer)
+        provider_name: Name of provider for logging
         
     Returns:
         Tuple of (completion_text, timing_info)
     """
     client = llm.get_client()
     
-    # Serialize messages to OpenAI format
-    openai_messages = OpenAIMessageSerializer.serialize_messages(messages)
+    # Serialize messages using the appropriate serializer
+    serialized_messages = serializer_class.serialize_messages(messages)
     
-    # Build model parameters
+    # Build model parameters (common across OpenAI-compatible APIs)
     model_params = {}
     if hasattr(llm, 'temperature') and llm.temperature is not None:
         model_params['temperature'] = llm.temperature
-    if hasattr(llm, 'frequency_penalty') and llm.frequency_penalty is not None:
-        model_params['frequency_penalty'] = llm.frequency_penalty
-    if hasattr(llm, 'max_completion_tokens') and llm.max_completion_tokens is not None:
-        model_params['max_completion_tokens'] = llm.max_completion_tokens
     if hasattr(llm, 'top_p') and llm.top_p is not None:
         model_params['top_p'] = llm.top_p
     if hasattr(llm, 'seed') and llm.seed is not None:
         model_params['seed'] = llm.seed
     
+    # OpenAI-specific parameters
+    if hasattr(llm, 'frequency_penalty') and llm.frequency_penalty is not None:
+        model_params['frequency_penalty'] = llm.frequency_penalty
+    if hasattr(llm, 'max_completion_tokens') and llm.max_completion_tokens is not None:
+        model_params['max_completion_tokens'] = llm.max_completion_tokens
+    
     # Create streaming request
     stream = await client.chat.completions.create(
         model=llm.model,
-        messages=openai_messages,
+        messages=serialized_messages,
         stream=True,  # Enable streaming!
         **model_params
     )
@@ -145,7 +161,7 @@ async def _stream_openai(
         # Measure time to first token
         if first_token_time is None and chunk.choices and chunk.choices[0].delta.content:
             first_token_time = time.time() - start_time
-            logger.debug(f"TTFT: {first_token_time:.3f}s")
+            logger.debug(f"{provider_name} TTFT: {first_token_time:.3f}s")
         
         # Collect content
         if chunk.choices and chunk.choices[0].delta.content:
@@ -160,7 +176,6 @@ async def _stream_openai(
     generation_time = total_time - first_token_time if first_token_time else total_time
     
     # Rough token estimate (4 chars per token is typical for English)
-    # This is approximate - OpenAI doesn't provide token count in streaming
     estimated_tokens = total_chars // 4
     tokens_per_sec = estimated_tokens / generation_time if generation_time > 0 else None
     
@@ -173,9 +188,37 @@ async def _stream_openai(
         total_characters=total_chars
     )
     
-    logger.debug(f"Streaming complete: TTFT={first_token_time:.2f}s, Gen={generation_time:.2f}s, Speed={tokens_per_sec:.1f} tok/s")
+    ttft_str = f"{first_token_time:.2f}s" if first_token_time else "N/A"
+    speed_str = f"{tokens_per_sec:.1f} tok/s" if tokens_per_sec else "N/A"
+    logger.debug(f"{provider_name} streaming complete: TTFT={ttft_str}, Gen={generation_time:.2f}s, Speed={speed_str}")
     
     return completion, timing
 
 
+async def _stream_openai(
+    llm: BaseChatModel,
+    messages: list[BaseMessage],
+    start_time: float
+) -> Tuple[str, StreamingTiming]:
+    """Stream from OpenAI LLM."""
+    return await _stream_openai_compatible(
+        llm, messages, start_time,
+        OpenAIMessageSerializer,
+        "OpenAI"
+    )
+
+
+async def _stream_groq(
+    llm: BaseChatModel,
+    messages: list[BaseMessage],
+    start_time: float
+) -> Tuple[str, StreamingTiming]:
+    """Stream from Groq LLM."""
+    from browser_use.llm.groq.serializer import GroqMessageSerializer
+    
+    return await _stream_openai_compatible(
+        llm, messages, start_time,
+        GroqMessageSerializer,
+        "Groq"
+    )
 __all__ = ["stream_llm_call", "StreamingTiming"]

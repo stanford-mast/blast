@@ -89,16 +89,18 @@ class AgentExecutor:
     
     def _create_llm_from_env(self) -> BaseChatModel:
         """Create LLM from environment variables."""
-        # Import here to avoid circular dependencies
-        from browser_use.llm.openai.chat import ChatOpenAI
+        from .llm_factory import LLMFactory
         
-        api_key = os.getenv("OPENAI_API_KEY")
-        model = os.getenv("OPENAI_MODEL", "gpt-4.1")
+        # Use LLMFactory to support multiple providers
+        # Looks for BLASTAI_MODEL, BLASTAI_PROVIDER, etc.
+        # Falls back to OPENAI_MODEL for backwards compatibility
+        model = os.getenv("BLASTAI_MODEL") or os.getenv("OPENAI_MODEL", "gpt-4.1")
+        provider = os.getenv("BLASTAI_PROVIDER")  # Optional explicit provider
         
-        return ChatOpenAI(
-            model=model,
-            api_key=api_key,
-            temperature=0.5 # non-zero temperature for variation
+        return LLMFactory.create_llm(
+            model_name=model,
+            provider=provider,
+            temperature=0.5  # non-zero temperature for variation
         )
     
     def _create_browser(self):
