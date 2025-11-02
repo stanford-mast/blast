@@ -36,8 +36,8 @@ sys.path.insert(0, str(project_root))
 
 from blastai.agents import Agent
 from blastai.agents.codegen import CodeGenerator, CodeCandidate
+from blastai.agents.llm_factory import LLMFactory
 from browser_use.llm.base import BaseChatModel
-from browser_use.llm.openai.chat import ChatOpenAI
 
 
 logger = logging.getLogger(__name__)
@@ -76,9 +76,22 @@ class CandidateMetrics:
 
 
 @dataclass
+class ExecutionResult:
+    """Result of executing a generated code candidate."""
+    candidate_id: int
+    candidate_type: str  # 'lowest_cost', 'highest_cost'
+    success: bool
+    execution_latency_seconds: float
+    num_actions: int
+    error: str = ""
+    result: str = ""
+
+
+@dataclass
 class CodegenEvaluationResult:
     """Result of a single codegen evaluation run."""
     task_id: str
+    model_name: str
     run_number: int
     num_candidates: int
     
@@ -86,6 +99,10 @@ class CodegenEvaluationResult:
     total_latency_seconds: float
     num_valid: int
     num_invalid: int
+    
+    # Codegen timing statistics
+    fastest_candidate_time: float  # Time to generate fastest candidate
+    slowest_candidate_time: float  # Time to generate slowest candidate
     
     # Cost statistics
     cost_range_min: float
@@ -111,17 +128,24 @@ class CodegenEvaluationResult:
     failed_iterations_all_candidates: int  # Sum of all failed iterations
     overall_iteration_failure_rate: float  # Percentage of all iterations that failed
     
-    # All candidates
+    # All candidates (required field)
     all_candidates: List[CandidateMetrics]
     
+    # Execution results (if --execute was enabled) - optional fields must come last
+    lowest_cost_execution: Optional[ExecutionResult] = None
+    highest_cost_execution: Optional[ExecutionResult] = None
+    
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             'task_id': self.task_id,
+            'model_name': self.model_name,
             'run_number': self.run_number,
             'num_candidates': self.num_candidates,
             'total_latency_seconds': self.total_latency_seconds,
             'num_valid': self.num_valid,
             'num_invalid': self.num_invalid,
+            'fastest_candidate_time': self.fastest_candidate_time,
+            'slowest_candidate_time': self.slowest_candidate_time,
             'cost_range_min': self.cost_range_min,
             'cost_range_max': self.cost_range_max,
             'cost_mean': self.cost_mean,
@@ -133,18 +157,51 @@ class CodegenEvaluationResult:
             'fastest_candidate': self.fastest_candidate.to_dict(),
             'valid_on_iteration': self.valid_on_iteration,
             'never_valid_count': self.never_valid_count,
+            'total_iterations_all_candidates': self.total_iterations_all_candidates,
+            'failed_iterations_all_candidates': self.failed_iterations_all_candidates,
+            'overall_iteration_failure_rate': self.overall_iteration_failure_rate,
             'all_candidates': [c.to_dict() for c in self.all_candidates]
         }
+        
+        if self.lowest_cost_execution:
+            data['lowest_cost_execution'] = {
+                'candidate_id': self.lowest_cost_execution.candidate_id,
+                'candidate_type': self.lowest_cost_execution.candidate_type,
+                'success': self.lowest_cost_execution.success,
+                'execution_latency_seconds': self.lowest_cost_execution.execution_latency_seconds,
+                'num_actions': self.lowest_cost_execution.num_actions,
+                'error': self.lowest_cost_execution.error,
+                'result': self.lowest_cost_execution.result
+            }
+        
+        if self.highest_cost_execution:
+            data['highest_cost_execution'] = {
+                'candidate_id': self.highest_cost_execution.candidate_id,
+                'candidate_type': self.highest_cost_execution.candidate_type,
+                'success': self.highest_cost_execution.success,
+                'execution_latency_seconds': self.highest_cost_execution.execution_latency_seconds,
+                'num_actions': self.highest_cost_execution.num_actions,
+                'error': self.highest_cost_execution.error,
+                'result': self.highest_cost_execution.result
+            }
+        
+        return data
     
     def print_summary(self):
         """Print human-readable summary."""
         print(f"\n{'='*80}")
-        print(f"CODEGEN EVALUATION: {self.task_id} (Run {self.run_number})")
+        print(f"CODEGEN EVALUATION: {self.task_id} (Run {self.run_number}, Model: {self.model_name})")
         print(f"{'='*80}")
         print(f"Candidates: {self.num_candidates}")
         print(f"Valid: {self.num_valid} ({self.num_valid/self.num_candidates*100:.1f}%)")
         print(f"Invalid: {self.num_invalid} ({self.num_invalid/self.num_candidates*100:.1f}%)")
         print(f"Total Time: {self.total_latency_seconds:.2f}s")
+        print()
+        
+        print("GENERATION TIMING:")
+        print(f"  Fastest candidate: {self.fastest_candidate_time:.2f}s")
+        print(f"  Slowest candidate: {self.slowest_candidate_time:.2f}s")
+        print(f"  Range: {self.slowest_candidate_time - self.fastest_candidate_time:.2f}s")
         print()
         
         print("COST STATISTICS:")
@@ -196,6 +253,38 @@ class CodegenEvaluationResult:
         print(f"  (This shows how often the LLM generates invalid code)")
         print()
         
+        # Print execution results if available
+        if self.lowest_cost_execution or self.highest_cost_execution:
+            print(f"{'='*80}")
+            print("EXECUTION RESULTS:")
+            print(f"{'='*80}")
+            
+            if self.lowest_cost_execution:
+                exec_result = self.lowest_cost_execution
+                status = "✓ Success" if exec_result.success else "✗ Failed"
+                print(f"\nLOWEST COST CANDIDATE (Cost: {self.lowest_cost_candidate.cost:.2f}s):")
+                print(f"  {status}")
+                print(f"  Execution Time: {exec_result.execution_latency_seconds:.2f}s")
+                print(f"  Actions: {exec_result.num_actions}")
+                if exec_result.error:
+                    print(f"  Error: {exec_result.error}")
+                if exec_result.result:
+                    print(f"  Result: {exec_result.result[:200]}...")
+            
+            if self.highest_cost_execution:
+                exec_result = self.highest_cost_execution
+                status = "✓ Success" if exec_result.success else "✗ Failed"
+                print(f"\nHIGHEST COST CANDIDATE (Cost: {self.highest_cost_candidate.cost:.2f}s):")
+                print(f"  {status}")
+                print(f"  Execution Time: {exec_result.execution_latency_seconds:.2f}s")
+                print(f"  Actions: {exec_result.num_actions}")
+                if exec_result.error:
+                    print(f"  Error: {exec_result.error}")
+                if exec_result.result:
+                    print(f"  Result: {exec_result.result[:200]}...")
+            
+            print()
+        
         print(f"{'='*80}")
         print("LOWEST COST CANDIDATE:")
         print(f"Cost: {self.lowest_cost_candidate.cost:.2f}s, Latency: {self.lowest_cost_candidate.latency_seconds:.2f}s")
@@ -232,24 +321,20 @@ class CodegenEvaluationResult:
 
 @dataclass
 class CodegenEvaluationSummary:
-    """Summary across multiple runs."""
+    """Summary across multiple runs and models."""
     task_ids: List[str]
+    models: List[str]
     results: List[CodegenEvaluationResult]
     
-    # Aggregated stats across all runs
-    avg_valid_rate: float
-    avg_cost_mean: float
-    avg_latency_mean: float
-    avg_valid_on_iteration: Dict[int, float]  # iteration -> avg percentage
+    # Per-model aggregated stats
+    model_stats: Dict[str, Dict[str, Any]]  # model -> stats
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             'task_ids': self.task_ids,
+            'models': self.models,
             'results': [r.to_dict() for r in self.results],
-            'avg_valid_rate': self.avg_valid_rate,
-            'avg_cost_mean': self.avg_cost_mean,
-            'avg_latency_mean': self.avg_latency_mean,
-            'avg_valid_on_iteration': self.avg_valid_on_iteration
+            'model_stats': self.model_stats
         }
     
     def print_summary(self):
@@ -258,19 +343,33 @@ class CodegenEvaluationSummary:
         print(f"CODEGEN EVALUATION SUMMARY")
         print(f"{'='*80}")
         print(f"Tasks: {', '.join(self.task_ids)}")
+        print(f"Models: {', '.join(self.models)}")
         print(f"Total Runs: {len(self.results)}")
         print()
         
-        print("AGGREGATED STATISTICS:")
-        print(f"  Avg Valid Rate: {self.avg_valid_rate*100:.1f}%")
-        print(f"  Avg Cost: {self.avg_cost_mean:.2f}s")
-        print(f"  Avg Latency: {self.avg_latency_mean:.2f}s")
-        print()
-        
-        print("VALIDATION SUCCESS BY ITERATION:")
-        for iteration in sorted(self.avg_valid_on_iteration.keys()):
-            pct = self.avg_valid_on_iteration[iteration]
-            print(f"  Iteration {iteration}: {pct*100:.1f}%")
+        # Print per-model statistics
+        for model in self.models:
+            stats = self.model_stats.get(model, {})
+            print(f"{'='*80}")
+            print(f"MODEL: {model}")
+            print(f"{'='*80}")
+            print(f"  Overall Iteration Failure Rate: {stats.get('avg_iteration_failure_rate', 0):.1f}%")
+            print(f"  Time to Fastest Candidate: {stats.get('avg_fastest_time', 0):.2f}s")
+            print(f"  Time to Slowest Candidate: {stats.get('avg_slowest_time', 0):.2f}s")
+            print(f"  Avg Valid Rate: {stats.get('avg_valid_rate', 0)*100:.1f}%")
+            print(f"  Avg Cost Mean: {stats.get('avg_cost_mean', 0):.2f}s")
+            
+            # Execution results if available
+            if stats.get('has_execution_results'):
+                print()
+                print("  EXECUTION RESULTS:")
+                lowest = stats.get('avg_lowest_cost_execution_time', 0)
+                highest = stats.get('avg_highest_cost_execution_time', 0)
+                print(f"    Lowest Cost Execution: {lowest:.2f}s")
+                print(f"    Highest Cost Execution: {highest:.2f}s")
+                print(f"    Delta: {highest - lowest:.2f}s ({(highest/lowest - 1)*100:.1f}% slower)")
+            
+            print()
         
         print(f"{'='*80}\n")
 
@@ -396,13 +495,123 @@ async def generate_candidate_with_metrics(
     )
 
 
+async def execute_candidate(
+    candidate: CandidateMetrics,
+    candidate_type: str,
+    task_data: Dict[str, Any],
+    agent: Agent,
+    llm: BaseChatModel
+) -> ExecutionResult:
+    """
+    Execute a code candidate and measure its performance.
+    
+    Args:
+        candidate: The candidate to execute
+        candidate_type: 'lowest_cost' or 'highest_cost'
+        task_data: Task data with initial_url and goal
+        agent: Agent with tools
+        llm: LLM for code generation (not used, but needed for executor)
+        
+    Returns:
+        ExecutionResult with execution metrics
+    """
+    from blastai.agents import AgentExecutor
+    from blastai.agents.codegen import CodeGenerator, CodeCandidate
+    
+    print(f"\n{'='*60}")
+    print(f"EXECUTING {candidate_type.upper()} CANDIDATE")
+    print(f"{'='*60}")
+    print(f"Estimated Cost: {candidate.cost:.2f}s")
+    print(f"Code:\n```python\n{candidate.code}\n```")
+    print()
+    
+    # Create a custom executor with a mocked code generator that returns our pre-generated code
+    executor = AgentExecutor(agent, llm=llm)
+    
+    # Create a mock CodeGenerator that returns our pre-selected candidate
+    class MockCodeGenerator:
+        async def generate_code(self, task, history, error=None, initial_state=None, current_url=None):
+            # Return our pre-generated code wrapped in a CodeCandidate
+            return CodeCandidate(
+                code=candidate.code,
+                rank=candidate.cost,
+                is_valid=True,
+                iterations_used=0,
+                validation_error=None,
+                llm_time=0,
+                validation_time=0,
+                fix_time=0,
+                total_iterations=0,
+                failed_iterations=0,
+                llm_timings=[]
+            )
+    
+    # Inject the mock generator
+    executor.code_generator = MockCodeGenerator()
+    
+    initial_url = task_data.get('initial_url')
+    task = task_data.get('goal')
+    
+    start_time = time.time()
+    num_actions = 0
+    success = False
+    error = ""
+    result_str = ""
+    
+    try:
+        # Execute in code mode - will use our pre-generated code
+        result = await executor.run(
+            task,
+            mode='code',
+            initial_url=initial_url
+        )
+        
+        # Extract metrics
+        if result and hasattr(result, 'number_of_steps'):
+            num_actions = result.number_of_steps()
+        else:
+            num_actions = 0
+        
+        if result and hasattr(result, 'final_result'):
+            final_result = result.final_result()
+            result_str = final_result if final_result else str(result)
+        else:
+            result_str = str(result)
+        
+        success = True
+        print(f"  ✓ Success in {time.time() - start_time:.2f}s ({num_actions} steps)")
+        
+    except Exception as e:
+        error = str(e)
+        print(f"  ✗ Failed: {error}")
+        import traceback
+        traceback.print_exc()
+        
+    finally:
+        await executor.cleanup()
+    
+    execution_time = time.time() - start_time
+    
+    return ExecutionResult(
+        candidate_id=candidate.candidate_id,
+        candidate_type=candidate_type,
+        success=success,
+        execution_latency_seconds=execution_time,
+        num_actions=num_actions,
+        error=error,
+        result=result_str
+    )
+
+
 async def evaluate_codegen(
     task_id: str,
     task_data: Dict[str, Any],
     agent: Agent,
     llm: BaseChatModel,
     num_candidates: int,
-    run_number: int
+    run_number: int,
+    model_name: str,
+    execute: bool = False
 ) -> CodegenEvaluationResult:
     """
     Evaluate code generation with multiple candidates.
@@ -414,12 +623,14 @@ async def evaluate_codegen(
         llm: LLM for code generation
         num_candidates: Number of candidates to generate
         run_number: Run number
+        model_name: Name of the model being evaluated
+        execute: Whether to execute the best/worst candidates
         
     Returns:
         CodegenEvaluationResult with detailed metrics
     """
     print(f"\n{'='*80}")
-    print(f"EVALUATING CODEGEN: {task_id} (Run {run_number})")
+    print(f"EVALUATING CODEGEN: {task_id} (Run {run_number}, Model: {model_name})")
     print(f"Generating {num_candidates} candidates in parallel...")
     print(f"{'='*80}")
     
@@ -476,6 +687,10 @@ async def evaluate_codegen(
     
     fastest = min(all_metrics, key=lambda m: m.latency_seconds)
     
+    # Generation timing statistics
+    fastest_time = min(latencies)
+    slowest_time = max(latencies)
+    
     # Validation statistics
     valid_on_iteration = {}
     for m in all_metrics:
@@ -489,13 +704,43 @@ async def evaluate_codegen(
     failed_iterations_all = sum(m.failed_iterations for m in all_metrics)
     overall_failure_rate = (failed_iterations_all / total_iterations_all * 100) if total_iterations_all > 0 else 0
     
+    # Execute candidates if requested
+    lowest_cost_exec = None
+    highest_cost_exec = None
+    
+    if execute and valid_candidates:
+        print(f"\n{'='*80}")
+        print("EXECUTING CANDIDATES")
+        print(f"{'='*80}")
+        
+        # Execute lowest cost candidate
+        lowest_cost_exec = await execute_candidate(
+            lowest_cost,
+            'lowest_cost',
+            task_data,
+            agent,
+            llm
+        )
+        
+        # Execute highest cost candidate
+        highest_cost_exec = await execute_candidate(
+            highest_cost,
+            'highest_cost',
+            task_data,
+            agent,
+            llm
+        )
+    
     result = CodegenEvaluationResult(
         task_id=task_id,
+        model_name=model_name,
         run_number=run_number,
         num_candidates=num_candidates,
         total_latency_seconds=total_latency,
         num_valid=num_valid,
         num_invalid=num_invalid,
+        fastest_candidate_time=fastest_time,
+        slowest_candidate_time=slowest_time,
         cost_range_min=cost_min,
         cost_range_max=cost_max,
         cost_mean=cost_mean,
@@ -510,6 +755,8 @@ async def evaluate_codegen(
         total_iterations_all_candidates=total_iterations_all,
         failed_iterations_all_candidates=failed_iterations_all,
         overall_iteration_failure_rate=overall_failure_rate,
+        lowest_cost_execution=lowest_cost_exec,
+        highest_cost_execution=highest_cost_exec,
         all_candidates=all_metrics
     )
     
@@ -534,7 +781,7 @@ async def main():
         "--runs",
         type=int,
         default=1,
-        help="Number of evaluation runs (default: 1)"
+        help="Number of evaluation runs per model (default: 1)"
     )
     parser.add_argument(
         "--tools",
@@ -552,10 +799,15 @@ async def main():
         default=None
     )
     parser.add_argument(
-        "--model",
-        type=str,
-        default="gpt-4o",
-        help="LLM model to use for code generation (default: gpt-4o)"
+        "--models",
+        nargs='+',
+        default=["gpt-4o"],
+        help="LLM models to use for code generation (default: gpt-4o). Can specify multiple."
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Execute the lowest and highest cost candidates"
     )
     
     args = parser.parse_args()
@@ -599,63 +851,102 @@ async def main():
         print("Using agent without tools")
         agent = Agent(description="", tools=[])
     
-    # Create LLM with temperature for variation between candidates
-    # Using temperature=1.0 (default) to get diverse candidates
-    llm = ChatOpenAI(model=args.model, temperature=1.0)
-    
-    # Run evaluations
+    # Run evaluations for each model
     all_results = []
     
-    for run_num in range(args.runs):
-        result = await evaluate_codegen(
-            task_id=task_id,
-            task_data=task_data,
-            agent=agent,
-            llm=llm,
-            num_candidates=args.candidates,
-            run_number=run_num + 1
-        )
+    for model_name in args.models:
+        print(f"\n{'='*80}")
+        print(f"EVALUATING MODEL: {model_name}")
+        print(f"{'='*80}")
         
-        result.print_summary()
-        all_results.append(result)
-    
-    # Calculate aggregated statistics
-    if len(all_results) > 1:
-        avg_valid_rate = sum(r.num_valid / r.num_candidates for r in all_results) / len(all_results)
-        avg_cost_mean = sum(r.cost_mean for r in all_results) / len(all_results)
-        avg_latency_mean = sum(r.latency_mean for r in all_results) / len(all_results)
+        # Create LLM with temperature for variation between candidates
+        # Using temperature=1.0 (default) to get diverse candidates
+        # LLMFactory auto-detects provider from model name
+        llm = LLMFactory.create_llm(model_name, temperature=1.0)
         
-        # Aggregate validation statistics
-        all_iterations = set()
-        for r in all_results:
-            all_iterations.update(r.valid_on_iteration.keys())
-        
-        avg_valid_on_iteration = {}
-        for iteration in all_iterations:
-            total_pct = sum(
-                r.valid_on_iteration.get(iteration, 0) / r.num_candidates
-                for r in all_results
+        for run_num in range(args.runs):
+            result = await evaluate_codegen(
+                task_id=task_id,
+                task_data=task_data,
+                agent=agent,
+                llm=llm,
+                num_candidates=args.candidates,
+                run_number=run_num + 1,
+                model_name=model_name,
+                execute=args.execute
             )
-            avg_valid_on_iteration[iteration] = total_pct / len(all_results)
+            
+            result.print_summary()
+            all_results.append(result)
+    
+    # Calculate aggregated statistics per model
+    if len(all_results) > 1:
+        # Group results by model
+        models = list(set([r.model_name for r in all_results]))
+        model_stats = {}
+        
+        for model in models:
+            model_results = [r for r in all_results if r.model_name == model]
+            
+            # Calculate statistics for this model
+            avg_valid_rate = sum(r.num_valid / r.num_candidates for r in model_results) / len(model_results)
+            avg_cost_mean = sum(r.cost_mean for r in model_results) / len(model_results)
+            avg_iteration_failure_rate = sum(r.overall_iteration_failure_rate for r in model_results) / len(model_results)
+            avg_fastest_time = sum(r.fastest_candidate_time for r in model_results) / len(model_results)
+            avg_slowest_time = sum(r.slowest_candidate_time for r in model_results) / len(model_results)
+            
+            stats = {
+                'avg_valid_rate': avg_valid_rate,
+                'avg_cost_mean': avg_cost_mean,
+                'avg_iteration_failure_rate': avg_iteration_failure_rate,
+                'avg_fastest_time': avg_fastest_time,
+                'avg_slowest_time': avg_slowest_time
+            }
+            
+            # Add execution results if available
+            exec_results = [r for r in model_results if r.lowest_cost_execution is not None]
+            if exec_results:
+                avg_lowest_exec = sum(r.lowest_cost_execution.execution_latency_seconds for r in exec_results) / len(exec_results)
+                avg_highest_exec = sum(r.highest_cost_execution.execution_latency_seconds for r in exec_results) / len(exec_results)
+                stats['has_execution_results'] = True
+                stats['avg_lowest_cost_execution_time'] = avg_lowest_exec
+                stats['avg_highest_cost_execution_time'] = avg_highest_exec
+            else:
+                stats['has_execution_results'] = False
+            
+            model_stats[model] = stats
         
         summary = CodegenEvaluationSummary(
             task_ids=[task_id],
+            models=models,
             results=all_results,
-            avg_valid_rate=avg_valid_rate,
-            avg_cost_mean=avg_cost_mean,
-            avg_latency_mean=avg_latency_mean,
-            avg_valid_on_iteration=avg_valid_on_iteration
+            model_stats=model_stats
         )
         
         summary.print_summary()
     else:
+        # Single result
+        model = all_results[0].model_name
+        stats = {
+            'avg_valid_rate': all_results[0].num_valid / all_results[0].num_candidates,
+            'avg_cost_mean': all_results[0].cost_mean,
+            'avg_iteration_failure_rate': all_results[0].overall_iteration_failure_rate,
+            'avg_fastest_time': all_results[0].fastest_candidate_time,
+            'avg_slowest_time': all_results[0].slowest_candidate_time
+        }
+        
+        if all_results[0].lowest_cost_execution:
+            stats['has_execution_results'] = True
+            stats['avg_lowest_cost_execution_time'] = all_results[0].lowest_cost_execution.execution_latency_seconds
+            stats['avg_highest_cost_execution_time'] = all_results[0].highest_cost_execution.execution_latency_seconds
+        else:
+            stats['has_execution_results'] = False
+        
         summary = CodegenEvaluationSummary(
             task_ids=[task_id],
+            models=[model],
             results=all_results,
-            avg_valid_rate=all_results[0].num_valid / all_results[0].num_candidates,
-            avg_cost_mean=all_results[0].cost_mean,
-            avg_latency_mean=all_results[0].latency_mean,
-            avg_valid_on_iteration={k: v/all_results[0].num_candidates for k, v in all_results[0].valid_on_iteration.items()}
+            model_stats={model: stats}
         )
     
     # Save to file (append to existing results or create new)

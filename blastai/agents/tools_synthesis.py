@@ -521,15 +521,15 @@ HTML:
 {current_html}"""
                     
                     # Ask the LLM - create a fresh instance to avoid state issues
-                    from browser_use.llm.openai.chat import ChatOpenAI
+                    from .llm_factory import LLMFactory
                     
-                    api_key = os.getenv("OPENAI_API_KEY")
-                    model = os.getenv("OPENAI_MODEL", "gpt-4.1")
+                    model = os.getenv("BLASTAI_MODEL") or os.getenv("OPENAI_MODEL", "gpt-4.1")
+                    provider = os.getenv("BLASTAI_PROVIDER")
                     
                     # Create a dedicated LLM instance for this ask_html call
-                    ask_html_llm = ChatOpenAI(
-                        model=model,
-                        api_key=api_key,
+                    ask_html_llm = LLMFactory.create_llm(
+                        model_name=model,
+                        provider=provider,
                         temperature=0  # Deterministic for consistency
                     )
                     

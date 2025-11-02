@@ -7,6 +7,7 @@ from .executor import AgentExecutor
 from .coderun import create_python_executor
 from .codecheck import verify_code, check_code_candidate
 from .codecost import compute_code_cost
+from .llm_factory import LLMFactory
 
 __all__ = [
     "Agent", 
@@ -18,5 +19,6 @@ __all__ = [
     "create_python_executor",
     "verify_code",
     "check_code_candidate",
-    "compute_code_cost"
+    "compute_code_cost",
+    "LLMFactory",
 ]

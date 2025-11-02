@@ -668,9 +668,11 @@ If an error is reported, fix the previously generated code accordingly.
                 llm_timings.append(llm_timing)
                 
                 # Log with detailed timing breakdown
-                ttft_str = f"TTFT={streaming_timing.time_to_first_token:.2f}s, " if streaming_timing.time_to_first_token else ""
-                speed_str = f", {streaming_timing.tokens_per_second:.1f} tok/s" if streaming_timing.tokens_per_second else ""
-                logger.info(f"LLM OUTPUT (took {streaming_timing.total_seconds:.2f}s, {ttft_str}Gen={streaming_timing.generation_seconds:.2f}s{speed_str}):\n{completion}\n{'-'*80}")
+                # Handle None values gracefully in format strings
+                ttft_str = f"TTFT={streaming_timing.time_to_first_token:.2f}s, " if streaming_timing.time_to_first_token is not None else ""
+                gen_time = streaming_timing.generation_seconds if streaming_timing.generation_seconds is not None else 0.0
+                speed_str = f", {streaming_timing.tokens_per_second:.1f} tok/s" if streaming_timing.tokens_per_second is not None else ""
+                logger.info(f"LLM OUTPUT (took {streaming_timing.total_seconds:.2f}s, {ttft_str}Gen={gen_time:.2f}s{speed_str}):\n{completion}\n{'-'*80}")
                 
                 # Extract code from response
                 code = self._extract_code_from_response(completion)
