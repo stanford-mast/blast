@@ -131,6 +131,7 @@ class CoreTool(Tool):
     - remove_smcp_tool: Remove an SMCP tool
     - list_smcp_tools: List all SMCP tools
     - ask_html: Query page HTML for selectors/structure guidance
+    - ask_human_cli: Ask for human assistance via CLI stdin
     """
     
     # Override parent fields with defaults (only name is required)
@@ -142,7 +143,7 @@ class CoreTool(Tool):
     
     def __post_init__(self):
         """Validate CoreTool name."""
-        valid_names = ["update_smcp_tool", "remove_smcp_tool", "list_smcp_tools", "ask_html"]
+        valid_names = ["update_smcp_tool", "remove_smcp_tool", "list_smcp_tools", "ask_html", "ask_human_cli"]
         if self.name not in valid_names:
             raise ValueError(f"CoreTool name must be one of {valid_names}, got {self.name}")
     
@@ -195,7 +196,7 @@ class Agent:
         return None
     
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize to dictionary."""
+        """Serialize agent to dictionary (includes description, tools, settings)."""
         return {
             "description": self.description,
             "tools": [tool.to_dict() for tool in self.tools],
@@ -204,7 +205,7 @@ class Agent:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Agent':
-        """Deserialize from dictionary."""
+        """Deserialize agent from dictionary."""
         tools = [Tool.from_dict(tool_data) for tool_data in data.get("tools", [])]
         return cls(
             description=data.get("description", ""),
@@ -213,16 +214,56 @@ class Agent:
         )
     
     def to_json(self, filepath: str):
-        """Save agent to JSON file."""
+        """Save complete agent to JSON file (description, tools, settings)."""
         with open(filepath, 'w') as f:
             json.dump(self.to_dict(), f, indent=2)
     
     @classmethod
     def from_json(cls, filepath: str) -> 'Agent':
-        """Load agent from JSON file."""
+        """Load complete agent from JSON file."""
         with open(filepath, 'r') as f:
             data = json.load(f)
         return cls.from_dict(data)
+    
+    def to_smcp_registry(self, filepath: str):
+        """
+        Save only SMCP tools to registry JSON file.
+        
+        This creates a registry file with empty description and only SMCP tools
+        (excludes CoreTools). Use this for saving tool registries that will be
+        loaded later via from_smcp_registry().
+        """
+        smcp_tools = [
+            tool for tool in self.tools
+            if hasattr(tool, 'tool_executor_type') and tool.tool_executor_type == ToolExecutorType.SMCP
+        ]
+        registry_data = {
+            "description": "",
+            "tools": [tool.to_dict() for tool in smcp_tools],
+            "is_ready_timeout_ms": 30000
+        }
+        with open(filepath, 'w') as f:
+            json.dump(registry_data, f, indent=2)
+    
+    @classmethod
+    def from_smcp_registry(cls, filepath: str) -> 'Agent':
+        """
+        Load agent from SMCP registry JSON file.
+        
+        Creates an Agent with only the SMCP tools from the registry.
+        The agent will have empty description and default settings.
+        """
+        with open(filepath, 'r') as f:
+            data = json.load(f)
+        
+        # Load tools (should only be SMCP tools in a registry)
+        tools = [Tool.from_dict(tool_data) for tool_data in data.get("tools", [])]
+        
+        return cls(
+            description="",
+            tools=tools,
+            is_ready_timeout_ms=data.get("is_ready_timeout_ms", 30000)
+        )
     
     def derive_synthesis_agent(self) -> 'Agent':
         """
@@ -238,19 +279,27 @@ class Agent:
         """
         synthesis_description = self.description + """
 
-Complete the TASK using ONLY SMCP actions.
+Complete the TASK using ONLY SMCP actions, unless rewinding or human assistance.
 
 <workflow>
 1. Call `list_smcp_tools` to see available tools
-2. If tool exists: Call it directly
-3. If tool missing or exists but fails:
-   a. If it exists, call `list_smcp_tools` with `get_code_for` set to the tool's name
-   b. If it failed but partially progressed, reset.
-   c. Optionally call `ask_html` for just the current tool
-   d. Create tool with `update_smcp_tool`
-   e. Then call the new tool
-4. If no observe tool exists with pre_path matching current URL or it exists but doesn't return correctly for current page (even if it's login page), update with `update_smcp_tool`
-5. Loop until TASK complete
+2. Observe
+    a. If tool exists: Call it directly
+    b. If tool missing or exists but fails or returns wrong state:
+        i. If it exists, call `list_smcp_tools` with `get_code_for` set to the tool's name
+        ii. Optionally call `ask_html` to know how to get AbstractState dict for just the current state (Do NOT attempt to add code to get state for states not visited yet)
+        iii. Create tool with `update_smcp_tool`
+        iv. Then call the new tool
+3. Act
+    a. If on a page that needs authentication and observe output correct (e.g. page=login): ask for human assistance.
+    b. If tool exists and precondition matches currently observed state: Call it directly
+    c. If tool missing or exists but fails:
+        i. If it exists, call `list_smcp_tools` with `get_code_for` set to the tool's name
+        ii. If it failed but partially progressed, rewind.
+        iii. Optionally call `ask_html` for just the current tool
+        iv. Create tool with `update_smcp_tool`
+        v. Then call the new tool
+6. Loop until TASK complete
 </workflow>
 
 <ask_html_usage>
@@ -280,8 +329,8 @@ For async: "const data = await fetch(...); return data;"
 - observe: Returns state (page, selectedRestaurant, etc.) - ONE per domain
 - listItems: Returns {items: [...]}
 - getFields: Returns field values object
-- setFilter: Filter items by something (e.g. search query, category)
-- setFields: Fills form fields  
+- setFilter: Sets a filter of items by something (e.g. search query, category) and applies it (e.g. submit, apply, no-op)
+- setFields: Edits (e.g. fill a form) and/or proceeds (e.g. submits, approve/declines, no-op)
 - gotoItem: Navigates to item - must work for any item returned by listItems (even if not visible in viewport)
 - gotoField: Opens/focuses field
 </tool_types>

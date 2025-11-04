@@ -92,10 +92,26 @@ def add_core_tool(agent_executor, tool: CoreTool):
                 try:
                     current_url = await agent_executor.browser.get_current_page_url()
                     if current_url and current_url != 'about:blank':
-                        # Extract origin + /* pattern
+                        # Extract domain and create wildcard pattern
                         from urllib.parse import urlparse
                         parsed = urlparse(current_url)
-                        pre_path = f"{parsed.scheme}://{parsed.netloc}/*"
+                        hostname = parsed.netloc
+                        
+                        # Get base domain (e.g., "sage.hr" from "acme.sage.hr")
+                        # Strategy: If domain has 3+ parts (e.g., acme.sage.hr), use last 2 parts
+                        # If domain has 2 parts (e.g., sage.hr), use as-is
+                        # If domain has 1 part (e.g., localhost), use as-is
+                        parts = hostname.split('.')
+                        if len(parts) >= 3:
+                            # acme.sage.hr -> sage.hr
+                            # www.example.co.uk -> example.co.uk (handles this case too)
+                            base_domain = '.'.join(parts[-2:])
+                        else:
+                            # sage.hr or localhost -> use as-is
+                            base_domain = hostname
+                        
+                        # Create wildcard pattern: *sage.hr* (matches both sage.hr and acme.sage.hr)
+                        pre_path = f"*{base_domain}*"
                         logger.info(f"Auto-generated pre_path: {pre_path} from current URL: {current_url}")
                 except Exception as e:
                     logger.warning(f"Could not auto-generate pre_path from browser URL: {e}")
@@ -391,14 +407,28 @@ If the execute script returns an array, ALWAYS analyze what properties each arra
         @agent_executor.tools.action(description=tool.description)
         async def list_smcp_tools(get_code_for: str = "") -> ActionResult:
             """
-            List all SMCP tools with their signatures and example usage.
+            List SMCP tools that match the current page URL.
+            
+            Only shows tools whose pre_path glob pattern matches the current URL.
+            This ensures you only see tools relevant to the current page.
             
             Args:
                 get_code_for: Optional tool name to get detailed code for (includes is_ready/execute/is_completed scripts)
             """
+            import fnmatch
+            
+            # Get current URL
+            try:
+                current_url = await agent_executor.browser.get_current_page_url()
+            except Exception as e:
+                logger.warning(f"Could not get current URL: {e}")
+                current_url = ""
+            
+            # Get all SMCP tools
             smcp_tools_data = [
                 t for t in agent_executor.agent.tools
                 if t.tool_executor_type == ToolExecutorType.SMCP
+                and fnmatch.fnmatch(current_url, t.pre_path)
             ]
             
             if not smcp_tools_data:
@@ -423,6 +453,43 @@ If the execute script returns an array, ALWAYS analyze what properties each arra
             return ActionResult(extracted_content=result)
         
         list_smcp_tools.__name__ = "list_smcp_tools"
+    
+    elif tool.name == "ask_human_cli":
+        @agent_executor.tools.action(description="Ask for human assistance when stuck, unauthenticated, or task is ambiguous")
+        async def ask_human_cli_action(prompt: str) -> ActionResult:
+            """
+            Ask for human assistance via CLI stdin.
+            
+            Use this when:
+            - Stuck on authentication or credentials
+            - CAPTCHA or 2FA required
+            - Task turned out to be ambiguous
+            - Need human input for unclear situations
+            
+            Args:
+                prompt: Question or request for the human
+                
+            Returns:
+                Human's response
+            """
+            try:
+                # Import the actual implementation
+                from .tools_hitl import ask_human_cli
+                
+                response = await ask_human_cli(prompt)
+                
+                return ActionResult(
+                    is_done=False,
+                    extracted_content=f"Human responded: {response}",
+                    include_in_memory=True
+                )
+            except Exception as e:
+                logger.error(f"ask_human_cli failed: {e}")
+                import traceback
+                traceback.print_exc()
+                return ActionResult(error=f"Failed to get human input: {str(e)}")
+        
+        ask_human_cli_action.__name__ = "ask_human_cli"
     
     elif tool.name == "ask_html":
         @agent_executor.tools.action(description="Ask a question about the page HTML to get guidance on selectors, structure, or data attributes for creating SMCP tools")
@@ -504,6 +571,7 @@ You will receive a question about a webpage's HTML structure and the HTML conten
 - If multiple approaches exist, recommend the most reliable one
 - Focus on what's actually in the HTML, don't guess
 - Keep answers concise and actionable
+- ONLY return selectors that exist on the current page and URL. If asked but not present, say so.
 </instructions>
 
 <output_format>
@@ -584,7 +652,7 @@ HTML:
         
         ask_html.__name__ = "ask_html"
 
-def _clean_html_for_analysis(self, html: str, max_length: int = None) -> str:
+def _clean_html_for_analysis(html: str, max_length: int = None) -> str:
     """
     Clean HTML for LLM analysis while preserving selector-relevant information.
     
@@ -722,7 +790,7 @@ def _clean_html_for_analysis(self, html: str, max_length: int = None) -> str:
     
     return html
 
-def _reduce_html_randomly(self, html: str, target_ratio: float = 0.5) -> str:
+def _reduce_html_randomly(html: str, target_ratio: float = 0.5) -> str:
     """
     Randomly remove leaf elements (elements with no children) to reduce size by target_ratio.
     

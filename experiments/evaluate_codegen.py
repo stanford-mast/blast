@@ -841,11 +841,11 @@ async def main():
             base_name = args.task_prefix.split('-')[0]
             tools_path = f"experiments/tools/{base_name}.json"
     
-    # Load agent with tools
+    # Load agent with SMCP tools from registry
     if Path(tools_path).exists():
-        print(f"Loading tools from: {tools_path}")
-        agent = Agent.from_json(tools_path)
-        print(f"Loaded {len(agent.tools)} tools")
+        print(f"Loading SMCP tools from: {tools_path}")
+        agent = Agent.from_smcp_registry(tools_path)
+        print(f"Loaded {len(agent.tools)} SMCP tools")
     else:
         print(f"Warning: Tools file not found: {tools_path}")
         print("Using agent without tools")

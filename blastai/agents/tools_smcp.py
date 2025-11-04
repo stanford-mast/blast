@@ -151,8 +151,22 @@ async def execute_smcp_tool(agent_executor, tool: SMCPTool, inputs: Dict[str, An
             
             if result.get('exceptionDetails'):
                 exception = result['exceptionDetails']
-                error_msg = f"JavaScript error: {exception.get('text', 'Unknown error')}"
+                # Get detailed error information
+                error_text = exception.get('text', 'Unknown error')
+                line_number = exception.get('lineNumber', 'unknown')
+                column_number = exception.get('columnNumber', 'unknown')
+                
+                # Try to get exception details from the exception object
+                exc_obj = exception.get('exception', {})
+                description = exc_obj.get('description', '')
+                
+                error_msg = f"JavaScript error: {error_text}"
+                if description:
+                    error_msg += f" - {description}"
+                error_msg += f" at line {line_number}:{column_number}"
+                
                 logger.error(error_msg)
+                logger.error(f"Full exception details: {json.dumps(exception, indent=2)}")
                 raise RuntimeError(error_msg)
             
             return result.get('result', {}).get('value')
@@ -220,6 +234,9 @@ async def execute_smcp_tool(agent_executor, tool: SMCPTool, inputs: Dict[str, An
     execute_stripped = tool.execute.strip()
     is_function_expr = execute_stripped.startswith('function') or execute_stripped.startswith('async function')
     
+    # Check if execute code uses await (needs async wrapper)
+    uses_await = 'await ' in tool.execute
+    
     if is_function_expr:
         # Full function expression - call it directly and await if async
         execute_code = f"""
@@ -233,8 +250,21 @@ async def execute_smcp_tool(agent_executor, tool: SMCPTool, inputs: Dict[str, An
 }})()
 """
     else:
-        # Function body - wrap like is_ready/is_completed for consistency
-        execute_code = f"""
+        # Function body - wrap in async function if it uses await
+        if uses_await:
+            execute_code = f"""
+(async function() {{
+    try {{
+        const inputs = {inputs_json};
+        return await (async function(inputs) {{ {tool.execute} }})(inputs);
+    }} catch (e) {{
+        return {{ error: e.message }};
+    }}
+}})()
+"""
+        else:
+            # Synchronous code - use regular function wrapper
+            execute_code = f"""
 (function() {{
     try {{
         const inputs = {inputs_json};

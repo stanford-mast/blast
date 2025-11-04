@@ -67,7 +67,7 @@ async def generate_tools_from_prompt(prompt: str, initial_url: str, output_path:
     import os
     if os.path.exists(output_path):
         print(f"Loading existing tools from: {output_path}")
-        base_agent = Agent.from_json(output_path)
+        base_agent = Agent.from_smcp_registry(output_path)
         print(f"Loaded {len(base_agent.tools)} existing SMCP tools")
     else:
         print("No existing tools file - starting from scratch")
@@ -106,8 +106,7 @@ async def generate_tools_from_prompt(prompt: str, initial_url: str, output_path:
         
         # Save only SMCP tools (not core tools) to output with empty description
         # (synthesis prompt is not needed when loading tools, only during creation)
-        smcp_agent = Agent(description="", tools=smcp_tools)
-        smcp_agent.to_json(output_path)
+        synthesis_agent.to_smcp_registry(output_path)
         print(f"\nSaved {len(smcp_tools)} SMCP tools to: {output_path}")
         
         return synthesis_agent
@@ -140,7 +139,7 @@ async def generate_tools_for_task(task_id: str, task_data: dict, output_path: st
     import os
     if os.path.exists(output_path):
         print(f"Loading existing tools from: {output_path}")
-        base_agent = Agent.from_json(output_path)
+        base_agent = Agent.from_smcp_registry(output_path)
         print(f"Loaded {len(base_agent.tools)} existing SMCP tools")
     else:
         print("No existing tools file - starting from scratch")
@@ -180,8 +179,7 @@ async def generate_tools_for_task(task_id: str, task_data: dict, output_path: st
         
         # Save only SMCP tools (not core tools) to output with empty description
         # (synthesis prompt is not needed when loading tools, only during creation)
-        smcp_agent = Agent(description="", tools=smcp_tools)
-        smcp_agent.to_json(output_path)
+        synthesis_agent.to_smcp_registry(output_path)
         print(f"\nSaved {len(smcp_tools)} SMCP tools to: {output_path}")
         
         return synthesis_agent
