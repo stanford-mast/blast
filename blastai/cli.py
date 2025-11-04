@@ -252,6 +252,164 @@ def serve(config: Optional[str], env: Optional[str], mode: Optional[str] = None)
         except Exception as e:
             logging.getLogger('blastai').error(f"Error closing loop: {e}")
 
+@cli.command('crawl')
+@click.option('--url', required=True, type=str, help='URL to crawl for tool generation')
+@click.option('--smcp-registry', required=True, type=str, help='Path to SMCP registry JSON file (will be created or updated)')
+@click.option('--prompt', required=True, type=str, help='Task description for tool synthesis (e.g., "Create tools to list and filter items")')
+@click.option('--user-id', type=str, help='User identifier for persistent browser profile (cookies/sessions)')
+def crawl(url: str, smcp_registry: str, prompt: str, user_id: str):
+    """Generate SMCP tools by crawling a website"""
+    
+    # Enable standalone logging mode
+    from .logging_setup import enable_standalone_mode
+    enable_standalone_mode(browser_use_log_level="INFO")
+    
+    from .agents import Agent, AgentExecutor
+    from pathlib import Path
+    import os
+    
+    async def run_crawl():
+        registry_path = Path(smcp_registry)
+        
+        # Load existing SMCP tools from registry if it exists
+        if registry_path.exists():
+            console.print(f"[blue]Loading existing tools from:[/] {smcp_registry}")
+            # from_smcp_registry loads Agent with only SMCP tools from the registry
+            base_agent = Agent.from_smcp_registry(str(registry_path))
+            console.print(f"[blue]Loaded {len(base_agent.tools)} existing SMCP tools[/]")
+        else:
+            console.print(f"[blue]No existing registry - starting from scratch[/]")
+            base_agent = Agent(description="", tools=[])
+        
+        # Add ask_human_cli to base agent before deriving synthesis agent
+        from .agents.models import CoreTool
+        base_agent.add_tool(CoreTool(name="ask_human_cli"))
+        
+        # Derive synthesis agent (adds update_smcp_tool, remove_smcp_tool, list_smcp_tools, ask_html)
+        # and includes all tools from base_agent (SMCP tools + ask_human_cli)
+        synthesis_agent = base_agent.derive_synthesis_agent()
+        console.print(f"[blue]Created synthesis agent with {len(synthesis_agent.tools)} tools (SMCP + core tools)[/]")
+        
+        # Create executor with optional user_id for persistent browser profile
+        if user_id:
+            console.print(f"[blue]Using persistent browser profile for user:[/] {user_id}")
+        executor = AgentExecutor(synthesis_agent, user_id=user_id)
+        
+        try:
+            console.print(f"\n[green]Running synthesis agent...[/]")
+            console.print(f"[dim]URL:[/] {url}")
+            console.print(f"[dim]Task:[/] {prompt}\n")
+            
+            # Run synthesis agent
+            result = await executor.run(prompt, mode="loop", initial_url=url)
+            
+            console.print(f"\n[green]✓ Synthesis complete![/]")
+            console.print(f"[dim]Result:[/] {result}")
+            
+            # Get SMCP tools created (exclude core tools)
+            from .agents.models import ToolExecutorType
+            smcp_tools = [
+                tool for tool in synthesis_agent.tools
+                if hasattr(tool, 'tool_executor_type') and tool.tool_executor_type == ToolExecutorType.SMCP
+            ]
+            
+            console.print(f"\n[green]Generated {len(smcp_tools)} SMCP tools:[/]")
+            for tool in smcp_tools:
+                console.print(f"  [blue]•[/] {tool.name}: {tool.description}")
+            
+            # Save only SMCP tools to registry using to_smcp_registry
+            # This filters out CoreTools and saves just the SMCP tools
+            registry_path.parent.mkdir(parents=True, exist_ok=True)
+            synthesis_agent.to_smcp_registry(str(registry_path))
+            
+            console.print(f"\n[green]✓ Saved {len(smcp_tools)} SMCP tools to:[/] {smcp_registry}\n")
+            
+        except Exception as e:
+            console.print(f"\n[red]✗ Error during tool generation:[/] {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+        finally:
+            await executor.cleanup()
+    
+    # Run async task
+    asyncio.run(run_crawl())
+
+
+@cli.command('run')
+@click.option('--url', required=True, type=str, help='URL to navigate to')
+@click.option('--smcp-registry', type=str, help='Path to SMCP registry JSON file (optional)')
+@click.option('--prompt', required=True, type=str, help='Task to execute (e.g., "List all leave requests")')
+@click.option('--user-id', type=str, help='User identifier for persistent browser profile (cookies/sessions)')
+def run(url: str, smcp_registry: str, prompt: str, user_id: str):
+    """Run a task using SMCP tools and ask_human_cli"""
+    
+    # Enable standalone logging mode
+    from .logging_setup import enable_standalone_mode
+    enable_standalone_mode(browser_use_log_level="INFO")
+    
+    from .agents import Agent, AgentExecutor
+    from .agents.models import CoreTool, ToolExecutorType
+    from pathlib import Path
+    
+    async def run_task():
+        # Load SMCP tools from registry if provided
+        if smcp_registry:
+            registry_path = Path(smcp_registry)
+            if registry_path.exists():
+                console.print(f"[blue]Loading SMCP tools from:[/] {smcp_registry}")
+                # from_smcp_registry loads Agent with only SMCP tools from the registry
+                agent = Agent.from_smcp_registry(str(registry_path))
+                console.print(f"[blue]Loaded {len(agent.tools)} SMCP tools[/]")
+            else:
+                console.print(f"[yellow]Warning: Registry file not found:[/] {smcp_registry}")
+                console.print(f"[yellow]Starting with no SMCP tools[/]")
+                agent = Agent(description="", tools=[])
+        else:
+            console.print(f"[blue]No registry specified - running with core tools only[/]")
+            agent = Agent(description="", tools=[])
+        
+        # Add ask_human_cli as a core tool to the agent
+        agent.add_tool(CoreTool(name="ask_human_cli"))
+        console.print(f"[blue]Added ask_human_cli to agent[/]")
+        
+        # Create executor with optional user_id for persistent browser profile
+        if user_id:
+            console.print(f"[blue]Using persistent browser profile for user:[/] {user_id}")
+        executor = AgentExecutor(agent, user_id=user_id)
+        
+        try:
+            console.print(f"\n[green]Running task...[/]")
+            console.print(f"[dim]URL:[/] {url}")
+            console.print(f"[dim]Task:[/] {prompt}")
+            
+            # Get SMCP tool names for display
+            smcp_tool_names = [
+                t.name for t in agent.tools 
+                if hasattr(t, 'tool_executor_type') and t.tool_executor_type == ToolExecutorType.SMCP
+            ]
+            if smcp_tool_names:
+                console.print(f"[dim]Available SMCP tools:[/] {', '.join(smcp_tool_names)}")
+            console.print(f"[dim]Human-in-loop:[/] ask_human_cli enabled\n")
+            
+            # Run task
+            result = await executor.run(prompt, mode="loop", initial_url=url)
+            
+            console.print(f"\n[green]✓ Task complete![/]")
+            console.print(f"[dim]Result:[/] {result}\n")
+            
+        except Exception as e:
+            console.print(f"\n[red]✗ Error during task execution:[/] {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+        finally:
+            await executor.cleanup()
+    
+    # Run async task
+    asyncio.run(run_task())
+
+
 def main():
     """Main entry point for CLI."""
     return cli()  # Return Click's exit code

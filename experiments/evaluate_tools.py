@@ -262,8 +262,8 @@ async def evaluate_task(
     agent_with_tools = None
     if tools_path and Path(tools_path).exists():
         print(f"\nLoading tools from: {tools_path}")
-        agent_with_tools = Agent.from_json(tools_path)
-        print(f"Loaded {len(agent_with_tools.tools)} tools")
+        agent_with_tools = Agent.from_smcp_registry(tools_path)
+        print(f"Loaded {len(agent_with_tools.tools)} SMCP tools")
         
         # Print tool details
         for tool in agent_with_tools.tools:

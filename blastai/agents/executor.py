@@ -23,6 +23,10 @@ from .models import Agent, Tool, SMCPTool, CoreTool, ToolExecutorType, SMCPToolT
 from .tools_smcp import add_smcp_tool, execute_smcp_tool
 from .tools_synthesis import add_core_tool
 
+# Apply browser-use patches early, before any browser-use tools are created
+from ..browser_use_patches import apply_all_patches
+apply_all_patches()
+
 if TYPE_CHECKING:
     from browser_use.browser import BrowserSession
 
@@ -47,7 +51,8 @@ class AgentExecutor:
         state_aware: bool = True,
         codegen_llm: Optional[BaseChatModel] = None,
         parallel_codegen: int = 1,
-        output_model_schema: Optional[type[BaseModel]] = None
+        output_model_schema: Optional[type[BaseModel]] = None,
+        user_id: Optional[str] = None
     ):
         """
         Initialize AgentExecutor.
@@ -61,10 +66,13 @@ class AgentExecutor:
             codegen_llm: Optional LLM for code generation. If None, uses same as llm.
             parallel_codegen: Number of parallel code generations (default 1)
             output_model_schema: Optional Pydantic model for structured output (passed to browser-use Agent)
+            user_id: Optional user identifier for persistent browser profiles. If set and browser=None,
+                     creates a browser with user_data_dir specific to this user, persisting cookies/sessions.
         """
         self.agent = agent
         self.llm = llm or self._create_llm_from_env()
         self.codegen_llm = codegen_llm or self.llm
+        self.user_id = user_id
         self.browser = browser or self._create_browser()
         self.state_aware = state_aware
         self.parallel_codegen = parallel_codegen
@@ -104,8 +112,9 @@ class AgentExecutor:
         )
     
     def _create_browser(self):
-        """Create browser-use BrowserSession instance."""
+        """Create browser-use BrowserSession instance with optional user-specific profile."""
         from browser_use import BrowserSession, BrowserProfile
+        from pathlib import Path
         
         # Get viewport/window size from environment
         width = int(os.getenv("BROWSER_WIDTH", "1280"))
@@ -119,6 +128,15 @@ class AgentExecutor:
         if os.getenv("BROWSER_DISABLE_GPU", "").lower() in ("1", "true", "yes"):
             args.extend(["--disable-gpu", "--disable-gpu-sandbox"])
         
+        # Determine user_data_dir for persistent profiles
+        user_data_dir = None
+        if self.user_id:
+            # Create user-specific profile directory
+            # Format: ./blast-profiles/user-{user_id}
+            profiles_root = Path(os.getenv("BLASTAI_PROFILES_DIR", "./blast-profiles"))
+            user_data_dir = str(profiles_root / f"user-{self.user_id}")
+            logger.info(f"Using persistent browser profile for user_id={self.user_id}: {user_data_dir}")
+        
         # Create profile with proper viewport and window settings
         profile = BrowserProfile(
             headless=headless,
@@ -128,6 +146,8 @@ class AgentExecutor:
             window_size={"width": width, "height": height},
             # Chrome command-line arguments
             args=args,
+            # User data directory for persistent cookies/sessions
+            user_data_dir=user_data_dir,
         )
         
         return BrowserSession(browser_profile=profile)
@@ -201,6 +221,15 @@ class AgentExecutor:
             else:
                 logger.info("No SMCP tools available to add to task prompt")
             
+            # Check if ask_human_cli is available
+            has_ask_human_cli = any(
+                hasattr(t, 'name') and t.name == 'ask_human_cli' 
+                for t in self.agent.tools
+            )
+            if has_ask_human_cli:
+                task += " Use ask_human_cli if stuck or unauthenticated or task turned out to be ambiguous."
+                logger.info("Added ask_human_cli prompt injection")
+            
             logger.info(f"Final task for BrowserUseAgent: {task}")
             
             # Create a fresh browser-use agent for this run
@@ -211,7 +240,8 @@ class AgentExecutor:
                 browser=self.browser,
                 tools=self.tools,
                 initial_actions=initial_actions,  # Agent will execute navigation before task
-                output_model_schema=self.output_model_schema  # Pass structured output schema
+                output_model_schema=self.output_model_schema,  # Pass structured output schema
+                step_timeout=300  # Increase step timeout to 300 seconds (5 minutes)
             )
             
             result = await self.browser_use_agent.run()
