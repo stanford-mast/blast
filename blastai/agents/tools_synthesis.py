@@ -57,6 +57,7 @@ def add_core_tool(agent_executor, tool: CoreTool):
             """
             Create or update an SMCP tool with auto-generated schemas and metadata.
             """
+            # TODO: Refactor much of this out
             try:
                 # Extract parameters from Pydantic model
                 name = params.name  # type: ignore
@@ -236,6 +237,94 @@ If the execute script returns an array, ALWAYS analyze what properties each arra
                 logger.info(f"Generated - description: {description}")
                 logger.info(f"Generated - input_schema: {input_schema}")
                 logger.info(f"Generated - output_schema: {output_schema}")
+                
+                # AUTO-GENERATE: pre_tools dependencies (concurrent with schema generation)
+                logger.info(f"Analyzing pre_tools dependencies for {name}...")
+                pre_tools = {}
+                
+                try:
+                    # Get all other tools with their output schemas
+                    other_tools = [
+                        t for t in agent_executor.agent.tools 
+                        if t.tool_executor_type == ToolExecutorType.SMCP and t.name != name
+                    ]
+                    
+                    if other_tools and input_schema.get("properties"):
+                        # Build prompt with other tools' output schemas
+                        tools_context = []
+                        for other_tool in other_tools:
+                            if isinstance(other_tool, SMCPTool) and other_tool.output_schema:
+                                output_props = other_tool.output_schema.get("properties", {})
+                                if output_props:
+                                    # Format output schema with descriptions
+                                    prop_lines = []
+                                    for prop_name, prop_info in output_props.items():
+                                        prop_type = prop_info.get("type", "any")
+                                        prop_desc = prop_info.get("description", "")
+                                        if prop_desc:
+                                            prop_lines.append(f"  - {prop_name} ({prop_type}): {prop_desc}")
+                                        else:
+                                            prop_lines.append(f"  - {prop_name} ({prop_type})")
+                                    
+                                    tools_context.append(f"{other_tool.name}:")
+                                    tools_context.append(f"  Description: {other_tool.description}")
+                                    tools_context.append(f"  Returns:")
+                                    tools_context.extend(prop_lines)
+                        
+                        if tools_context:
+                            pretools_prompt = f"""Analyze if this tool needs to call other tools first to get valid input parameters.
+
+Tool being analyzed: {name}
+Input parameters:
+{json.dumps(input_schema.get("properties", {}), indent=2)}
+
+Available tools that could provide data:
+{chr(10).join(tools_context)}
+
+For each input parameter, determine if any available tool's output would be needed to select a valid value.
+Example: If parameter is "employee" (employee name), and get_employee_options returns list of valid employee names, then employee needs get_employee_options.
+
+Respond with valid JSON only:
+{{
+  "pre_tools": {{
+    "param_name": ["tool1", "tool2"],
+    "another_param": ["tool3"]
+  }}
+}}
+
+If no dependencies needed, respond with: {{"pre_tools": {{}}}}
+
+ONLY include dependencies where the parameter value MUST be chosen from output of another tool.
+Do NOT include dependencies for simple strings, numbers, or booleans that user provides directly."""
+
+                            # Call LLM for pre_tools analysis
+                            from browser_use.llm.messages import SystemMessage, UserMessage
+                            pretools_messages = [
+                                SystemMessage(content="You are a JSON generator analyzing tool dependencies. Output ONLY valid JSON."),
+                                UserMessage(content=pretools_prompt)
+                            ]
+                            
+                            pretools_response = await agent_executor.llm.ainvoke(pretools_messages)
+                            pretools_text = pretools_response.completion.strip()
+                            
+                            # Extract JSON from markdown if needed
+                            import re
+                            pretools_json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', pretools_text, re.DOTALL)
+                            if pretools_json_match:
+                                pretools_text = pretools_json_match.group(1)
+                            
+                            # Parse pre_tools JSON
+                            pretools_data = json.loads(pretools_text)
+                            pre_tools = pretools_data.get("pre_tools", {})
+                            
+                            if pre_tools:
+                                logger.info(f"Generated pre_tools: {pre_tools}")
+                            else:
+                                logger.info(f"No pre_tools dependencies identified")
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to generate pre_tools (will use empty): {e}")
+                    pre_tools = {}
 
                 # Create SMCPTool
                 smcp_tool = SMCPTool(
@@ -252,7 +341,8 @@ If the execute script returns an array, ALWAYS analyze what properties each arra
                     pre_path=pre_path,
                     pre=preconditions,
                     post=postconditions,
-                    type=SMCPToolType(type_str)
+                    type=SMCPToolType(type_str),
+                    pre_tools=pre_tools
                 )
                 
                 # Remove existing tool with same name if it exists

@@ -3,15 +3,177 @@ Automated code fixing for common LLM mistakes.
 
 Provides passes to automatically fix simple errors before validation:
 - Missing await keywords on async calls
+- Transform ai_eval f-strings to explicit variable passing
 - TODO: Missing tool calls to fix broken ordering
 """
 
 import ast
 import logging
 import re
-from typing import Optional, Set, List, Tuple
+from typing import Optional, Set, List, Tuple, Dict
 
 logger = logging.getLogger(__name__)
+
+
+def extract_variable_name(expr: str) -> str:
+    """
+    Convert an expression to a variable name.
+    
+    Examples:
+        options.employeeOptions -> options_employeeOptions
+        a.b[c]["d"] -> a_b_c_d
+        items[0] -> items_0
+        foo -> foo
+    
+    Args:
+        expr: Python expression string
+        
+    Returns:
+        Variable name suitable for keyword argument
+    """
+    # Replace dots with underscores
+    name = expr.replace('.', '_')
+    # Replace square brackets and quotes with underscores
+    name = re.sub(r'[\[\]"\']', '_', name)
+    # Remove double underscores
+    name = re.sub(r'__+', '_', name)
+    # Strip leading/trailing underscores
+    name = name.strip('_')
+    # If empty or starts with digit, use generic name
+    if not name or name[0].isdigit():
+        return 'var'
+    return name
+
+
+def transform_ai_eval_fstrings(code: str) -> Tuple[str, bool]:
+    """
+    Transform ai_eval f-string calls to explicit variable passing.
+    
+    Transforms:
+        ai_eval(f"Name in {options.employeeOptions} closest to 'Amber'")
+    To:
+        ai_eval("Name in {options_employeeOptions} closest to 'Amber'", 
+                options_employeeOptions=options.employeeOptions)
+    
+    Args:
+        code: Python code to transform
+        
+    Returns:
+        Tuple of (transformed_code, was_modified)
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, False
+    
+    modified = False
+    
+    class FStringTransformer(ast.NodeTransformer):
+        def __init__(self):
+            self.modified = False
+        
+        def visit_Call(self, node):
+            """Transform ai_eval(f"...{expr}...") calls"""
+            # Check if this is a call to ai_eval
+            if isinstance(node.func, ast.Name) and node.func.id == 'ai_eval':
+                # Check if first argument is an f-string (JoinedStr)
+                if node.args and isinstance(node.args[0], ast.JoinedStr):
+                    fstring = node.args[0]
+                    
+                    # Extract all FormattedValue nodes (the {expr} parts)
+                    formatted_values = []
+                    for value in fstring.values:
+                        if isinstance(value, ast.FormattedValue):
+                            formatted_values.append(value)
+                    
+                    if formatted_values:
+                        # Build variable mapping
+                        var_mapping: Dict[str, ast.expr] = {}
+                        var_counter = {}  # Track duplicates
+                        
+                        for fv in formatted_values:
+                            # Convert the expression to source code
+                            expr_str = ast.unparse(fv.value)
+                            # Generate variable name
+                            var_name = extract_variable_name(expr_str)
+                            
+                            # Handle duplicates by adding counter
+                            if var_name in var_counter:
+                                var_counter[var_name] += 1
+                                var_name = f"{var_name}_{var_counter[var_name]}"
+                            else:
+                                var_counter[var_name] = 0
+                            
+                            var_mapping[var_name] = fv.value
+                        
+                        # Create new f-string with variable names instead of expressions
+                        # IMPORTANT: This should be a REGULAR string, not an f-string!
+                        # The variable names are just placeholders for formatting, not Python variables
+                        new_values = []
+                        var_index = 0
+                        for value in fstring.values:
+                            if isinstance(value, ast.FormattedValue):
+                                # Get corresponding variable name
+                                expr_str = ast.unparse(value.value)
+                                var_name = extract_variable_name(expr_str)
+                                # Handle counter for duplicates
+                                if var_name in var_counter and var_counter[var_name] > 0:
+                                    # Find which occurrence this is
+                                    occurrence = sum(1 for i, fv in enumerate(formatted_values[:var_index]) 
+                                                   if extract_variable_name(ast.unparse(fv.value)) == var_name)
+                                    if occurrence > 0:
+                                        var_name = f"{var_name}_{occurrence}"
+                                
+                                # Add the placeholder text (e.g., "{var_name}")
+                                new_values.append(ast.Constant(value="{" + var_name + "}"))
+                                var_index += 1
+                            else:
+                                # Keep constant string parts as-is
+                                new_values.append(value)
+                        
+                        # Create a regular string by joining all parts
+                        # Convert JoinedStr values to a single Constant string
+                        string_parts = []
+                        for val in new_values:
+                            if isinstance(val, ast.Constant):
+                                string_parts.append(str(val.value))
+                            elif isinstance(val, ast.FormattedValue):
+                                # This shouldn't happen with our new logic, but handle it
+                                string_parts.append("{...}")
+                        
+                        template_string = "".join(string_parts)
+                        new_arg = ast.Constant(value=template_string)
+                        
+                        # Create keyword arguments for the variables
+                        keywords = [
+                            ast.keyword(arg=var_name, value=expr)
+                            for var_name, expr in var_mapping.items()
+                        ]
+                        
+                        # Create new call with both the new template string and keyword args
+                        new_call = ast.Call(
+                            func=node.func,
+                            args=[new_arg],
+                            keywords=keywords
+                        )
+                        
+                        self.modified = True
+                        logger.info(f"Transformed ai_eval f-string with {len(var_mapping)} variables: {list(var_mapping.keys())}")
+                        
+                        return ast.copy_location(new_call, node)
+            
+            # Continue traversing
+            return self.generic_visit(node)
+    
+    transformer = FStringTransformer()
+    new_tree = transformer.visit(tree)
+    
+    if transformer.modified:
+        # Unparse the modified AST back to code
+        new_code = ast.unparse(new_tree)
+        return new_code, True
+    else:
+        return code, False
 
 
 def fix_missing_awaits(code: str, async_functions: Set[str]) -> Tuple[str, bool]:
@@ -143,11 +305,15 @@ def apply_code_fixes(
     original_code = code
     total_modified = False
     
-    # Pass 1: Fix missing awaits
+    # Pass 1: Transform ai_eval f-strings to explicit variable passing
+    code, modified = transform_ai_eval_fstrings(code)
+    total_modified = total_modified or modified
+    
+    # Pass 2: Fix missing awaits
     code, modified = fix_missing_awaits(code, async_functions)
     total_modified = total_modified or modified
     
-    # Pass 2: Fix tool ordering (TODO)
+    # Pass 3: Fix tool ordering (TODO)
     if tool_info:
         code, modified = fix_tool_ordering(code, tool_info)
         total_modified = total_modified or modified
@@ -155,4 +321,4 @@ def apply_code_fixes(
     return code, total_modified
 
 
-__all__ = ["fix_missing_awaits", "fix_tool_ordering", "apply_code_fixes"]
+__all__ = ["fix_missing_awaits", "fix_tool_ordering", "transform_ai_eval_fstrings", "apply_code_fixes"]

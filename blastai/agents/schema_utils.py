@@ -8,7 +8,7 @@ Provides helpers for:
 - Dynamic Pydantic model creation from JSON schemas
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Literal
 from pydantic import BaseModel, Field, create_model
 
 
@@ -113,6 +113,28 @@ def generate_nested_pydantic_classes(
     """
     schema_type = schema.get("type")
     
+    # Handle enums - use Literal for type safety
+    if "enum" in schema:
+        enum_values = schema["enum"]
+        # Filter out null values as they're handled separately via Optional
+        non_null_values = [v for v in enum_values if v is not None]
+        has_null = None in enum_values
+        
+        if non_null_values:
+            # Format enum values for Literal (quote strings, leave others as-is)
+            formatted_values = []
+            for v in non_null_values:
+                if isinstance(v, str):
+                    # Use single quotes for string values to avoid escaping issues
+                    formatted_values.append(f"'{v}'")
+                else:
+                    formatted_values.append(str(v))
+            literal_str = f"Literal[{', '.join(formatted_values)}]"
+            return f"Optional[{literal_str}]" if has_null else literal_str
+        elif has_null:
+            # Only null in enum - treat as Optional[Any]
+            return "Optional[Any]"
+    
     # Handle type unions (e.g., ["string", "null"])
     if isinstance(schema_type, list):
         non_null_types = [t for t in schema_type if t != "null"]
@@ -197,13 +219,19 @@ def json_schema_to_pydantic(
     model_name: str = "DynamicModel"
 ) -> Optional[type[BaseModel]]:
     """
-    Convert a JSON Schema to a Pydantic model.
+    Convert a JSON Schema to a Pydantic model with full nested support.
+    
+    This function now properly handles nested objects and arrays by recursively
+    generating Pydantic models for all nested structures. This ensures that
+    when you access nested data, you get Pydantic models with attribute access
+    instead of plain dicts.
     
     Handles:
     - Simple types (string, number, integer, boolean, array, object)
     - Nullable types (["string", "null"])
     - Required vs optional fields
-    - Nested objects (basic support - browser-use handles full validation)
+    - Nested objects (full recursive support)
+    - Arrays of nested objects (List[NestedModel])
     
     Args:
         schema: JSON Schema dictionary with properties and required fields
@@ -216,71 +244,57 @@ def json_schema_to_pydantic(
         >>> schema = {
         ...     "type": "object",
         ...     "properties": {
-        ...         "name": {"type": "string", "description": "User name"},
-        ...         "age": {"type": "integer"},
-        ...         "email": {"type": ["string", "null"]}
+        ...         "items": {
+        ...             "type": "array",
+        ...             "items": {
+        ...                 "type": "object",
+        ...                 "properties": {
+        ...                     "name": {"type": "string"},
+        ...                     "id": {"type": "string"}
+        ...                 },
+        ...                 "required": ["id"]
+        ...             }
+        ...         }
         ...     },
-        ...     "required": ["name"]
+        ...     "required": ["items"]
         ... }
-        >>> Model = json_schema_to_pydantic(schema, "User")
-        >>> instance = Model(name="Alice", age=30, email=None)
+        >>> Model = json_schema_to_pydantic(schema, "Response")
+        >>> data = {"items": [{"id": "1", "name": "Item 1"}]}
+        >>> instance = Model(**data)
+        >>> instance.items[0].name  # Pydantic model attribute access works!
+        'Item 1'
     """
     if not isinstance(schema, dict):
         return None
     
-    properties = schema.get("properties", {})
-    required = schema.get("required", [])
+    # Use exec to generate and execute the code from generate_nested_pydantic_classes
+    lines = []
+    generate_nested_pydantic_classes(schema, model_name, lines)
     
-    if not properties:
+    if not lines:
         return None
     
-    # Build Pydantic field definitions
-    field_defs = {}
+    # Execute the generated code to create the Pydantic models
+    code = "\n".join(lines)
+    namespace = {
+        "BaseModel": BaseModel,
+        "Field": Field,
+        "Optional": Optional,
+        "List": List,
+        "Dict": Dict,
+        "Any": Any,
+        "Literal": Literal
+    }
     
-    for prop_name, prop_schema in properties.items():
-        prop_type = prop_schema.get("type", "string")
-        prop_desc = prop_schema.get("description", "")
-        is_required = prop_name in required
-        
-        # Handle nullable types: ["string", "null"] or ["number", "null"]
-        is_nullable = False
-        if isinstance(prop_type, list):
-            # Filter out "null" and get the actual type
-            actual_types = [t for t in prop_type if t != "null"]
-            is_nullable = "null" in prop_type
-            prop_type = actual_types[0] if actual_types else "string"
-        
-        # Map JSON schema types to Python types
-        type_map = {
-            "string": str,
-            "number": float,
-            "integer": int,
-            "boolean": bool,
-            "array": list,
-            "object": dict
-        }
-        python_type = type_map.get(prop_type, str)
-        
-        # Handle array items schema if present (basic support)
-        # Browser-use will handle full nested validation
-        if prop_type == "array" and "items" in prop_schema:
-            # For now, use list - browser-use will handle nested structure
-            python_type = list
-        
-        # Build field definition with proper Optional handling
-        if is_nullable or not is_required:
-            # Nullable or optional field
-            from typing import Optional as OptionalType
-            field_defs[prop_name] = (OptionalType[python_type], Field(None, description=prop_desc))
-        else:
-            # Required, non-nullable field
-            field_defs[prop_name] = (python_type, Field(..., description=prop_desc))
-    
-    # Create dynamic Pydantic model
-    if not field_defs:
+    try:
+        exec(code, namespace)
+        return namespace.get(model_name)
+    except Exception as e:
+        # Fallback to simple model if code generation fails
+        import logging
+        logging.warning(f"Failed to generate nested Pydantic model {model_name}: {e}")
+        logging.debug(f"Generated code:\n{code}")
         return None
-    
-    return create_model(model_name, **field_defs)
 
 
 def pydantic_to_json_schema(model: type[BaseModel]) -> Dict[str, Any]:

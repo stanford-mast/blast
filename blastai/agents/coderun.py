@@ -260,15 +260,25 @@ async def {tool.name}():
                     Fallback to ai_exec when tool cannot execute.
                     Uses the tool's output_schema as structured output for ai_exec.
                     """
-                    logger.warning(f"Tool {tool.name} cannot execute ({reason}), falling back to ai_exec")
+                    # Build detailed error message
+                    error_details = f"{reason}"
                     if error:
-                        logger.debug(f"Error details: {error}")
+                        error_details += f": {str(error)}"
                     
-                    # Construct task for ai_exec
-                    params_str = ", ".join([f"{k}={v}" for k, v in kwargs.items()])
-                    fallback_task = f"{tool.description}"
-                    if params_str:
-                        fallback_task += f" with parameters: {params_str}"
+                    logger.warning(f"Tool {tool.name} cannot execute ({error_details}), falling back to ai_exec")
+                    
+                    # Construct structured task for ai_exec
+                    task_lines = [f"Task: {tool.description}"]
+                    if kwargs:
+                        task_lines.append("Parameters:")
+                        for k, v in kwargs.items():
+                            task_lines.append(f"- {k}: {v}")
+                    
+                    # Add motivation if there was an error
+                    if error and str(error).strip():
+                        task_lines.append(f"Motivation: We just attempted this task but ran into the following error: {str(error)}")
+                    
+                    fallback_task = "\n".join(task_lines)
                     
                     # Call ai_exec with output schema if available
                     if 'ai_exec' in executor.state:
@@ -278,11 +288,12 @@ async def {tool.name}():
                             output_schema=tool.output_schema if hasattr(tool, 'output_schema') else None
                         )
                     else:
-                        # Fallback not available, re-raise original error if exists
+                        # Fallback not available, raise detailed error
+                        error_msg = f"Tool {tool.name} failed to execute: {error_details}"
                         if error:
-                            raise error
+                            raise RuntimeError(error_msg) from error
                         else:
-                            raise RuntimeError(f"Tool {tool.name} preconditions not met and ai_exec not available")
+                            raise RuntimeError(error_msg)
                 
                 # Validate input parameters with Pydantic if model exists
                 if input_pydantic_model is not None:
@@ -339,21 +350,13 @@ async def {tool.name}():
                 # (Observe tools ARE the source of truth for page state)
                 if hasattr(tool, 'type') and tool.type == SMCPToolType.OBSERVE:
                     if isinstance(result, dict):
+                        # Update STATE with raw dict values
                         STATE.update(result)
                         logger.debug(f"Updated STATE from observe tool {tool.name}: {result}")
                 else:
                     # For NON-OBSERVE tools:
-                    # 1. Update STATE with any result data
-                    # 2. Call matching observe tool AFTER execution to refresh STATE
-                    #    (The tool may have navigated to a new page, so we need fresh STATE)
-                    
-                    # Update STATE with result dict contents
-                    try:
-                        if isinstance(result, dict):
-                            STATE.update(result)
-                    except Exception:
-                        # Best-effort update - don't fail on update
-                        pass
+                    # Call matching observe tool AFTER execution to refresh STATE
+                    # (The tool may have navigated to a new page, so we need fresh STATE)
                     
                     # Call observe tool AFTER execution to refresh STATE
                     # The postcondition check below will generally ensure we reached the right page,
@@ -390,13 +393,14 @@ async def {tool.name}():
                         if not ok:
                             logger.warning(f"Postcondition validation failed for {key}: expected {pat}, got {STATE.get(key)}")
 
-                # Wrap result in Pydantic model if output schema exists
-                if output_pydantic_model is not None and isinstance(result, dict):
+                # Wrap result in Pydantic output model if one exists
+                # This allows LLM-generated code to work with pure Pydantic types
+                if output_pydantic_model and isinstance(result, dict):
                     try:
                         result = output_pydantic_model(**result)
                     except Exception as e:
-                        logger.warning(f"Failed to validate output with Pydantic model for {tool.name}: {e}")
-                        # Continue with dict result if validation fails
+                        logger.warning(f"Failed to wrap result in {output_pydantic_model.__name__}: {e}")
+                        # Return raw dict if wrapping fails
                 
                 return result
             
@@ -438,11 +442,18 @@ async def {tool.name}():
         This is the single source of truth for URL - don't use STATE["current_url"].
         """
         try:
-            page = await browser.get_current_page()
-            if page:
-                return getattr(page, "url", "")
+            # Use browser-use's built-in method which is more reliable
+            url = await browser.get_current_page_url()
+            return url if url else ""
         except Exception as e:
-            logger.warning(f"Failed to get current URL: {e}")
+            logger.debug(f"Failed to get current URL via get_current_page_url: {e}")
+            # Fallback to getting page and extracting URL
+            try:
+                page = await browser.get_current_page()
+                if page:
+                    return getattr(page, "url", "")
+            except Exception as e2:
+                logger.warning(f"Failed to get current URL (both methods): {e2}")
         return ""
     
     async def goto(url: str):
@@ -475,14 +486,20 @@ async def {tool.name}():
     
     async def ai_exec(subtask: str, output_schema: Optional[Dict[str, Any]] = None) -> Any:
         """
-        Execute an AI agent to complete a given subtask.
+        Execute an AI agent to complete a given subtask using browser-use loop mode.
+        
+        CRITICAL: Reuses the existing browser session (shares the same BrowserSession instance)
+        to avoid "BrowserStateRequestEvent has no handlers" errors.
+        
+        STAYS ON CURRENT TAB: Does NOT navigate to new URLs or switch tabs. The agent works
+        with the current page state to complete the subtask.
         
         Args:
             subtask: Description of the task to perform
             output_schema: Optional JSON schema for structured output
         
         Returns:
-            Result from the AI agent execution
+            Result from the AI agent execution (unwrapped from AgentHistoryList if needed)
         """
         # Avoid circular import
         from .executor import AgentExecutor
@@ -502,27 +519,39 @@ async def {tool.name}():
                 # Continue without structured output
         
         # Create new agent with same tools but new task
+        # EXCLUDE SMCP tools - ai_exec should only use browser-use vision/interaction tools
+        # SMCP tools require specific page state and pre/post conditions that ai_exec can't manage
+        # TODO: Track tools that have failed and exclude them from retries to avoid repeated failures
+        non_smcp_tools = [
+            t for t in agent.tools 
+            if t.tool_executor_type != ToolExecutorType.SMCP
+        ]
+        
         new_agent = Agent(
             description=agent.description,
-            tools=agent.tools.copy(),
+            tools=non_smcp_tools,  # Only include non-SMCP tools
             is_ready_timeout_ms=agent.is_ready_timeout_ms
         )
         
-        # Create executor with shared browser and optional output_model_schema
-        # Get current URL to pass as initial_url to sub-agent
-        current_url = await get_url()
+        # CRITICAL: Reuse the existing browser session to avoid creating new EventBus
+        # and causing "BrowserStateRequestEvent has no handlers" errors
+        # DO NOT pass initial_url - we want to stay on the current page/tab
+        # DO NOT allow navigation - ai_exec should work with current page state
         
         if output_model:
             sub_executor = AgentExecutor(
                 new_agent, 
                 llm=llm, 
-                browser=browser,
+                browser=browser,  # REUSE existing browser session
                 output_model_schema=output_model  # Pass structured output to browser-use Agent
             )
         else:
-            sub_executor = AgentExecutor(new_agent, llm=llm, browser=browser)
+            sub_executor = AgentExecutor(new_agent, llm=llm, browser=browser)  # REUSE
         
-        result = await sub_executor.run(subtask, mode="loop", initial_url=current_url if current_url else None)
+        # Run in loop mode (browser-use agent with visual interaction)
+        # CRITICAL: Do NOT pass initial_url - stay on current page
+        # browser session already has keep_alive=True set in executor._create_browser()
+        result = await sub_executor.run(subtask, mode="loop", initial_url=None)
         
         # After ai_exec completes, call matching observe tool to update STATE
         STATE = executor.state["STATE"]
@@ -530,14 +559,64 @@ async def {tool.name}():
         if current_url:
             await find_and_call_observe(current_url, agent.tools, STATE, agent_executor, " (after ai_exec)")
         
+        # CRITICAL: Unwrap AgentHistoryList to get the actual result
+        # browser-use returns AgentHistoryList which has model_output property
+        if hasattr(result, 'model_output'):
+            logger.debug(f"Unwrapping AgentHistoryList.model_output: {result.model_output}")
+            return result.model_output
+        
+        # If result is a list, get the last element (usually the final result)
+        if isinstance(result, list) and len(result) > 0:
+            last_item = result[-1]
+            if hasattr(last_item, 'model_output'):
+                logger.debug(f"Unwrapping last item model_output: {last_item.model_output}")
+                return last_item.model_output
+            return last_item
+        
         return result
 
-    async def ai_eval(expr: str):
+    async def ai_eval(expr: str, **kwargs):
         """
         Evaluate an expression by asking the LLM.
+        
+        Supports two formats:
+        1. Simple string: ai_eval("Name closest to 'Amber'")
+        2. Template with variables: ai_eval("Name in {A} closest to 'Amber'", A=options.employeeOptions)
+        
+        When kwargs are provided, the prompt is formatted to show variable values:
+        A=<value>
+        B=<value>
+        
+        Respond with ONLY exactly what is requested: <expr with variables>
+        
+        Args:
+            expr: Expression to evaluate (may contain {var} placeholders)
+            **kwargs: Variable values to substitute into the expression
+        
+        Returns:
+            LLM's response (just the requested value)
         """
         from browser_use.llm.messages import UserMessage
-        messages = [UserMessage(content=expr + "\nRespond with ONLY exactly what is requested.")]
+        
+        # Build prompt with variable context if kwargs provided
+        if kwargs:
+            # Format variables section
+            var_lines = []
+            for var_name, var_value in kwargs.items():
+                # Convert value to string representation
+                var_str = str(var_value)
+                # Truncate if too long (keep first 500 chars)
+                if len(var_str) > 500:
+                    var_str = var_str[:500] + "..."
+                var_lines.append(f"{var_name}={var_str}")
+            
+            # Build full prompt
+            prompt = "\n".join(var_lines) + f"\n\nRespond with ONLY exactly what is requested: {expr}"
+        else:
+            # Simple format
+            prompt = expr + "\n\nRespond with ONLY exactly what is requested."
+        
+        messages = [UserMessage(content=prompt)]
         response = await llm.ainvoke(messages)
         return response.completion
 
