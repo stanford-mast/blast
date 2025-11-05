@@ -52,7 +52,10 @@ class AgentExecutor:
         codegen_llm: Optional[BaseChatModel] = None,
         parallel_codegen: int = 1,
         output_model_schema: Optional[type[BaseModel]] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        timezone: Optional[str] = None,
+        stop_if_codegen_fails: bool = False,
+        allowed_domains: Optional[List[str]] = None
     ):
         """
         Initialize AgentExecutor.
@@ -68,11 +71,20 @@ class AgentExecutor:
             output_model_schema: Optional Pydantic model for structured output (passed to browser-use Agent)
             user_id: Optional user identifier for persistent browser profiles. If set and browser=None,
                      creates a browser with user_data_dir specific to this user, persisting cookies/sessions.
+            timezone: Optional timezone string in IANA format (e.g., 'America/Los_Angeles', 'Europe/London').
+                     Used to determine current date/time for code generation context. Defaults to UTC.
+            stop_if_codegen_fails: If True, raise error when code generation fails. 
+                     If False (default), fall back to loop mode.
+            allowed_domains: Optional list of allowed domains for browser navigation. 
+                     Auto-derived from initial URL if not specified. Example: ["*.sage.hr"]
         """
         self.agent = agent
         self.llm = llm or self._create_llm_from_env()
-        self.codegen_llm = codegen_llm or self.llm
+        self.codegen_llm = codegen_llm or self._create_codegen_llm()
+        self.allowed_domains = allowed_domains
         self.user_id = user_id
+        self.timezone = timezone or "UTC"
+        self.stop_if_codegen_fails = stop_if_codegen_fails
         self.browser = browser or self._create_browser()
         self.state_aware = state_aware
         self.parallel_codegen = parallel_codegen
@@ -109,6 +121,20 @@ class AgentExecutor:
             model_name=model,
             provider=provider,
             temperature=0.5  # non-zero temperature for variation
+        )
+    
+    def _create_codegen_llm(self) -> BaseChatModel:
+        """Create LLM specifically for code generation (uses Llama-4 Maverick by default)."""
+        from .llm_factory import LLMFactory
+        
+        # Use dedicated codegen model if specified, otherwise use Llama-4 Maverick
+        model = os.getenv("BLASTAI_CODEGEN_MODEL", "meta-llama/llama-4-maverick-17b-128e-instruct")
+        provider = os.getenv("BLASTAI_CODEGEN_PROVIDER")  # Optional provider override
+        
+        return LLMFactory.create_llm(
+            model_name=model,
+            provider=provider,
+            temperature=0.0  # Zero temperature for deterministic code generation
         )
     
     def _create_browser(self):
@@ -148,6 +174,11 @@ class AgentExecutor:
             args=args,
             # User data directory for persistent cookies/sessions
             user_data_dir=user_data_dir,
+            # Allowed domains for navigation
+            allowed_domains=self.allowed_domains,
+            # CRITICAL: keep_alive=True prevents browser shutdown when agents finish
+            # This allows multiple agents (including ai_exec sub-agents) to reuse the same browser
+            keep_alive=True,
         )
         
         return BrowserSession(browser_profile=profile)
@@ -183,6 +214,20 @@ class AgentExecutor:
         Returns:
             The result of execution
         """
+        # Auto-derive allowed_domains from initial_url if not specified
+        if self.allowed_domains is None and initial_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(initial_url)
+            if parsed.hostname:
+                # Extract base domain (e.g., "ourera.sage.hr" -> "sage.hr")
+                parts = parsed.hostname.split('.')
+                if len(parts) >= 2:
+                    base_domain = '.'.join(parts[-2:])  # Last two parts (sage.hr)
+                    self.allowed_domains = [f"*.{base_domain}"]
+                    logger.info(f"Auto-derived allowed_domains from initial URL: {self.allowed_domains}")
+                else:
+                    self.allowed_domains = [f"*.{parsed.hostname}"]
+        
         # Prepend agent description to task (with space if description exists)
         if self.agent.description:
             full_task = f"{self.agent.description} {task}"
@@ -227,7 +272,7 @@ class AgentExecutor:
                 for t in self.agent.tools
             )
             if has_ask_human_cli:
-                task += " Use ask_human_cli if stuck or unauthenticated or task turned out to be ambiguous."
+                task += "\nUse ask_human_cli if stuck or unauthenticated or task turned out to be ambiguous."
                 logger.info("Added ask_human_cli prompt injection")
             
             logger.info(f"Final task for BrowserUseAgent: {task}")
@@ -295,11 +340,12 @@ class AgentExecutor:
         - goto() in coderun.py matches observe on INPUT url, not current url
         - get_url() used instead of STATE["current_url"] for dynamic URL access
         """
-        # First, ensure browser is connected
+        # First, ensure browser is started and connected
         if not self.browser._cdp_client_root:
             logger.info("Starting browser connection...")
-            await self.browser.connect()
-            logger.debug("Browser connected")
+            # Start the browser (this will launch browser subprocess and connect CDP)
+            await self.browser.start()
+            logger.debug("Browser started and connected via CDP")
         
         # Create python executor first (needed for goto/observe tools)
         if self.python_executor is None:
@@ -311,7 +357,8 @@ class AgentExecutor:
                 agent=self.agent,
                 llm=self.codegen_llm,
                 num_candidates=self.parallel_codegen,
-                state_aware=self.state_aware
+                state_aware=self.state_aware,
+                timezone=self.timezone
             )
         
         # Import helper for observe calls
@@ -320,6 +367,11 @@ class AgentExecutor:
         # Iterative code generation and execution
         # This history tracks the broader conversation: code generated -> execution error -> retry
         # Each code generation may have its own internal refinement iterations for validation errors
+        # TODO: Persist tool calls across follow-up tasks to enable:
+        #   1. Simpler code generation - LLM can reference results from prior tool calls
+        #   2. Relaxed pre_tools constraints - allow tools to use knowledge from previous tasks
+        #   3. Better multi-turn conversations - maintain context of what's already been computed
+        # Implementation: Add TOOLS_CALLED and prior results to conversation_history/initial_state
         conversation_history: List[BaseMessage] = []
         max_iterations = 10
         
@@ -381,8 +433,15 @@ class AgentExecutor:
             
             if not code:
                 logger.error("Failed to generate valid code")
-                # Can't proceed without valid code
-                raise RuntimeError("Code generation failed - no valid code produced")
+                
+                # Check if we should stop or fall back to loop mode
+                if self.stop_if_codegen_fails:
+                    # CLI mode: raise error to stop execution
+                    raise RuntimeError("Code generation failed - no valid code produced")
+                else:
+                    # Interactive mode: fall back to loop mode
+                    logger.warning("Code generation failed, falling back to loop mode")
+                    return await self._run_loop_mode(task, initial_url=None)
             
             logger.info(f"Generated code ({len(code)} chars)")
             

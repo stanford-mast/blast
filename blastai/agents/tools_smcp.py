@@ -319,12 +319,23 @@ async def execute_smcp_tool(agent_executor, tool: SMCPTool, inputs: Dict[str, An
 }})()
 """
         
-        result = await evaluate_js(is_completed_code)
-        if not result.get('success'):
-            reason = result.get('reason', 'Unknown reason')
-            error_msg = f"is_completed failed after {result.get('attempts', 0)} attempts. Last reason: {reason}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-        logger.info(f"is_completed passed after {result.get('attempts')} attempts")
+        try:
+            result = await evaluate_js(is_completed_code)
+            if not result.get('success'):
+                reason = result.get('reason', 'Unknown reason')
+                error_msg = f"is_completed failed after {result.get('attempts', 0)} attempts. Last reason: {reason}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            logger.info(f"is_completed passed after {result.get('attempts')} attempts")
+        except Exception as e:
+            # If execution context was destroyed during is_completed check,
+            # it usually means the page navigated/reloaded, which often indicates success
+            error_str = str(e)
+            if 'Execution context was destroyed' in error_str or 'Cannot find context' in error_str:
+                logger.warning(f"is_completed check failed due to context destruction (page likely navigated) - assuming success: {e}")
+                # Don't raise - treat as successful completion since page navigated
+            else:
+                # Other errors should still fail
+                raise
     
     return output

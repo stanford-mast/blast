@@ -77,11 +77,15 @@ def check_tool_ordering(
     """
     Validate tool ordering via CFG traversal with abstract state tracking.
     
+    Also validates pre_tools dependencies - ensures that if a tool requires
+    other tools to be called first (to get valid input values), those tools
+    have been called earlier in the execution path.
+    
     Args:
         blocks: Dictionary of basic blocks
         start_block: Starting block
         initial_state: Initial abstract state
-        tools_by_name: Dictionary mapping tool names to tool objects (with pre/post)
+        tools_by_name: Dictionary mapping tool names to tool objects (with pre/post, pre_tools)
         
     Returns:
         Tuple of (is_valid, error_message)
@@ -90,7 +94,7 @@ def check_tool_ordering(
     visit_counts: Dict[int, int] = {}
     max_loop_iterations = 2
     
-    def traverse(block: BasicBlock, state: Dict[str, Any], path: List[str]) -> Tuple[bool, Optional[str]]:
+    def traverse(block: BasicBlock, state: Dict[str, Any], path: List[str], tools_called: Set[str]) -> Tuple[bool, Optional[str]]:
         """Recursively traverse CFG and validate tool ordering."""
         # Prevent infinite loops
         visit_counts[block.bid] = visit_counts.get(block.bid, 0) + 1
@@ -113,6 +117,23 @@ def check_tool_ordering(
             
             tool = tools_by_name[func_name]
             
+            # Validate pre_tools dependencies (must be called before this tool)
+            pre_tools = tool.get('pre_tools', {})
+            if pre_tools:
+                # pre_tools is Dict[str, List[str]] - param name -> required tool names
+                # Check all required tools have been called
+                all_required_tools = set()
+                for param_name, required_tool_names in pre_tools.items():
+                    all_required_tools.update(required_tool_names)
+                
+                for required_tool in all_required_tools:
+                    if required_tool not in tools_called:
+                        error_msg = (
+                            f"Pre-tools validation error: {func_name} requires {required_tool} to be called first. "
+                            f"Call sequence: {' -> '.join(path + [func_name])}"
+                        )
+                        return False, error_msg
+            
             # Extract parameter values from call
             params = {}
             try:
@@ -128,6 +149,20 @@ def check_tool_ordering(
                         params[keyword.arg] = getattr(keyword.value, 'value', getattr(keyword.value, 'n', getattr(keyword.value, 's', None)))
             except Exception:
                 pass  # Couldn't extract params, continue anyway
+            
+            # Validate pattern constraints for constant string parameters
+            param_patterns = tool.get('param_patterns', {})
+            if param_patterns:
+                for param_name, param_value in params.items():
+                    if param_name in param_patterns and isinstance(param_value, str):
+                        pattern = param_patterns[param_name]
+                        if not re.match(pattern, param_value):
+                            error_msg = (
+                                f"Pattern validation error: {func_name} parameter '{param_name}' "
+                                f"does not match required pattern. Expected pattern='{pattern}', got value='{param_value}'. "
+                                f"Call sequence: {' -> '.join(path + [func_name])}"
+                            )
+                            return False, error_msg
             
             # Check preconditions
             pre = tool.get('pre', {})
@@ -158,8 +193,9 @@ def check_tool_ordering(
                         state[key] = pattern
                     # pattern == "*" means leave as is (any non-null value)
             
-            # Add to path
+            # Add to path and tools_called tracking
             path.append(func_name)
+            tools_called.add(func_name)
         
         # If no next blocks, path is complete
         if not block.next:
@@ -168,18 +204,19 @@ def check_tool_ordering(
         # Explore all outgoing edges
         for next_bid in block.next:
             next_block = blocks[next_bid]
-            # Create copy of state for this path
+            # Create copy of state, path, and tools_called for this path
             next_state = deepcopy(state)
             next_path = path.copy()
+            next_tools_called = tools_called.copy()
             
-            valid, error = traverse(next_block, next_state, next_path)
+            valid, error = traverse(next_block, next_state, next_path, next_tools_called)
             if not valid:
                 return False, error
         
         return True, None
     
-    # Start traversal
-    valid, error = traverse(start_block, deepcopy(initial_state), [])
+    # Start traversal with empty tools_called set
+    valid, error = traverse(start_block, deepcopy(initial_state), [], set())
     
     # Reset visit counts
     visit_counts.clear()
@@ -327,8 +364,9 @@ def check_ty_types(full_code: str) -> Tuple[bool, Optional[str]]:
             #
             # Rules configuration:
             # - Error level: unresolved-attribute (wrong attrs), invalid-key (dict access on Pydantic),
-            #                invalid-assignment (type mismatches), invalid-argument-type, invalid-return-type
+            #                invalid-assignment (type mismatches), invalid-argument-type
             # - Ignore level: possibly-* rules (too strict for LLM code with conditionals)
+            #                 invalid-return-type (gives false positives on code with early returns)
             config_content = """
 [tool.ty.rules]
 # Error on definite type errors
@@ -336,11 +374,13 @@ unresolved-attribute = "error"
 invalid-key = "error"
 invalid-assignment = "error"
 invalid-argument-type = "error"
-invalid-return-type = "error"
 non-subscriptable = "error"
 call-non-callable = "error"
 missing-argument = "error"
 unknown-argument = "error"
+
+# Ignore return type errors (false positives with early returns)
+invalid-return-type = "ignore"
 
 # Ignore "possibly" errors (too strict for LLM code patterns)
 possibly-unresolved-reference = "ignore"
@@ -449,13 +489,23 @@ async def _user_generated_code() -> Any:
                 tool_info = {
                     'pre': getattr(tool, 'pre', {}),
                     'post': getattr(tool, 'post', {}),
-                    'param_names': []
+                    'param_names': [],
+                    'param_patterns': {},  # Track pattern constraints for parameters
+                    'pre_tools': {}  # Track pre_tools dependencies
                 }
                 
-                # Extract parameter names if available
+                # Extract parameter names and pattern constraints if available
                 if hasattr(tool, 'input_schema') and tool.input_schema:
                     properties = tool.input_schema.get('properties', {})
                     tool_info['param_names'] = list(properties.keys())
+                    # Extract pattern constraints
+                    for param_name, param_schema in properties.items():
+                        if isinstance(param_schema, dict) and 'pattern' in param_schema:
+                            tool_info['param_patterns'][param_name] = param_schema['pattern']
+                
+                # Extract pre_tools if available
+                if hasattr(tool, 'pre_tools'):
+                    tool_info['pre_tools'] = getattr(tool, 'pre_tools', {})
                 
                 tools_by_name[tool.name] = tool_info
             

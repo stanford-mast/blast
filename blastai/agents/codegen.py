@@ -73,7 +73,7 @@ result = ai_eval(f"Summary of {results} for whatever specific goal user had")
 
 RULES = """
 - Do not generate comments
-- Do not assume a user-provided term will exactly match an option; use ai_eval to find the closest match
+- If using a user-provided term (e.g. a name to filter by/search for/pass to a tool), use ai_eval to determine which option it most closely matches.
 """
 
 @dataclass
@@ -114,7 +114,8 @@ class CodeGenerator:
         max_iterations: int = 3,
         accept_cost_threshold: Optional[float] = None,
         min_candidates_for_comparison: int = 1,
-        compare_cost_threshold: Optional[float] = None
+        compare_cost_threshold: Optional[float] = None,
+        timezone: str = "UTC"
     ):
         """
         Initialize code generator.
@@ -128,6 +129,7 @@ class CodeGenerator:
             accept_cost_threshold: If set, immediately accept candidate below this cost (default None)
             min_candidates_for_comparison: Minimum candidates before comparison (default 1)
             compare_cost_threshold: If set, compare and return when we have min_candidates below this threshold (default None)
+            timezone: Timezone string in IANA format for current date/time context (default 'UTC')
         """
         self.agent = agent
         self.llm = llm
@@ -137,6 +139,7 @@ class CodeGenerator:
         self.accept_cost_threshold = accept_cost_threshold
         self.min_candidates_for_comparison = min_candidates_for_comparison
         self.compare_cost_threshold = compare_cost_threshold
+        self.timezone = timezone
         
         # Cache for definition code CFG (built once, reused across iterations)
         self._definition_code_cache: Optional[str] = None
@@ -161,14 +164,8 @@ class CodeGenerator:
         
         # Import Pydantic for type definitions and other required modules
         lines.append("from pydantic import BaseModel, Field")
-        lines.append("from typing import Optional, List, Dict, Any, Union")
+        lines.append("from typing import Optional, List, Dict, Any, Union, Literal")
         lines.append("import re")
-        lines.append("")
-        
-        # Add stub for _call_tool_impl (provided at runtime)
-        lines.append("async def _call_tool_impl(name: str, params: Dict[str, Any]) -> Dict[str, Any]:")
-        lines.append('    """Runtime implementation (provided by executor)."""')
-        lines.append("    raise NotImplementedError('Provided at runtime')")
         lines.append("")
         
         # Initialize STATE dictionary dynamically from all tools' pre/post variables
@@ -190,6 +187,11 @@ class CodeGenerator:
             state_init = "{" + ", ".join([f'"{k}": None' for k in state_keys_list]) + "}"
             lines.append(f"STATE: Dict[str, Any] = {state_init}")
             lines.append("")
+        
+        # Track which tools have been called (for pre_tools enforcement)
+        lines.append("# Track which tools have been called")
+        lines.append("TOOLS_CALLED: set[str] = set()")
+        lines.append("")
         
         # Add SMCP tool definitions with precondition/postcondition assertions
         for tool in self.agent.tools:
@@ -255,6 +257,18 @@ class CodeGenerator:
                 lines.append(f'    {smcp_tool.description}')
                 lines.append(f'    """')
                 
+                # PRE_TOOLS ASSERTIONS (check that required tools have been called)
+                if hasattr(smcp_tool, 'pre_tools') and smcp_tool.pre_tools:
+                    # pre_tools is Dict[str, List[str]] mapping param names to required tool names
+                    # Flatten to get all required tools
+                    required_tools = set()
+                    for param_name, tool_names in smcp_tool.pre_tools.items():
+                        required_tools.update(tool_names)
+                    
+                    if required_tools:
+                        for required_tool in sorted(required_tools):
+                            lines.append(f'    assert "{required_tool}" in TOOLS_CALLED, "Must call {required_tool} before {smcp_tool.name}"')
+                
                 # PRECONDITIONS (assert statements checking STATE)
                 if self.state_aware:
                     # URL pattern precondition - use get_url() to get current URL dynamically
@@ -273,29 +287,8 @@ class CodeGenerator:
                             if assertion:
                                 lines.append(f'    {assertion}')
                 
-                # IMPLEMENTATION (placeholder showing it calls internal implementation)
-                lines.append(f'    ')
-                
-                if has_params:
-                    lines.append(f'    # Validate and call')
-                    model_name = f"{snake_to_pascal(smcp_tool.name)}Input"
-                    # Build kwargs from function parameters using keyword argument syntax
-                    properties = smcp_tool.input_schema["properties"]
-                    param_names = list(properties.keys())
-                    kwargs_args = ", ".join([f'{p}={p}' for p in param_names])
-                    lines.append(f'    params = {model_name}({kwargs_args})')
-                    lines.append(f'    result_dict = await _call_tool_impl("{smcp_tool.name}", params.model_dump())')
-                else:
-                    lines.append(f'    result_dict = await _call_tool_impl("{smcp_tool.name}", {{}})')
-                
-                # If we have output model, validate and return Pydantic model for attribute access
-                if output_model_name:
-                    lines.append(f'    # Validate output against schema and return Pydantic model')
-                    lines.append(f'    result = {output_model_name}(**result_dict)')
-                else:
-                    lines.append(f'    result = result_dict')
-                
-                lines.append(f'    ')
+                # IMPLEMENTATION (stub - runtime provides actual implementation)
+                lines.append(f'    ...')
                 
                 # POSTCONDITIONS (assert statements checking STATE after update)
                 if self.state_aware and smcp_tool.post and isinstance(smcp_tool.post, dict):
@@ -314,7 +307,8 @@ class CodeGenerator:
                             if assertion:
                                 lines.append(f'    {assertion}')
                 
-                lines.append(f'    return result')
+                # Track that this tool was called (conceptually - runtime handles this)
+                lines.append(f'    TOOLS_CALLED.add("{smcp_tool.name}")')
                 lines.append('')
         
         # Add core tool definitions (simplified signatures)
@@ -355,8 +349,11 @@ class CodeGenerator:
         lines.append('    """')
         lines.append('    raise NotImplementedError("Runtime implementation")')
         lines.append('')
-        lines.append('async def ai_eval(expr: str) -> str:')
-        lines.append('    """Evaluate an expression by asking AI."""')
+        lines.append('async def ai_eval(expr: str, **kwargs) -> str:')
+        lines.append('    """')
+        lines.append('    Evaluate an expression by asking AI.')
+        lines.append('    Supports template format: ai_eval("Name in {options} closest to X", options=values)')
+        lines.append('    """')
         lines.append('    raise NotImplementedError("Runtime implementation")')
         lines.append('')
         
@@ -599,9 +596,6 @@ class CodeGenerator:
 Here are examples of good code to generate. Use them as reference but never copy them directly.
 {EXAMPLE_CODE}
 </examples>
-<rules>
-{RULES}
-</rules>
 <instructions>
 Generate completion of the given code block to implement the TASK.
 If an error is reported, fix the previously generated code accordingly.
@@ -620,6 +614,23 @@ If an error is reported, fix the previously generated code accordingly.
             
             # Build prompt with XML tags
             prompt_parts = []
+            
+            # Add current date/time context at the top
+            from datetime import datetime
+            import zoneinfo
+            try:
+                tz = zoneinfo.ZoneInfo(self.timezone)
+                now = datetime.now(tz)
+                # Format: "Monday, November 4, 2025 3:30:00 PM PST"
+                day_of_week = now.strftime("%A")
+                date_part = now.strftime("%B %d, %Y")
+                time_part = now.strftime("%I:%M:%S %p")  # 12-hour format with AM/PM
+                tz_abbr = now.strftime("%Z")
+                timestamp_str = f"{day_of_week}, {date_part} {time_part} {tz_abbr}"
+                prompt_parts.append(f"Now is {timestamp_str}.")
+                prompt_parts.append("")
+            except Exception as e:
+                logger.warning(f"Failed to get current time for timezone {self.timezone}: {e}")
             
             if error:
                 prompt_parts.append(error)
@@ -640,6 +651,9 @@ If an error is reported, fix the previously generated code accordingly.
                     prompt_parts.append(f'await goto("{current_url}")')
                     prompt_parts.append("")
                 
+                prompt_parts.append("# RULES")
+                prompt_parts.append(RULES)
+                prompt_parts.append("")
                 prompt_parts.append("# TASK: " + task)
                 prompt_parts.append("# YOUR CODE HERE")
                 # Note: We deliberately leave the code block open - the LLM will close it

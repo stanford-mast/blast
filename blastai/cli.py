@@ -374,9 +374,10 @@ def run(url: str, smcp_registry: str, prompt: str, user_id: str):
         console.print(f"[blue]Added ask_human_cli to agent[/]")
         
         # Create executor with optional user_id for persistent browser profile
+        # Default timezone to America/Los_Angeles (PST/PDT)
         if user_id:
             console.print(f"[blue]Using persistent browser profile for user:[/] {user_id}")
-        executor = AgentExecutor(agent, user_id=user_id)
+        executor = AgentExecutor(agent, user_id=user_id, timezone="America/Los_Angeles", stop_if_codegen_fails=True)
         
         try:
             console.print(f"\n[green]Running task...[/]")
@@ -392,8 +393,8 @@ def run(url: str, smcp_registry: str, prompt: str, user_id: str):
                 console.print(f"[dim]Available SMCP tools:[/] {', '.join(smcp_tool_names)}")
             console.print(f"[dim]Human-in-loop:[/] ask_human_cli enabled\n")
             
-            # Run task
-            result = await executor.run(prompt, mode="loop", initial_url=url)
+            # Run task in code mode (direct SMCP tool execution)
+            result = await executor.run(prompt, mode="code", initial_url=url)
             
             console.print(f"\n[green]✓ Task complete![/]")
             console.print(f"[dim]Result:[/] {result}\n")

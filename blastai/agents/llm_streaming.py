@@ -145,12 +145,22 @@ async def _stream_openai_compatible(
         model_params['max_completion_tokens'] = llm.max_completion_tokens
     
     # Create streaming request
-    stream = await client.chat.completions.create(
+    # Note: For some providers (e.g., Groq), the create() call with stream=True
+    # returns an async generator directly, not a coroutine that needs to be awaited.
+    # We need to handle both cases.
+    stream_response = client.chat.completions.create(
         model=llm.model,
         messages=serialized_messages,
         stream=True,  # Enable streaming!
         **model_params
     )
+    
+    # Check if it's a coroutine (needs await) or already an async generator
+    import inspect
+    if inspect.iscoroutine(stream_response):
+        stream = await stream_response
+    else:
+        stream = stream_response
     
     # Collect chunks and measure timing
     first_token_time = None

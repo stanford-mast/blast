@@ -97,6 +97,12 @@ class SMCPTool(Tool):
     # Tool type determines behavior
     type: SMCPToolType = SMCPToolType.OBSERVE
     
+    # Pre-tools: Maps input parameter names to lists of tool names that must be called first
+    # This is a weak precondition that helps prevent invalid tool usage
+    # Example: {"employee": ["get_timeoff_field_options"], "policy": ["get_timeoff_field_options"]}
+    # Means employee and policy inputs require get_timeoff_field_options to be called first
+    pre_tools: Dict[str, List[str]] = field(default_factory=dict)
+    
     def __post_init__(self):
         """Initialize tool_executor_type."""
         if not isinstance(self.tool_executor_type, ToolExecutorType):
