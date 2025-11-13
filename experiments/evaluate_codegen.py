@@ -1,979 +1,980 @@
 """
-Evaluate code generation variance, latency, and validation across multiple candidates.
+Evaluation script for codegen performance and quality metrics.
 
-This script analyzes the performance of the code generator by generating multiple
-candidates in parallel and collecting detailed metrics on:
-- Latency range (time to generate each candidate)
-- Cost range (estimated execution cost of each candidate)
-- Validation success (how many iterations needed to get valid code)
-- Code quality (display best/worst candidates)
+This script evaluates code generation across different configurations:
+- Different LLM models (gpt-4.1, meta-llama/llama-4-maverick-17b-128e-instruct)
+- With/without protocol assertions (state, preconditions, postconditions)
 
-Usage:
-    python experiments/evaluate_codegen.py <task_id> --candidates <num> [--runs <num_runs>]
+For each task in agisdk.yaml, generates code and measures:
+- Generation latency (time to generate code)
+- Generation cost (actual LLM cost from token usage)
+- Estimated cost (from codecost module)
+- Code validation (passes codecheck criteria)
+- Actual execution latency (optional, for highest/lowest cost configs)
+- Page load latency (time to load initial_url)
 
-Example:
-    python experiments/evaluate_codegen.py dashdish-deepresearch1 --candidates 10 --runs 3
+Results are saved to:
+- JSON file: raw data for all runs with configs and metrics
+- Markdown file: generated code for each run
+- Summary JSON: averaged metrics per unique config
 """
 
 import asyncio
-import argparse
-import yaml
+import ast
 import json
-import time
 import logging
+import os
 import sys
+import time
+import yaml
 from pathlib import Path
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass, field, asdict
 
-# Enable standalone mode for proper logging
-from blastai.logging_setup import enable_standalone_mode
-enable_standalone_mode(browser_use_log_level="INFO")
+import rich_click as click
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
-# Add project root to path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from blastai.agents import Agent
-from blastai.agents.codegen import CodeGenerator, CodeCandidate
+from blastai.agents import Agent, AgentExecutor, compute_code_cost, check_code_candidate
+from blastai.agents.codegen import CodeGenerator
 from blastai.agents.llm_factory import LLMFactory
+from blastai.agents.models import CoreTool, ToolExecutorType, SMCPToolType
+from browser_use import BrowserSession, BrowserProfile
 from browser_use.llm.base import BaseChatModel
 
-
+console = Console()
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class CandidateMetrics:
-    """Metrics for a single code generation candidate."""
-    candidate_id: int
-    success: bool
-    code: str
-    cost: float
-    latency_seconds: float
-    iterations_to_valid: int  # 0 if never became valid
-    validation_error: Optional[str] = None
-    
-    # Timing breakdown
-    llm_time: float = 0.0
-    validation_time: float = 0.0
-    fix_time: float = 0.0
-    llm_time_percentage: float = 0.0
-    validation_time_percentage: float = 0.0
-    fix_time_percentage: float = 0.0
-    
-    # LLM streaming metrics (averaged across all iterations)
-    avg_time_to_first_token: Optional[float] = None
-    avg_tokens_per_second: Optional[float] = None
-    
-    # Iteration failure tracking
-    total_iterations: int = 0
-    failed_iterations: int = 0
-    iteration_failure_rate: float = 0.0  # Percentage of iterations that failed
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class ExecutionResult:
-    """Result of executing a generated code candidate."""
-    candidate_id: int
-    candidate_type: str  # 'lowest_cost', 'highest_cost'
-    success: bool
-    execution_latency_seconds: float
-    num_actions: int
-    error: str = ""
-    result: str = ""
-
-
-@dataclass
-class CodegenEvaluationResult:
-    """Result of a single codegen evaluation run."""
-    task_id: str
-    model_name: str
-    run_number: int
-    num_candidates: int
-    
-    # Overall metrics
-    total_latency_seconds: float
-    num_valid: int
-    num_invalid: int
-    
-    # Codegen timing statistics
-    fastest_candidate_time: float  # Time to generate fastest candidate
-    slowest_candidate_time: float  # Time to generate slowest candidate
-    
-    # Cost statistics
-    cost_range_min: float
-    cost_range_max: float
-    cost_mean: float
-    
-    # Latency statistics
-    latency_range_min: float
-    latency_range_max: float
-    latency_mean: float
-    
-    # Best/worst candidates
-    lowest_cost_candidate: CandidateMetrics
-    highest_cost_candidate: CandidateMetrics
-    fastest_candidate: CandidateMetrics
-    
-    # Validation statistics
-    valid_on_iteration: Dict[int, int]  # iteration -> count
-    never_valid_count: int
-    
-    # Iteration failure statistics (across all candidates)
-    total_iterations_all_candidates: int  # Sum of all iteration attempts
-    failed_iterations_all_candidates: int  # Sum of all failed iterations
-    overall_iteration_failure_rate: float  # Percentage of all iterations that failed
-    
-    # All candidates (required field)
-    all_candidates: List[CandidateMetrics]
-    
-    # Execution results (if --execute was enabled) - optional fields must come last
-    lowest_cost_execution: Optional[ExecutionResult] = None
-    highest_cost_execution: Optional[ExecutionResult] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        data = {
-            'task_id': self.task_id,
-            'model_name': self.model_name,
-            'run_number': self.run_number,
-            'num_candidates': self.num_candidates,
-            'total_latency_seconds': self.total_latency_seconds,
-            'num_valid': self.num_valid,
-            'num_invalid': self.num_invalid,
-            'fastest_candidate_time': self.fastest_candidate_time,
-            'slowest_candidate_time': self.slowest_candidate_time,
-            'cost_range_min': self.cost_range_min,
-            'cost_range_max': self.cost_range_max,
-            'cost_mean': self.cost_mean,
-            'latency_range_min': self.latency_range_min,
-            'latency_range_max': self.latency_range_max,
-            'latency_mean': self.latency_mean,
-            'lowest_cost_candidate': self.lowest_cost_candidate.to_dict(),
-            'highest_cost_candidate': self.highest_cost_candidate.to_dict(),
-            'fastest_candidate': self.fastest_candidate.to_dict(),
-            'valid_on_iteration': self.valid_on_iteration,
-            'never_valid_count': self.never_valid_count,
-            'total_iterations_all_candidates': self.total_iterations_all_candidates,
-            'failed_iterations_all_candidates': self.failed_iterations_all_candidates,
-            'overall_iteration_failure_rate': self.overall_iteration_failure_rate,
-            'all_candidates': [c.to_dict() for c in self.all_candidates]
-        }
-        
-        if self.lowest_cost_execution:
-            data['lowest_cost_execution'] = {
-                'candidate_id': self.lowest_cost_execution.candidate_id,
-                'candidate_type': self.lowest_cost_execution.candidate_type,
-                'success': self.lowest_cost_execution.success,
-                'execution_latency_seconds': self.lowest_cost_execution.execution_latency_seconds,
-                'num_actions': self.lowest_cost_execution.num_actions,
-                'error': self.lowest_cost_execution.error,
-                'result': self.lowest_cost_execution.result
-            }
-        
-        if self.highest_cost_execution:
-            data['highest_cost_execution'] = {
-                'candidate_id': self.highest_cost_execution.candidate_id,
-                'candidate_type': self.highest_cost_execution.candidate_type,
-                'success': self.highest_cost_execution.success,
-                'execution_latency_seconds': self.highest_cost_execution.execution_latency_seconds,
-                'num_actions': self.highest_cost_execution.num_actions,
-                'error': self.highest_cost_execution.error,
-                'result': self.highest_cost_execution.result
-            }
-        
-        return data
-    
-    def print_summary(self):
-        """Print human-readable summary."""
-        print(f"\n{'='*80}")
-        print(f"CODEGEN EVALUATION: {self.task_id} (Run {self.run_number}, Model: {self.model_name})")
-        print(f"{'='*80}")
-        print(f"Candidates: {self.num_candidates}")
-        print(f"Valid: {self.num_valid} ({self.num_valid/self.num_candidates*100:.1f}%)")
-        print(f"Invalid: {self.num_invalid} ({self.num_invalid/self.num_candidates*100:.1f}%)")
-        print(f"Total Time: {self.total_latency_seconds:.2f}s")
-        print()
-        
-        print("GENERATION TIMING:")
-        print(f"  Fastest candidate: {self.fastest_candidate_time:.2f}s")
-        print(f"  Slowest candidate: {self.slowest_candidate_time:.2f}s")
-        print(f"  Range: {self.slowest_candidate_time - self.fastest_candidate_time:.2f}s")
-        print()
-        
-        print("COST STATISTICS:")
-        print(f"  Range: {self.cost_range_min:.2f}s - {self.cost_range_max:.2f}s")
-        print(f"  Mean: {self.cost_mean:.2f}s")
-        print()
-        
-        print("LATENCY STATISTICS:")
-        print(f"  Range: {self.latency_range_min:.2f}s - {self.latency_range_max:.2f}s")
-        print(f"  Mean: {self.latency_mean:.2f}s")
-        print()
-        
-        # Calculate average timing breakdown across all candidates
-        valid_candidates = [c for c in self.all_candidates if c.success]
-        if valid_candidates:
-            avg_llm_pct = sum(c.llm_time_percentage for c in valid_candidates) / len(valid_candidates)
-            avg_validation_pct = sum(c.validation_time_percentage for c in valid_candidates) / len(valid_candidates)
-            avg_fix_pct = sum(c.fix_time_percentage for c in valid_candidates) / len(valid_candidates)
-            print("TIMING BREAKDOWN (Valid Candidates):")
-            print(f"  LLM: {avg_llm_pct:.1f}%")
-            print(f"  Validation: {avg_validation_pct:.1f}%")
-            print(f"  Fixes: {avg_fix_pct:.1f}%")
-            print()
-            
-            # Calculate average streaming metrics
-            candidates_with_ttft = [c for c in valid_candidates if c.avg_time_to_first_token is not None]
-            candidates_with_speed = [c for c in valid_candidates if c.avg_tokens_per_second is not None]
-            if candidates_with_ttft or candidates_with_speed:
-                print("LLM STREAMING METRICS (Valid Candidates):")
-                if candidates_with_ttft:
-                    avg_ttft = sum(c.avg_time_to_first_token for c in candidates_with_ttft) / len(candidates_with_ttft)
-                    print(f"  Avg Time to First Token: {avg_ttft:.2f}s")
-                if candidates_with_speed:
-                    avg_speed = sum(c.avg_tokens_per_second for c in candidates_with_speed) / len(candidates_with_speed)
-                    print(f"  Avg Token Generation Speed: {avg_speed:.1f} tokens/sec")
-                print()
-        
-        print("VALIDATION STATISTICS:")
-        for iteration in sorted(self.valid_on_iteration.keys()):
-            count = self.valid_on_iteration[iteration]
-            print(f"  Valid on iteration {iteration}: {count} ({count/self.num_candidates*100:.1f}%)")
-        print(f"  Never valid: {self.never_valid_count} ({self.never_valid_count/self.num_candidates*100:.1f}%)")
-        print()
-        
-        print("ITERATION FAILURE STATISTICS:")
-        print(f"  Total iterations (all candidates): {self.total_iterations_all_candidates}")
-        print(f"  Failed iterations: {self.failed_iterations_all_candidates}")
-        print(f"  Overall failure rate: {self.overall_iteration_failure_rate:.1f}%")
-        print(f"  (This shows how often the LLM generates invalid code)")
-        print()
-        
-        # Print execution results if available
-        if self.lowest_cost_execution or self.highest_cost_execution:
-            print(f"{'='*80}")
-            print("EXECUTION RESULTS:")
-            print(f"{'='*80}")
-            
-            if self.lowest_cost_execution:
-                exec_result = self.lowest_cost_execution
-                status = "✓ Success" if exec_result.success else "✗ Failed"
-                print(f"\nLOWEST COST CANDIDATE (Cost: {self.lowest_cost_candidate.cost:.2f}s):")
-                print(f"  {status}")
-                print(f"  Execution Time: {exec_result.execution_latency_seconds:.2f}s")
-                print(f"  Actions: {exec_result.num_actions}")
-                if exec_result.error:
-                    print(f"  Error: {exec_result.error}")
-                if exec_result.result:
-                    print(f"  Result: {exec_result.result[:200]}...")
-            
-            if self.highest_cost_execution:
-                exec_result = self.highest_cost_execution
-                status = "✓ Success" if exec_result.success else "✗ Failed"
-                print(f"\nHIGHEST COST CANDIDATE (Cost: {self.highest_cost_candidate.cost:.2f}s):")
-                print(f"  {status}")
-                print(f"  Execution Time: {exec_result.execution_latency_seconds:.2f}s")
-                print(f"  Actions: {exec_result.num_actions}")
-                if exec_result.error:
-                    print(f"  Error: {exec_result.error}")
-                if exec_result.result:
-                    print(f"  Result: {exec_result.result[:200]}...")
-            
-            print()
-        
-        print(f"{'='*80}")
-        print("LOWEST COST CANDIDATE:")
-        print(f"Cost: {self.lowest_cost_candidate.cost:.2f}s, Latency: {self.lowest_cost_candidate.latency_seconds:.2f}s")
-        print(f"Timing: LLM={self.lowest_cost_candidate.llm_time:.2f}s ({self.lowest_cost_candidate.llm_time_percentage:.1f}%), Val={self.lowest_cost_candidate.validation_time:.2f}s ({self.lowest_cost_candidate.validation_time_percentage:.1f}%), Fix={self.lowest_cost_candidate.fix_time:.2f}s")
-        print(f"```python\n{self.lowest_cost_candidate.code}\n```")
-        print()
-        
-        print(f"{'='*80}")
-        print("HIGHEST COST CANDIDATE:")
-        print(f"Cost: {self.highest_cost_candidate.cost:.2f}s, Latency: {self.highest_cost_candidate.latency_seconds:.2f}s")
-        print(f"Timing: LLM={self.highest_cost_candidate.llm_time:.2f}s ({self.highest_cost_candidate.llm_time_percentage:.1f}%), Val={self.highest_cost_candidate.validation_time:.2f}s ({self.highest_cost_candidate.validation_time_percentage:.1f}%), Fix={self.highest_cost_candidate.fix_time:.2f}s")
-        print(f"```python\n{self.highest_cost_candidate.code}\n```")
-        print()
-        
-        print(f"{'='*80}")
-        print("FASTEST CANDIDATE:")
-        print(f"Cost: {self.fastest_candidate.cost:.2f}s, Latency: {self.fastest_candidate.latency_seconds:.2f}s")
-        print(f"Timing: LLM={self.fastest_candidate.llm_time:.2f}s ({self.fastest_candidate.llm_time_percentage:.1f}%), Val={self.fastest_candidate.validation_time:.2f}s ({self.fastest_candidate.validation_time_percentage:.1f}%), Fix={self.fastest_candidate.fix_time:.2f}s")
-        print(f"```python\n{self.fastest_candidate.code}\n```")
-        print()
-        
-        if self.never_valid_count > 0:
-            print(f"{'='*80}")
-            print("FAILED CANDIDATES:")
-            for candidate in self.all_candidates:
-                if not candidate.success:
-                    print(f"\nCandidate {candidate.candidate_id}:")
-                    print(f"  Error: {candidate.validation_error}")
-                    print(f"  Timing: LLM={candidate.llm_time:.2f}s, Val={candidate.validation_time:.2f}s, Fix={candidate.fix_time:.2f}s")
-                    print(f"  Code:\n```python\n{candidate.code}\n```")
-        
-        print(f"{'='*80}\n")
-
-
-@dataclass
-class CodegenEvaluationSummary:
-    """Summary across multiple runs and models."""
-    task_ids: List[str]
-    models: List[str]
-    results: List[CodegenEvaluationResult]
-    
-    # Per-model aggregated stats
-    model_stats: Dict[str, Dict[str, Any]]  # model -> stats
+class CodegenConfig:
+    """Configuration for a single codegen run."""
+    model: str
+    with_protocol: bool
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            'task_ids': self.task_ids,
-            'models': self.models,
-            'results': [r.to_dict() for r in self.results],
-            'model_stats': self.model_stats
+            "model": self.model,
+            "with_protocol": self.with_protocol
         }
+
+
+@dataclass
+class CodecheckResult:
+    """Validation result capturing potentially multiple failure types even with single generation iteration.
+
+    Fields:
+      overall_pass: True if all checks (syntax, types, ordering) passed.
+      failure_types: List of failure type strings (empty if overall_pass=True).
+      failure_details: List of dicts with 'type' and 'message' for each failure.
+      error_message: First failure message (legacy convenience field).
+    """
+    overall_pass: bool
+    failure_types: List[str] = field(default_factory=list)
+    failure_details: List[Dict[str, str]] = field(default_factory=list)
+    error_message: Optional[str] = None
+
+
+@dataclass
+class CodegenResult:
+    """Results from a single codegen run."""
+    config: CodegenConfig
+    generation_latency: float  # Time to generate code in seconds
+    generation_cost: float  # Actual LLM cost in USD
+    estimated_cost: float  # Estimated cost from codecost module in seconds
+    codecheck: CodecheckResult
+    actual_latency: Optional[float] = None  # Actual execution time if run
+    generated_code: str = ""  # The generated code
+    generation_failed: bool = False  # True if we failed to produce any code
     
-    def print_summary(self):
-        """Print aggregated summary."""
-        print(f"\n{'='*80}")
-        print(f"CODEGEN EVALUATION SUMMARY")
-        print(f"{'='*80}")
-        print(f"Tasks: {', '.join(self.task_ids)}")
-        print(f"Models: {', '.join(self.models)}")
-        print(f"Total Runs: {len(self.results)}")
-        print()
-        
-        # Print per-model statistics
-        for model in self.models:
-            stats = self.model_stats.get(model, {})
-            print(f"{'='*80}")
-            print(f"MODEL: {model}")
-            print(f"{'='*80}")
-            print(f"  Overall Iteration Failure Rate: {stats.get('avg_iteration_failure_rate', 0):.1f}%")
-            print(f"  Time to Fastest Candidate: {stats.get('avg_fastest_time', 0):.2f}s")
-            print(f"  Time to Slowest Candidate: {stats.get('avg_slowest_time', 0):.2f}s")
-            print(f"  Avg Valid Rate: {stats.get('avg_valid_rate', 0)*100:.1f}%")
-            print(f"  Avg Cost Mean: {stats.get('avg_cost_mean', 0):.2f}s")
-            
-            # Execution results if available
-            if stats.get('has_execution_results'):
-                print()
-                print("  EXECUTION RESULTS:")
-                lowest = stats.get('avg_lowest_cost_execution_time', 0)
-                highest = stats.get('avg_highest_cost_execution_time', 0)
-                print(f"    Lowest Cost Execution: {lowest:.2f}s")
-                print(f"    Highest Cost Execution: {highest:.2f}s")
-                print(f"    Delta: {highest - lowest:.2f}s ({(highest/lowest - 1)*100:.1f}% slower)")
-            
-            print()
-        
-        print(f"{'='*80}\n")
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "config": self.config.to_dict(),
+            "generation_latency": self.generation_latency,
+            "generation_cost": self.generation_cost,
+            "estimated_cost": self.estimated_cost,
+            "codecheck": {
+                "overall_pass": self.codecheck.overall_pass,
+                "failure_types": self.codecheck.failure_types,
+                "failure_details": self.codecheck.failure_details,
+                "error_message": self.codecheck.error_message
+            },
+            "actual_latency": self.actual_latency,
+            "generation_failed": self.generation_failed
+        }
 
 
-async def generate_candidate_with_metrics(
-    generator: CodeGenerator,
+@dataclass
+class PageLoadResult:
+    """Results from page load measurement."""
+    initial_url: str
+    load_latency: float  # Time to load page in seconds
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "config": {"initial_url": self.initial_url},
+            "load_latency": self.load_latency
+        }
+
+
+async def load_task_definitions(tasks_file: Path) -> List[Dict[str, Any]]:
+    """Load task definitions from YAML file."""
+    with open(tasks_file) as f:
+        tasks = yaml.safe_load(f)
+    return tasks
+
+
+async def create_agent_for_task(task: Dict[str, Any]) -> Agent:
+    """Create an Agent with SMCP tools from registry if available."""
+    smcp_registry = task.get("smcp_registry")
+    
+    if smcp_registry and Path(smcp_registry).exists():
+        logger.info(f"Loading SMCP tools from {smcp_registry}")
+        agent = Agent.from_smcp_registry(smcp_registry)
+        logger.info(f"Loaded {len(agent.tools)} SMCP tools")
+    else:
+        logger.info("No SMCP registry found, creating agent with no tools")
+        agent = Agent(description="", tools=[])
+    
+    return agent
+
+
+async def generate_code_with_timing(
+    agent: Agent,
     task: str,
-    candidate_id: int,
-    initial_state: Optional[Dict[str, Any]] = None,
-    current_url: Optional[str] = None
-) -> CandidateMetrics:
+    config: CodegenConfig,
+    codegen_llm: BaseChatModel,
+    timezone: str = "America/Los_Angeles"
+) -> Tuple[str, float, float, object, object]:
     """
-    Generate a single candidate and collect detailed metrics.
+    Generate code for a task and measure timing and cost.
     
-    This wraps _generate_candidate to measure total latency from start to finish.
-    The latency includes all LLM calls across all iterations, validation time, etc.
-    
-    NOTE: Latency measures wall-clock time for the entire candidate generation,
-    NOT individual LLM call latency. When running in parallel, candidates will
-    have similar total latency even if their individual iterations vary in speed.
-    
-    Args:
-        generator: CodeGenerator instance
-        task: Task description
-        candidate_id: Candidate identifier
-        initial_state: Optional initial STATE values
-        current_url: Optional current URL
-        
     Returns:
-        CandidateMetrics with detailed information
+        Tuple of (generated_code, generation_time_seconds, generation_cost_usd, candidate, code_generator)
     """
-    start_time = time.time()
-    iterations_to_valid = 0
-    final_code = ""
-    final_cost = 0.0
-    success = False
-    validation_error = None
-    llm_time = 0.0
-    validation_time = 0.0
-    fix_time = 0.0
+    from blastai.agents.codegen import CodeGenerator
+    from browser_use.llm.messages import UserMessage
     
-    # Call the actual _generate_candidate method
-    candidate = await generator._generate_candidate(
+    # Create code generator
+    code_generator = CodeGenerator(
+        agent=agent,
+        llm=codegen_llm,
+        num_candidates=1,  # Generate single candidate
+        state_aware=config.with_protocol,
+        max_iterations=1,  # Force single iteration per user's simplification
+        timezone=timezone
+    )
+    
+    # Measure generation time
+    start_time = time.time()
+    
+    # Generate code using the generate_code method
+    # This requires history (list of BaseMessage) and initial state
+    initial_state = {}  # Empty initial state for evaluation
+    current_url = ""
+    history = []  # Empty history for initial generation
+    
+    # Call private _generate_candidate to retain iteration metadata
+    candidate = await code_generator._generate_candidate(
         task=task,
-        history=[],
+        history=history,
         initial_error=None,
         initial_state=initial_state,
         current_url=current_url
     )
+    # Include last attempt's code even if it failed validation (useful for debugging)
+    generated_code = candidate.code if candidate else ""
     
-    latency = time.time() - start_time
+    generation_time = time.time() - start_time
     
-    # Extract iteration stats and streaming metrics
-    total_iters = 0
-    failed_iters = 0
-    avg_ttft = None
-    avg_tok_per_sec = None
+    # For cost tracking, we need to parse the LLM usage
+    # The CodeGenerator doesn't directly expose this, so we'll estimate
+    # based on the model's pricing and approximate token counts
     
-    if candidate and candidate.is_valid:
-        success = True
-        final_code = candidate.code
-        final_cost = candidate.rank
-        iterations_to_valid = candidate.iterations_used
-        llm_time = candidate.llm_time
-        validation_time = candidate.validation_time
-        fix_time = candidate.fix_time
-        total_iters = candidate.total_iterations
-        failed_iters = candidate.failed_iterations
-        
-        # Calculate average streaming metrics across all iterations
-        if candidate.llm_timings:
-            ttfts = [t.time_to_first_token for t in candidate.llm_timings if t.time_to_first_token is not None]
-            tok_speeds = [t.tokens_per_second for t in candidate.llm_timings if t.tokens_per_second is not None]
-            avg_ttft = sum(ttfts) / len(ttfts) if ttfts else None
-            avg_tok_per_sec = sum(tok_speeds) / len(tok_speeds) if tok_speeds else None
-            
-    elif candidate:
-        final_code = candidate.code
-        validation_error = candidate.validation_error
-        iterations_to_valid = 0  # Never became valid
-        llm_time = candidate.llm_time
-        validation_time = candidate.validation_time
-        fix_time = candidate.fix_time
-        total_iters = candidate.total_iterations
-        failed_iters = candidate.failed_iterations
-        
-        # Calculate streaming metrics even for failed candidates
-        if candidate.llm_timings:
-            ttfts = [t.time_to_first_token for t in candidate.llm_timings if t.time_to_first_token is not None]
-            tok_speeds = [t.tokens_per_second for t in candidate.llm_timings if t.tokens_per_second is not None]
-            avg_ttft = sum(ttfts) / len(ttfts) if ttfts else None
-            avg_tok_per_sec = sum(tok_speeds) / len(tok_speeds) if tok_speeds else None
+    # Estimate cost based on model and code length
+    # This is a rough approximation - real implementation would need token tracking
+    generation_cost = estimate_cost_from_model(config.model, generated_code or "", generation_time)
+    
+    # Return a simple object with timing info for compatibility
+    return generated_code or "", generation_time, generation_cost, candidate, code_generator
+
+
+def estimate_cost_from_model(model: str, code: str, generation_time: float) -> float:
+    """
+    Estimate LLM cost based on model, generated code length, and time.
+    
+    This is a rough approximation. Real implementation should track actual token usage.
+    """
+    # Rough token estimates
+    # Assume prompt is ~2000 tokens (task + definitions + examples)
+    # Assume code output is ~500 tokens on average
+    prompt_tokens = 2000 + len(code.split()) * 0.5  # Rough estimate
+    output_tokens = len(code.split()) * 1.3  # Rough estimate (1.3 tokens per word)
+    
+    # Pricing per million tokens (from pricing_openai_api.json and typical API pricing)
+    pricing = {
+        "gpt-4.1": {"input": 2.0, "output": 8.0},
+        "gpt-4.1-mini": {"input": 0.4, "output": 1.6},
+        "meta-llama/llama-4-maverick-17b-128e-instruct": {"input": 0.15, "output": 0.15},  # Groq pricing
+        "openai/gpt-oss-20b": {"input": 0.15, "output": 0.15},  # Groq pricing (approx)
+    }
+    
+    if model in pricing:
+        input_cost = (prompt_tokens / 1_000_000) * pricing[model]["input"]
+        output_cost = (output_tokens / 1_000_000) * pricing[model]["output"]
+        return input_cost + output_cost
     else:
-        final_code = "<no code generated>"
-        validation_error = "Generator returned None"
-        iterations_to_valid = 0
-    
-    # Calculate percentages
-    llm_pct = (llm_time / latency * 100) if latency > 0 else 0
-    validation_pct = (validation_time / latency * 100) if latency > 0 else 0
-    fix_pct = (fix_time / latency * 100) if latency > 0 else 0
-    iter_failure_rate = (failed_iters / total_iters * 100) if total_iters > 0 else 0
-    
-    return CandidateMetrics(
-        candidate_id=candidate_id,
-        success=success,
-        code=final_code,
-        cost=final_cost,
-        latency_seconds=latency,
-        iterations_to_valid=iterations_to_valid,
-        validation_error=validation_error,
-        llm_time=llm_time,
-        validation_time=validation_time,
-        fix_time=fix_time,
-        llm_time_percentage=llm_pct,
-        validation_time_percentage=validation_pct,
-        fix_time_percentage=fix_pct,
-        avg_time_to_first_token=avg_ttft,
-        avg_tokens_per_second=avg_tok_per_sec,
-        total_iterations=total_iters,
-        failed_iterations=failed_iters,
-        iteration_failure_rate=iter_failure_rate
+        # Default rough estimate
+        return 0.001 * generation_time  # $0.001 per second as fallback
+
+
+
+async def validate_code(
+    code: str,
+    agent: Agent,
+    code_generator=None,
+    candidate: Optional[object] = None
+) -> CodecheckResult:
+    """Run syntax, type, and ordering checks collecting all applicable failures (no early return)."""
+    if not code:
+        # Distinguish between true generation failure vs extraction failure
+        reason = "No code generated"
+        ftype = "generation"
+        if candidate is not None and getattr(candidate, 'validation_error', ''):
+            ve = candidate.validation_error or ""
+            if "no code block" in ve.lower():
+                reason = ve
+                ftype = "extraction"
+        return CodecheckResult(
+            overall_pass=False,
+            failure_types=[ftype],
+            failure_details=[{"type": ftype, "message": reason}],
+            error_message=reason
+        )
+    failure_types: List[str] = []
+    failure_details: List[Dict[str, str]] = []
+    syntax_ok = True
+    types_ok = True
+    ordering_ok = True
+    # 1. Syntax
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        syntax_ok = False
+        msg = f"Syntax error at line {e.lineno}: {e.msg}"
+        failure_types.append("syntax")
+        failure_details.append({"type": "syntax", "message": msg})
+    # 2. Types (only if syntax passed)
+    if syntax_ok:
+        definition_code = code_generator._build_definition_code() if code_generator is not None else None
+        if definition_code is not None:
+            wrapped = """\nasync def _user_generated_code() -> Any:\n""" + "\n".join("    " + ln for ln in code.split("\n")) + "\n"
+            full_code = definition_code + "\n\n" + wrapped
+            try:
+                # Use same function used in check_code_candidate indirectly
+                from blastai.agents.codecheck import check_ty_types
+                ty_valid, ty_err = check_ty_types(full_code)
+                if not ty_valid:
+                    types_ok = False
+                    failure_types.append("types")
+                    failure_details.append({"type": "types", "message": ty_err or "Type checking failed"})
+            except Exception as e:
+                logger.debug(f"Type checking exception ignored: {e}")
+    # 3. Ordering (only if syntax passed)
+    if syntax_ok:
+        try:
+            from blastai.agents.codecheck import CFGBuilder, check_tool_ordering
+            tree = ast.parse(code)
+            builder = CFGBuilder()
+            start_block, blocks = builder.build(tree)
+            tools_by_name = {}
+            for tool in getattr(agent, 'tools', []):
+                info = {
+                    'pre': getattr(tool, 'pre', {}),
+                    'post': getattr(tool, 'post', {}),
+                    'param_names': [],
+                    'param_patterns': {},
+                    'pre_tools': getattr(tool, 'pre_tools', {})
+                }
+                if hasattr(tool, 'input_schema') and tool.input_schema:
+                    props = tool.input_schema.get('properties', {})
+                    info['param_names'] = list(props.keys())
+                    for p_name, p_schema in props.items():
+                        if isinstance(p_schema, dict) and 'pattern' in p_schema:
+                            info['param_patterns'][p_name] = p_schema['pattern']
+                tools_by_name[tool.name] = info
+            valid_ordering, ordering_err = check_tool_ordering(blocks, start_block, {}, tools_by_name)
+            if not valid_ordering:
+                ordering_ok = False
+                otype = classify_failure(ordering_err)
+                if otype == 'unknown':
+                    otype = 'ordering'
+                failure_types.append(otype)
+                failure_details.append({"type": otype, "message": ordering_err})
+        except Exception as e:
+            logger.debug(f"Ordering validation exception ignored: {e}")
+    overall_pass = syntax_ok and types_ok and ordering_ok
+    return CodecheckResult(
+        overall_pass=overall_pass,
+        failure_types=failure_types,
+        failure_details=failure_details,
+        error_message=None if overall_pass else (failure_details[0]['message'] if failure_details else 'Validation failed')
     )
 
+def classify_failure(msg: Optional[str]) -> str:
+    if not msg:
+        return "unknown"
+    l = msg.lower()
+    if "no code block" in l:
+        return "extraction"
+    if "syntax" in l or "invalid syntax" in l:
+        return "syntax"
+    if "line " in l and ":" in msg:
+        return "types"
+    if "pre-tools" in l:
+        return "pre-tools"
+    if "precondition" in l or "tool ordering" in l or "ordering" in l:
+        return "ordering"
+    return "unknown"
 
-async def execute_candidate(
-    candidate: CandidateMetrics,
-    candidate_type: str,
-    task_data: Dict[str, Any],
+
+async def execute_code_with_timing(
+    code: str,
     agent: Agent,
-    llm: BaseChatModel
-) -> ExecutionResult:
+    task: str,
+    initial_url: str,
+    user_id: str = None
+) -> float:
     """
-    Execute a code candidate and measure its performance.
+    Execute generated code and measure actual latency.
     
-    Args:
-        candidate: The candidate to execute
-        candidate_type: 'lowest_cost' or 'highest_cost'
-        task_data: Task data with initial_url and goal
-        agent: Agent with tools
-        llm: LLM for code generation (not used, but needed for executor)
-        
-    Returns:
-        ExecutionResult with execution metrics
+    Returns execution time in seconds.
     """
-    from blastai.agents import AgentExecutor
-    from blastai.agents.codegen import CodeGenerator, CodeCandidate
-    
-    print(f"\n{'='*60}")
-    print(f"EXECUTING {candidate_type.upper()} CANDIDATE")
-    print(f"{'='*60}")
-    print(f"Estimated Cost: {candidate.cost:.2f}s")
-    print(f"Code:\n```python\n{candidate.code}\n```")
-    print()
-    
-    # Create a custom executor with a mocked code generator that returns our pre-generated code
-    executor = AgentExecutor(agent, llm=llm)
-    
-    # Create a mock CodeGenerator that returns our pre-selected candidate
-    class MockCodeGenerator:
-        async def generate_code(self, task, history, error=None, initial_state=None, current_url=None):
-            # Return our pre-generated code wrapped in a CodeCandidate
-            return CodeCandidate(
-                code=candidate.code,
-                rank=candidate.cost,
-                is_valid=True,
-                iterations_used=0,
-                validation_error=None,
-                llm_time=0,
-                validation_time=0,
-                fix_time=0,
-                total_iterations=0,
-                failed_iterations=0,
-                llm_timings=[]
-            )
-    
-    # Inject the mock generator
-    executor.code_generator = MockCodeGenerator()
-    
-    initial_url = task_data.get('initial_url')
-    task = task_data.get('goal')
-    
-    start_time = time.time()
-    num_actions = 0
-    success = False
-    error = ""
-    result_str = ""
+    # Normalize environment for browser-use to match CLI behavior and reduce flakiness
+    os.environ.setdefault("BROWSER_USE_LOGGING_LEVEL", "error")
+    os.environ.setdefault("BROWSER_USE_DISABLE_LOGGING", "true")
+    os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
+    # Ensure GPU disabled consistently
+    os.environ.setdefault("BROWSER_DISABLE_GPU", "true")
+    # Reasonable startup timeout for browser
+    os.environ.setdefault("BROWSER_START_TIMEOUT", "20")
+
+    # Create executor for running the code (prevent fallback to loop mode on codegen failure)
+    executor = AgentExecutor(
+        agent=agent,
+        user_id=user_id,
+        timezone="America/Los_Angeles",
+        stop_if_codegen_fails=True
+    )
     
     try:
-        # Execute in code mode - will use our pre-generated code
-        result = await executor.run(
-            task,
-            mode='code',
-            initial_url=initial_url
-        )
+        # Measure execution time
+        start_time = time.time()
         
-        # Extract metrics
-        if result and hasattr(result, 'number_of_steps'):
-            num_actions = result.number_of_steps()
-        else:
-            num_actions = 0
+    # Run in code mode (this will execute the generated code; retries occur within code mode only)
+        await executor.run(task, mode="code", initial_url=initial_url)
         
-        if result and hasattr(result, 'final_result'):
-            final_result = result.final_result()
-            result_str = final_result if final_result else str(result)
-        else:
-            result_str = str(result)
+        execution_time = time.time() - start_time
         
-        success = True
-        print(f"  ✓ Success in {time.time() - start_time:.2f}s ({num_actions} steps)")
-        
+        return execution_time
     except Exception as e:
-        error = str(e)
-        print(f"  ✗ Failed: {error}")
-        import traceback
-        traceback.print_exc()
-        
+        logger.error(f"Error during code execution: {e}")
+        return -1.0  # Indicate failure
     finally:
         await executor.cleanup()
-    
-    execution_time = time.time() - start_time
-    
-    return ExecutionResult(
-        candidate_id=candidate.candidate_id,
-        candidate_type=candidate_type,
-        success=success,
-        execution_latency_seconds=execution_time,
-        num_actions=num_actions,
-        error=error,
-        result=result_str
-    )
 
 
-async def evaluate_codegen(
-    task_id: str,
-    task_data: Dict[str, Any],
-    agent: Agent,
-    llm: BaseChatModel,
-    num_candidates: int,
-    run_number: int,
-    model_name: str,
-    execute: bool = False
-) -> CodegenEvaluationResult:
+async def measure_page_load_latency(initial_url: str, headful: bool = True, agent: Optional[Agent] = None) -> float:
     """
-    Evaluate code generation with multiple candidates.
+    Measure time to load a page until fully loaded.
+    
+    Uses the same approach as blastai code mode - calls observe tool to wait for page readiness.
     
     Args:
-        task_id: Task identifier
-        task_data: Task data with goal
-        agent: Agent with tools
-        llm: LLM for code generation
-        num_candidates: Number of candidates to generate
-        run_number: Run number
-        model_name: Name of the model being evaluated
-        execute: Whether to execute the best/worst candidates
-        
-    Returns:
-        CodegenEvaluationResult with detailed metrics
+        initial_url: URL to load
+        headful: If True, show browser window (default: True)
+    
+    Returns load time in seconds.
     """
-    print(f"\n{'='*80}")
-    print(f"EVALUATING CODEGEN: {task_id} (Run {run_number}, Model: {model_name})")
-    print(f"Generating {num_candidates} candidates in parallel...")
-    print(f"{'='*80}")
+    from browser_use import BrowserSession, BrowserProfile
+    from blastai.agents.coderun import find_and_call_observe
+    from pathlib import Path
     
-    # Create code generator
-    generator = CodeGenerator(
-        agent=agent,
-        llm=llm,
-        state_aware=False,  # Keep simple for now
-        num_candidates=1,  # We'll manage parallelism ourselves
-        max_iterations=3
+    # Get viewport/window size from environment (matching AgentExecutor)
+    width = int(os.getenv("BROWSER_WIDTH", "1280"))
+    height = int(os.getenv("BROWSER_HEIGHT", "720"))
+    
+    # Build Chrome args for WSL GPU fix (matching AgentExecutor)
+    # ALWAYS disable GPU for WSL to avoid transparency/black bar issues
+    args = ["--disable-gpu", "--disable-gpu-sandbox"]
+    
+    # Create profile with proper viewport and window settings (matching AgentExecutor)
+    profile = BrowserProfile(
+        headless=not headful,  # headless=False when headful=True
+        viewport={"width": width, "height": height},
+        window_size={"width": width, "height": height},
+        args=args,
+        keep_alive=False,  # Don't keep browser alive after we're done
+        wait_for_network_idle_page_load_time=2.0  # Wait 2 seconds for network idle
     )
     
-    task = task_data.get('goal')
-    
-    # Generate candidates in parallel
-    overall_start = time.time()
-    
-    tasks = [
-        generate_candidate_with_metrics(generator, task, i + 1)
-        for i in range(num_candidates)
-    ]
-    
-    all_metrics = await asyncio.gather(*tasks)
-    
-    total_latency = time.time() - overall_start
-    
-    # Calculate statistics
-    valid_candidates = [m for m in all_metrics if m.success]
-    invalid_candidates = [m for m in all_metrics if not m.success]
-    
-    num_valid = len(valid_candidates)
-    num_invalid = len(invalid_candidates)
-    
-    # Cost statistics (only from valid candidates)
-    if valid_candidates:
-        costs = [m.cost for m in valid_candidates]
-        cost_min = min(costs)
-        cost_max = max(costs)
-        cost_mean = sum(costs) / len(costs)
+    # Create browser session
+    browser = BrowserSession(browser_profile=profile)
+
+    try:
+        # Start timing before launching browser (measure from process start)
+        start_time = time.time()
+
+        # Start browser (this launches Chrome/Chromium with all proper args)
+        await browser.start()
+
+        # Get current page and navigate
+        page = await browser.get_current_page()
+        await page.goto(initial_url)
+
+        # If an agent with SMCP observe tools is provided, call the observe tool
+        # to wait for page readiness (this is the canonical blastai approach).
+        if agent is not None:
+            # Check if any observe tools exist
+            try:
+                has_observe = any(
+                    getattr(t, 'tool_executor_type', None) == ToolExecutorType.SMCP
+                    and getattr(t, 'type', None) == SMCPToolType.OBSERVE
+                    for t in getattr(agent, 'tools', [])
+                )
+            except Exception:
+                has_observe = False
+
+            if has_observe:
+                # Create an AgentExecutor that reuses our BrowserSession so SMCP tools run
+                agent_executor = AgentExecutor(agent=agent, browser=browser)
+
+                # Create the python executor which initializes STATE used by observe
+                from blastai.agents.coderun import create_python_executor, find_and_call_observe
+
+                try:
+                    python_executor = create_python_executor(agent, browser, agent_executor.llm, agent_executor)
+                    STATE = python_executor.state.get('STATE', {})
+                    # Call observe for requested URL (matches pre_path patterns)
+                    await find_and_call_observe(initial_url, agent.tools, STATE, agent_executor, " (page load)")
+                except Exception as e:
+                    logger.debug(f"Observe tool call failed or not available: {e}")
+        else:
+            has_observe = False
+
+        # Fallback: wait for profile-configured minimal + network idle time if no observe ran
+        if not (agent is not None and has_observe):
+            try:
+                wait_time = (profile.minimum_wait_page_load_time or 0.25) + (profile.wait_for_network_idle_page_load_time or 0.5)
+                await asyncio.sleep(wait_time)
+            except Exception:
+                # Last-resort small sleep
+                await asyncio.sleep(0.5)
+
+        # Page has loaded successfully (or we waited heuristically)
+        load_time = time.time() - start_time
+
+        logger.info(f"Page loaded in {load_time:.2f}s")
+        return load_time
         
-        lowest_cost = min(valid_candidates, key=lambda m: m.cost)
-        highest_cost = max(valid_candidates, key=lambda m: m.cost)
-    else:
-        # No valid candidates - use dummy values
-        cost_min = cost_max = cost_mean = 0.0
-        lowest_cost = all_metrics[0]  # Use first invalid as placeholder
-        highest_cost = all_metrics[0]
-    
-    # Latency statistics (all candidates)
-    latencies = [m.latency_seconds for m in all_metrics]
-    latency_min = min(latencies)
-    latency_max = max(latencies)
-    latency_mean = sum(latencies) / len(latencies)
-    
-    fastest = min(all_metrics, key=lambda m: m.latency_seconds)
-    
-    # Generation timing statistics
-    fastest_time = min(latencies)
-    slowest_time = max(latencies)
-    
-    # Validation statistics
-    valid_on_iteration = {}
-    for m in all_metrics:
-        if m.success and m.iterations_to_valid > 0:
-            valid_on_iteration[m.iterations_to_valid] = valid_on_iteration.get(m.iterations_to_valid, 0) + 1
-    
-    never_valid_count = sum(1 for m in all_metrics if not m.success)
-    
-    # Iteration failure statistics (across all candidates)
-    total_iterations_all = sum(m.total_iterations for m in all_metrics)
-    failed_iterations_all = sum(m.failed_iterations for m in all_metrics)
-    overall_failure_rate = (failed_iterations_all / total_iterations_all * 100) if total_iterations_all > 0 else 0
-    
-    # Execute candidates if requested
-    lowest_cost_exec = None
-    highest_cost_exec = None
-    
-    if execute and valid_candidates:
-        print(f"\n{'='*80}")
-        print("EXECUTING CANDIDATES")
-        print(f"{'='*80}")
-        
-        # Execute lowest cost candidate
-        lowest_cost_exec = await execute_candidate(
-            lowest_cost,
-            'lowest_cost',
-            task_data,
-            agent,
-            llm
-        )
-        
-        # Execute highest cost candidate
-        highest_cost_exec = await execute_candidate(
-            highest_cost,
-            'highest_cost',
-            task_data,
-            agent,
-            llm
-        )
-    
-    result = CodegenEvaluationResult(
-        task_id=task_id,
-        model_name=model_name,
-        run_number=run_number,
-        num_candidates=num_candidates,
-        total_latency_seconds=total_latency,
-        num_valid=num_valid,
-        num_invalid=num_invalid,
-        fastest_candidate_time=fastest_time,
-        slowest_candidate_time=slowest_time,
-        cost_range_min=cost_min,
-        cost_range_max=cost_max,
-        cost_mean=cost_mean,
-        latency_range_min=latency_min,
-        latency_range_max=latency_max,
-        latency_mean=latency_mean,
-        lowest_cost_candidate=lowest_cost,
-        highest_cost_candidate=highest_cost,
-        fastest_candidate=fastest,
-        valid_on_iteration=valid_on_iteration,
-        never_valid_count=never_valid_count,
-        total_iterations_all_candidates=total_iterations_all,
-        failed_iterations_all_candidates=failed_iterations_all,
-        overall_iteration_failure_rate=overall_failure_rate,
-        lowest_cost_execution=lowest_cost_exec,
-        highest_cost_execution=highest_cost_exec,
-        all_candidates=all_metrics
-    )
-    
-    return result
+    except Exception as e:
+        logger.error(f"Error loading page {initial_url}: {e}")
+        import traceback
+        traceback.print_exc()
+        return -1.0
+    finally:
+        # Kill browser session properly - this dispatches BrowserStopEvent and cleans up EventBus
+        try:
+            logger.debug("Killing browser session...")
+            await browser.kill()
+            logger.debug("Browser session killed successfully")
+        except Exception as e:
+            logger.warning(f"Error killing browser: {e}")
 
 
-async def main():
-    parser = argparse.ArgumentParser(
-        description="Evaluate code generation variance and performance"
-    )
-    parser.add_argument(
-        "task_prefix",
-        help="Task ID prefix to evaluate (e.g., 'dashdish-deepresearch1')"
-    )
-    parser.add_argument(
-        "--candidates",
-        type=int,
-        default=10,
-        help="Number of candidates to generate per run (default: 10)"
-    )
-    parser.add_argument(
-        "--runs",
-        type=int,
-        default=1,
-        help="Number of evaluation runs per model (default: 1)"
-    )
-    parser.add_argument(
-        "--tools",
-        help="Path to generated tools JSON",
-        default=None
-    )
-    parser.add_argument(
-        "--tasks-file",
-        help="Path to tasks YAML file",
-        default="experiments/tasks/agisdk/agisdk.yaml"
-    )
-    parser.add_argument(
-        "--output",
-        help="Output path for evaluation results JSON",
-        default=None
-    )
-    parser.add_argument(
-        "--models",
-        nargs='+',
-        default=["gpt-4o"],
-        help="LLM models to use for code generation (default: gpt-4o). Can specify multiple."
-    )
-    parser.add_argument(
-        "--execute",
-        action="store_true",
-        help="Execute the lowest and highest cost candidates"
-    )
+async def run_evaluation_for_task(
+    task_id: str,
+    task_def: Dict[str, Any],
+    configs: List[CodegenConfig],
+    num_runs: int,
+    measure_actual_latency: bool,
+    measure_page_load: bool,
+    results_dir: Path,
+    parallel: int = 1
+) -> Tuple[List[CodegenResult], List[PageLoadResult]]:
+    """
+    Run evaluation for a single task across all configs.
     
-    args = parser.parse_args()
+    Args:
+        parallel: Number of runs to execute in parallel (default: 1)
     
-    # Load tasks
-    tasks_file = Path(args.tasks_file)
-    if not tasks_file.exists():
-        print(f"Error: Tasks file not found: {tasks_file}")
-        sys.exit(1)
+    Returns:
+        Tuple of (codegen_results, page_load_results)
+    """
+    console.print(f"\n[blue]Evaluating task:[/] {task_id}")
+    console.print(f"[dim]Goal:[/] {task_def.get('goal', 'N/A')}")
+    console.print(f"[dim]URL:[/] {task_def.get('initial_url', 'N/A')}")
     
-    with open(tasks_file, 'r') as f:
-        all_tasks = yaml.safe_load(f)
+    # Load agent for this task
+    agent = await create_agent_for_task(task_def)
     
-    # Filter tasks by prefix
-    matching_tasks = [t for t in all_tasks if t.get('id', '').startswith(args.task_prefix)]
-    if not matching_tasks:
-        print(f"Error: No tasks matching prefix '{args.task_prefix}' found")
-        sys.exit(1)
+    task_goal = task_def.get("goal", "")
+    initial_url = task_def.get("initial_url", "")
+    user_id = task_def.get("user_id", f"eval-{task_id}")
     
-    task_data = matching_tasks[0]
-    task_id = task_data.get('id')
+    codegen_results: List[CodegenResult] = []
+    page_load_results: List[PageLoadResult] = []
     
-    # Determine tools path - try multiple fallbacks
-    if args.tools:
-        tools_path = args.tools
+    # Measure page load latency (8 times) - optional
+    if measure_page_load:
+        console.print(f"[yellow]Measuring page load latency (8 runs with headful browser)...[/]")
+        for i in range(8):
+            console.print(f"  Page load run {i+1}/8...")
+            load_latency = await measure_page_load_latency(initial_url, headful=True, agent=agent)
+            page_load_results.append(PageLoadResult(
+                initial_url=initial_url,
+                load_latency=load_latency
+            ))
+            console.print(f"    Load time: {load_latency:.2f}s")
     else:
-        # Try exact task ID first
-        tools_path = f"experiments/tools/{task_id}.json"
-        if not Path(tools_path).exists():
-            # Try task prefix (e.g., "dashdish" from "dashdish-deepresearch1")
-            base_name = args.task_prefix.split('-')[0]
-            tools_path = f"experiments/tools/{base_name}.json"
+        console.print(f"[dim]Skipping page load latency measurement[/]")
     
-    # Load agent with SMCP tools from registry
-    if Path(tools_path).exists():
-        print(f"Loading SMCP tools from: {tools_path}")
-        agent = Agent.from_smcp_registry(tools_path)
-        print(f"Loaded {len(agent.tools)} SMCP tools")
-    else:
-        print(f"Warning: Tools file not found: {tools_path}")
-        print("Using agent without tools")
-        agent = Agent(description="", tools=[])
+    # Run codegen evaluation for each config
+    for config in configs:
+        console.print(f"\n[cyan]Config:[/] model={config.model}, with_protocol={config.with_protocol}")
+        
+        # Track best and worst cost for actual latency measurement
+        config_results = []
+        
+        # Create a semaphore to limit parallelism
+        semaphore = asyncio.Semaphore(parallel)
+        
+        async def run_single_evaluation(run_num: int):
+            """Run a single evaluation with semaphore for concurrency control."""
+            async with semaphore:
+                try:
+                    # Create LLM for this config
+                    codegen_llm = LLMFactory.create_llm(
+                        model_name=config.model,
+                        temperature=0.0
+                    )
+                    
+                    # Generate code
+                    generated_code, gen_time, gen_cost, candidate, code_generator = await generate_code_with_timing(
+                        agent=agent,
+                        task=task_goal,
+                        config=config,
+                        codegen_llm=codegen_llm
+                    )
+                    
+                    # Handle failed generation
+                    if not generated_code:
+                        # Create failed CodegenResult so summary stats include this failure
+                        failed_codecheck = await validate_code(
+                            code="",  # triggers failure path
+                            agent=agent,
+                            code_generator=None,
+                            candidate=None
+                        )
+                        result = CodegenResult(
+                            config=config,
+                            generation_latency=gen_time,
+                            generation_cost=gen_cost,
+                            estimated_cost=0.0,
+                            codecheck=failed_codecheck,
+                            generated_code="",
+                            generation_failed=True
+                        )
+                        console.print(f"  Run {run_num + 1}/{num_runs}... ✗ (generation failed)")
+                        return result
+                    
+                    # Estimate cost using codecost module
+                    try:
+                        estimated_cost = compute_code_cost(generated_code, agent.tools)
+                    except Exception as e:
+                        logger.warning(f"Failed to compute code cost: {e}")
+                        estimated_cost = 0.0
+                    
+                    # Validate code
+                    codecheck_result = await validate_code(
+                        code=generated_code,
+                        agent=agent,
+                        code_generator=code_generator,
+                        candidate=candidate
+                    )
+                    
+                    # Create result
+                    result = CodegenResult(
+                        config=config,
+                        generation_latency=gen_time,
+                        generation_cost=gen_cost,
+                        estimated_cost=estimated_cost,
+                        codecheck=codecheck_result,
+                        generated_code=generated_code
+                    )
+                    
+                    status = "✓" if codecheck_result.overall_pass else "✗"
+                    console.print(f"  Run {run_num + 1}/{num_runs}... {status} (gen: {gen_time:.2f}s, est_cost: {estimated_cost:.2f}s)")
+                    
+                    return result
+                
+                except Exception as e:
+                    console.print(f"  Run {run_num + 1}/{num_runs}... ✗ (error: {e})")
+                    logger.error(f"Error in run {run_num + 1}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return None
+        
+        # Run all evaluations for this config (potentially in parallel)
+        tasks_to_run = [run_single_evaluation(run_num) for run_num in range(num_runs)]
+        results = await asyncio.gather(*tasks_to_run)
+        
+        # Filter out None results (failed runs)
+        config_results = [r for r in results if r is not None]
+        codegen_results.extend(config_results)
+        
+        # Measure actual latency for best and worst cost only if >1 successful runs
+        if measure_actual_latency and config_results:
+            successful_only = [r for r in config_results if not r.generation_failed and r.generated_code]
+            if len(successful_only) > 1:
+                # Sort successes by estimated cost
+                sorted_by_cost = sorted(successful_only, key=lambda r: r.estimated_cost)
+                lowest_cost = sorted_by_cost[0]
+                highest_cost = sorted_by_cost[-1]
+                # Skip if they refer to the same run (shouldn't happen with >1 success, but guard anyway)
+                if lowest_cost is highest_cost:
+                    console.print("  [dim]Skipping actual latency (only one unique successful run)")
+                else:
+                    console.print(f"  [yellow]Measuring actual latency for lowest cost...[/]")
+                    lowest_cost.actual_latency = await execute_code_with_timing(
+                        code=lowest_cost.generated_code,
+                        agent=agent,
+                        task=task_goal,
+                        initial_url=initial_url,
+                        user_id=user_id
+                    )
+                    console.print(f"  [yellow]Measuring actual latency for highest cost...[/]")
+                    highest_cost.actual_latency = await execute_code_with_timing(
+                        code=highest_cost.generated_code,
+                        agent=agent,
+                        task=task_goal,
+                        initial_url=initial_url,
+                        user_id=user_id
+                    )
+            else:
+                console.print("  [dim]Skipping actual latency (need >1 successful runs for config)")
     
-    # Run evaluations for each model
+    return codegen_results, page_load_results
+
+
+def save_results_to_files(
+    task_id: str,
+    codegen_results: List[CodegenResult],
+    page_load_results: List[PageLoadResult],
+    results_dir: Path
+):
+    """
+    Save results to JSON and Markdown files.
+    """
+    # Create results directory
+    results_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save JSON file
+    json_file = results_dir / f"{task_id}.json"
     all_results = []
     
-    for model_name in args.models:
-        print(f"\n{'='*80}")
-        print(f"EVALUATING MODEL: {model_name}")
-        print(f"{'='*80}")
+    # Add codegen results
+    for result in codegen_results:
+        all_results.append(result.to_dict())
+    
+    # Add page load results
+    for result in page_load_results:
+        all_results.append(result.to_dict())
+    
+    with open(json_file, 'w') as f:
+        json.dump(all_results, f, indent=2)
+    
+    # Save Markdown file with generated code
+    md_file = results_dir / f"{task_id}.md"
+    with open(md_file, 'w') as f:
+        f.write(f"# Generated Code for Task: {task_id}\n\n")
         
-        # Create LLM with temperature for variation between candidates
-        # Using temperature=1.0 (default) to get diverse candidates
-        # LLMFactory auto-detects provider from model name
-        llm = LLMFactory.create_llm(model_name, temperature=1.0)
+        for i, result in enumerate(codegen_results):
+            f.write(f"## Run {i + 1}\n\n")
+            f.write(f"**Config:**\n")
+            f.write(f"- Model: `{result.config.model}`\n")
+            f.write(f"- With Protocol: `{result.config.with_protocol}`\n\n")
+            f.write(f"**Metrics:**\n")
+            f.write(f"- Generation Latency: {result.generation_latency:.3f}s\n")
+            f.write(f"- Generation Cost: ${result.generation_cost:.6f}\n")
+            f.write(f"- Estimated Cost: {result.estimated_cost:.2f}s\n")
+            f.write(f"- Overall Pass: {'✓' if result.codecheck.overall_pass else '✗'}\n")
+            if result.codecheck.failure_types:
+                f.write(f"- Failure Types: {', '.join(result.codecheck.failure_types)}\n")
+            if result.actual_latency is not None:
+                f.write(f"- Actual Latency: {result.actual_latency:.2f}s\n")
+            f.write(f"\n**Generated Code:**\n\n")
+            if result.generated_code.strip():
+                f.write(f"```python\n{result.generated_code}\n```\n\n")
+            else:
+                # Provide a readable placeholder for empty code results
+                placeholder = "# (no code generated or code block missing in model output)"
+                f.write(f"```python\n{placeholder}\n```\n\n")
+            f.write("---\n\n")
+    
+    console.print(f"[green]Saved results to:[/]")
+    console.print(f"  - {json_file}")
+    console.print(f"  - {md_file}")
+
+
+def compute_summary_statistics(
+    all_results: Dict[str, Tuple[List[CodegenResult], List[PageLoadResult]]]
+) -> Dict[str, Any]:
+    """
+    Compute averaged metrics for each unique config.
+    
+    Returns summary dict with averaged metrics per config.
+    """
+    from collections import defaultdict
+    import statistics
+    
+    # Group results by config
+    config_groups = defaultdict(list)
+    
+    for task_id, (codegen_results, page_load_results) in all_results.items():
+        for result in codegen_results:
+            config_key = (result.config.model, result.config.with_protocol)
+            config_groups[config_key].append(result)
+    
+    # Compute averages
+    summary = {}
+    
+    for config_key, results in config_groups.items():
+        model, with_protocol = config_key
         
-        for run_num in range(args.runs):
-            result = await evaluate_codegen(
+        # Calculate averages
+        avg_gen_latency = statistics.mean(r.generation_latency for r in results)
+        avg_gen_cost = statistics.mean(r.generation_cost for r in results)
+        avg_est_cost = statistics.mean(r.estimated_cost for r in results)
+        
+        # Variance metrics
+        var_gen_latency = statistics.variance(r.generation_latency for r in results) if len(results) > 1 else 0
+        var_est_cost = statistics.variance(r.estimated_cost for r in results) if len(results) > 1 else 0
+        
+        # Pass/failure rates (single attempt per run, multi failure types counted)
+        num_runs_cfg = len(results)
+        overall_pass_rate = sum(1 for r in results if r.codecheck.overall_pass) / num_runs_cfg
+        failure_counts: Dict[str, int] = {}
+        for r in results:
+            for ft in getattr(r.codecheck, 'failure_types', []) or []:
+                failure_counts[ft] = failure_counts.get(ft, 0) + 1
+        failure_rates = {k: v / num_runs_cfg for k, v in failure_counts.items()}
+        num_failed_runs = sum(1 for r in results if not r.codecheck.overall_pass)
+        failure_rates_among_failures = {k: (v / num_failed_runs) if num_failed_runs else 0.0 for k, v in failure_counts.items()}
+        
+        # Actual latency (only for runs that measured it)
+        actual_latencies = [r.actual_latency for r in results if r.actual_latency is not None]
+        avg_actual_latency = statistics.mean(actual_latencies) if actual_latencies else None
+        
+        generation_failed_count = sum(1 for r in results if getattr(r, 'generation_failed', False) or ('generation' in getattr(r.codecheck, 'failure_types', [])))
+        # Average fractional pass metrics if present
+        overall_pass_rate_fraction = statistics.mean(getattr(r.codecheck, 'overall_pass_fraction', 0.0) for r in results)
+        summary[f"{model}|with_protocol={with_protocol}"] = {
+            "model": model,
+            "with_protocol": with_protocol,
+            "num_runs": len(results),
+            "num_generation_failures": generation_failed_count,
+            "avg_generation_latency": avg_gen_latency,
+            "var_generation_latency": var_gen_latency,
+            "avg_generation_cost": avg_gen_cost,
+            "avg_estimated_cost": avg_est_cost,
+            "var_estimated_cost": var_est_cost,
+            "overall_pass_rate": overall_pass_rate,
+            "failure_rates": failure_rates,
+            "failure_rates_among_failures": failure_rates_among_failures,
+            "avg_actual_latency": avg_actual_latency,
+        }
+    
+    # Add page load statistics
+    all_page_loads = []
+    for task_id, (codegen_results, page_load_results) in all_results.items():
+        all_page_loads.extend(page_load_results)
+    
+    if all_page_loads:
+        avg_page_load = statistics.mean(r.load_latency for r in all_page_loads if r.load_latency > 0)
+        var_page_load = statistics.variance(r.load_latency for r in all_page_loads if r.load_latency > 0) if len(all_page_loads) > 1 else 0
+        
+        summary["page_load"] = {
+            "avg_load_latency": avg_page_load,
+            "var_load_latency": var_page_load,
+            "num_measurements": len(all_page_loads)
+        }
+    
+    return summary
+
+
+@click.command()
+@click.option('--tasks', type=click.Path(exists=True), required=True, 
+              help='Path to tasks YAML file (e.g., experiments/tasks/agisdk/agisdk.yaml)')
+@click.option('--ids', type=str, required=True,
+              help='Space-separated task IDs to evaluate (e.g., "dashdish-1 gomail-3")')
+@click.option('--results', type=click.Path(), default='experiments/results/rq_results.json',
+              help='Path to save summary results JSON')
+@click.option('--actual-latency/--no-actual-latency', default=False,
+              help='Measure actual execution latency (for highest/lowest cost)')
+@click.option('--page-load/--no-page-load', default=False,
+              help='Measure page load latency (default: False)')
+@click.option('--runs', type=int, default=32,
+              help='Number of runs per config (default: 32)')
+@click.option('--parallel', type=int, default=1,
+              help='Number of parallel runs to execute simultaneously (default: 1, max: 8)')
+def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bool, runs: int, parallel: int):
+    """
+    Evaluate code generation performance across different configurations.
+    
+    Example:
+        python experiments/evaluate_codegen.py \\
+            --tasks experiments/tasks/agisdk/agisdk.yaml \\
+            --ids "dashdish-1 gomail-3" \\
+            --results experiments/results/rq_results.json \\
+            --actual-latency \\
+            --page-load
+    """
+    # Set up logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Suppress browser-use logging
+    logging.getLogger('browser_use').setLevel(logging.ERROR)
+    
+    # Parse task IDs
+    task_ids = ids.split()
+    
+    # Define configs to test
+    configs = [
+        CodegenConfig(model="gpt-4.1", with_protocol=True),
+        CodegenConfig(model="gpt-4.1", with_protocol=False),
+        # CodegenConfig(model="meta-llama/llama-4-maverick-17b-128e-instruct", with_protocol=True),  # temporarily disabled
+        # CodegenConfig(model="meta-llama/llama-4-maverick-17b-128e-instruct", with_protocol=False), # temporarily disabled
+        # Swap in Groq's OpenAI-compatible gpt-oss model
+        CodegenConfig(model="openai/gpt-oss-20b", with_protocol=True),
+        CodegenConfig(model="openai/gpt-oss-20b", with_protocol=False),
+    ]
+    
+    # Clamp parallel to reasonable range
+    parallel = max(1, min(parallel, 8))
+    
+    console.print(Panel(
+        f"[bold]Code Generation Evaluation[/]\n\n"
+        f"Tasks file: {tasks}\n"
+        f"Task IDs: {', '.join(task_ids)}\n"
+        f"Configs: {len(configs)}\n"
+        f"Runs per config: {runs}\n"
+        f"Parallel runs: {parallel}\n"
+        f"Measure actual latency: {actual_latency}\n"
+        f"Measure page load: {page_load}",
+        title="Configuration",
+        border_style="blue"
+    ))
+    
+    async def run_all_evaluations():
+        # Load tasks
+        tasks_file = Path(tasks)
+        all_tasks = await load_task_definitions(tasks_file)
+        
+        # Filter to requested IDs
+        tasks_dict = {task['id']: task for task in all_tasks if task['id'] in task_ids}
+        
+        if len(tasks_dict) != len(task_ids):
+            found_ids = set(tasks_dict.keys())
+            missing_ids = set(task_ids) - found_ids
+            console.print(f"[red]Warning: Missing task IDs: {missing_ids}[/]")
+        
+        # Results directory
+        results_dir = Path("experiments/results")
+        results_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Store all results for summary
+        all_results = {}
+        
+        # Evaluate each task
+        for task_id in task_ids:
+            if task_id not in tasks_dict:
+                console.print(f"[red]Skipping missing task: {task_id}[/]")
+                continue
+            
+            task_def = tasks_dict[task_id]
+            
+            codegen_results, page_load_results = await run_evaluation_for_task(
                 task_id=task_id,
-                task_data=task_data,
-                agent=agent,
-                llm=llm,
-                num_candidates=args.candidates,
-                run_number=run_num + 1,
-                model_name=model_name,
-                execute=args.execute
+                task_def=task_def,
+                configs=configs,
+                num_runs=runs,
+                measure_actual_latency=actual_latency,
+                measure_page_load=page_load,
+                results_dir=results_dir,
+                parallel=parallel
             )
             
-            result.print_summary()
-            all_results.append(result)
-    
-    # Calculate aggregated statistics per model
-    if len(all_results) > 1:
-        # Group results by model
-        models = list(set([r.model_name for r in all_results]))
-        model_stats = {}
-        
-        for model in models:
-            model_results = [r for r in all_results if r.model_name == model]
+            # Save results
+            save_results_to_files(task_id, codegen_results, page_load_results, results_dir)
             
-            # Calculate statistics for this model
-            avg_valid_rate = sum(r.num_valid / r.num_candidates for r in model_results) / len(model_results)
-            avg_cost_mean = sum(r.cost_mean for r in model_results) / len(model_results)
-            avg_iteration_failure_rate = sum(r.overall_iteration_failure_rate for r in model_results) / len(model_results)
-            avg_fastest_time = sum(r.fastest_candidate_time for r in model_results) / len(model_results)
-            avg_slowest_time = sum(r.slowest_candidate_time for r in model_results) / len(model_results)
-            
-            stats = {
-                'avg_valid_rate': avg_valid_rate,
-                'avg_cost_mean': avg_cost_mean,
-                'avg_iteration_failure_rate': avg_iteration_failure_rate,
-                'avg_fastest_time': avg_fastest_time,
-                'avg_slowest_time': avg_slowest_time
-            }
-            
-            # Add execution results if available
-            exec_results = [r for r in model_results if r.lowest_cost_execution is not None]
-            if exec_results:
-                avg_lowest_exec = sum(r.lowest_cost_execution.execution_latency_seconds for r in exec_results) / len(exec_results)
-                avg_highest_exec = sum(r.highest_cost_execution.execution_latency_seconds for r in exec_results) / len(exec_results)
-                stats['has_execution_results'] = True
-                stats['avg_lowest_cost_execution_time'] = avg_lowest_exec
-                stats['avg_highest_cost_execution_time'] = avg_highest_exec
-            else:
-                stats['has_execution_results'] = False
-            
-            model_stats[model] = stats
+            # Store for summary
+            all_results[task_id] = (codegen_results, page_load_results)
         
-        summary = CodegenEvaluationSummary(
-            task_ids=[task_id],
-            models=models,
-            results=all_results,
-            model_stats=model_stats
-        )
+        # Compute and save summary statistics
+        console.print("\n[blue]Computing summary statistics...[/]")
+        summary = compute_summary_statistics(all_results)
         
-        summary.print_summary()
-    else:
-        # Single result
-        model = all_results[0].model_name
-        stats = {
-            'avg_valid_rate': all_results[0].num_valid / all_results[0].num_candidates,
-            'avg_cost_mean': all_results[0].cost_mean,
-            'avg_iteration_failure_rate': all_results[0].overall_iteration_failure_rate,
-            'avg_fastest_time': all_results[0].fastest_candidate_time,
-            'avg_slowest_time': all_results[0].slowest_candidate_time
-        }
+        results_file = Path(results)
+        results_file.parent.mkdir(parents=True, exist_ok=True)
         
-        if all_results[0].lowest_cost_execution:
-            stats['has_execution_results'] = True
-            stats['avg_lowest_cost_execution_time'] = all_results[0].lowest_cost_execution.execution_latency_seconds
-            stats['avg_highest_cost_execution_time'] = all_results[0].highest_cost_execution.execution_latency_seconds
-        else:
-            stats['has_execution_results'] = False
+        with open(results_file, 'w') as f:
+            json.dump(summary, f, indent=2)
         
-        summary = CodegenEvaluationSummary(
-            task_ids=[task_id],
-            models=[model],
-            results=all_results,
-            model_stats={model: stats}
-        )
+        console.print(f"\n[green]✓ Summary saved to:[/] {results_file}")
+        
+        # Print summary table
+        console.print("\n[bold]Summary Results:[/]\n")
+        for config_name, metrics in summary.items():
+            if config_name == "page_load":
+                continue
+            console.print(f"[cyan]{config_name}[/]")
+            console.print(f"  Avg Generation Latency: {metrics['avg_generation_latency']:.3f}s (var: {metrics['var_generation_latency']:.6f})")
+            console.print(f"  Avg Estimated Cost: {metrics['avg_estimated_cost']:.2f}s (var: {metrics['var_estimated_cost']:.6f})")
+            console.print(f"  Overall Pass Rate: {metrics['overall_pass_rate']:.1%}")
+            if 'failure_rates' in metrics and metrics['failure_rates']:
+                fr_str = ", ".join(f"{k}:{v:.1%}" for k,v in metrics['failure_rates'].items())
+                console.print(f"  Failure Rates (per run): {fr_str}")
+            if 'failure_rates_among_failures' in metrics and metrics['failure_rates_among_failures']:
+                fr2_str = ", ".join(f"{k}:{v:.1%}" for k,v in metrics['failure_rates_among_failures'].items())
+                console.print(f"  Failure Breakdown (among failures): {fr2_str}")
+            if 'num_generation_failures' in metrics and metrics.get('num_generation_failures', 0) > 0:
+                total = metrics.get('num_runs', 0)
+                fails = metrics['num_generation_failures']
+                succ_rate = (total - fails) / total if total else 0.0
+                console.print(f"  Generation Success Rate: {succ_rate:.1%} ({total - fails}/{total})")
+            if metrics['avg_actual_latency'] is not None:
+                console.print(f"  Avg Actual Latency: {metrics['avg_actual_latency']:.2f}s")
+            console.print()
+        
+        if "page_load" in summary:
+            pl = summary["page_load"]
+            console.print(f"[cyan]Page Load Statistics[/]")
+            console.print(f"  Avg Load Latency: {pl['avg_load_latency']:.2f}s (var: {pl['var_load_latency']:.6f})")
+            console.print(f"  Measurements: {pl['num_measurements']}")
     
-    # Save to file (append to existing results or create new)
-    if args.output:
-        output_path = args.output
-    else:
-        output_dir = Path("experiments/results")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = str(output_dir / f"{task_id}_evaluation.json")
+    # Run async evaluation
+    asyncio.run(run_all_evaluations())
     
-    # Load existing data if present
-    if Path(output_path).exists():
-        with open(output_path, 'r') as f:
-            existing_data = json.load(f)
-    else:
-        existing_data = {}
-    
-    # Add codegen section
-    existing_data['codegen'] = summary.to_dict()
-    
-    # Save updated data
-    with open(output_path, 'w') as f:
-        json.dump(existing_data, f, indent=2)
-    
-    print(f"Saved codegen evaluation results to: {output_path}")
-    print(f"Results saved under 'codegen' section")
+    console.print("\n[green]✓ Evaluation complete![/]\n")
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    main()

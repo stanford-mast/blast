@@ -16,6 +16,7 @@ from .local_python_executor import LocalPythonExecutor
 from .models import Agent, SMCPTool, ToolExecutorType, SMCPToolType
 from .tools_smcp import execute_smcp_tool
 from .schema_utils import json_schema_to_pydantic
+from .execution_hooks import ExecutionHooks, StopExecutionError
 
 if TYPE_CHECKING:
     from browser_use.llm.base import BaseChatModel
@@ -100,6 +101,14 @@ def create_python_executor(
     Returns:
         LocalPythonExecutor with all tools and utilities registered
     """
+    # Create execution hooks for code mode (handles stop checking and AgentThought messages)
+    hooks = ExecutionHooks(
+        agent_executor=agent_executor,
+        session_id=agent_executor.session_id,
+        cycle_id=agent_executor.cycle_id
+    )
+    tool_hook = hooks.create_code_mode_decorator()
+    
     # Create executor first so we can register wrapped tool functions that
     # assert preconditions against STATE and update STATE with postconditions.
     import_modules = {
@@ -225,6 +234,7 @@ async def {tool.name}():
 """
             
             # Create the actual execution function
+            @tool_hook
             async def execute_impl(kwargs):
                 """Implementation that handles tool execution with STATE management:
                 
@@ -436,6 +446,7 @@ async def {tool.name}():
 
     # Add utility functions (these are available inside generated code)
     
+    @tool_hook
     async def get_url() -> str:
         """
         Get the current URL from the browser.
@@ -456,6 +467,7 @@ async def {tool.name}():
                 logger.warning(f"Failed to get current URL (both methods): {e2}")
         return ""
     
+    @tool_hook
     async def goto(url: str):
         """
         Navigate to a given URL and update STATE by calling matching observe tool.
@@ -484,6 +496,7 @@ async def {tool.name}():
         
         return {"success": True, "url": url}
     
+    @tool_hook
     async def ai_exec(subtask: str, output_schema: Optional[Dict[str, Any]] = None) -> Any:
         """
         Execute an AI agent to complete a given subtask using browser-use loop mode.
@@ -575,6 +588,7 @@ async def {tool.name}():
         
         return result
 
+    @tool_hook
     async def ai_eval(expr: str, **kwargs):
         """
         Evaluate an expression by asking the LLM.
