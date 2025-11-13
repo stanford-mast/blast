@@ -22,6 +22,7 @@ from .coderun import create_python_executor
 from .models import Agent, Tool, SMCPTool, CoreTool, ToolExecutorType, SMCPToolType
 from .tools_smcp import add_smcp_tool, execute_smcp_tool
 from .tools_synthesis import add_core_tool
+from .execution_hooks import ExecutionHooks, StopExecutionError
 
 # Apply browser-use patches early, before any browser-use tools are created
 from ..browser_use_patches import apply_all_patches
@@ -55,7 +56,12 @@ class AgentExecutor:
         user_id: Optional[str] = None,
         timezone: Optional[str] = None,
         stop_if_codegen_fails: bool = False,
-        allowed_domains: Optional[List[str]] = None
+        allowed_domains: Optional[List[str]] = None,
+        send_message_callback: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+        check_stop_callback: Optional[Callable[[], bool]] = None,
+        session_id: Optional[str] = None,
+        cycle_id: Optional[int] = None,
+        summarizer_llm: Optional[BaseChatModel] = None
     ):
         """
         Initialize AgentExecutor.
@@ -77,10 +83,18 @@ class AgentExecutor:
                      If False (default), fall back to loop mode.
             allowed_domains: Optional list of allowed domains for browser navigation. 
                      Auto-derived from initial URL if not specified. Example: ["*.sage.hr"]
+            send_message_callback: Optional callback for sending messages (AgentThought, RequestForHuman, etc.)
+                     Signature: async def callback(session_id: str, message: Dict[str, Any])
+            check_stop_callback: Optional callback to check if execution should stop
+                     Signature: def callback() -> bool
+            session_id: Optional session ID for message routing
+            cycle_id: Optional cycle ID to include in messages
+            summarizer_llm: Optional LLM for summarizing agent thoughts. Defaults to codegen_llm.
         """
         self.agent = agent
         self.llm = llm or self._create_llm_from_env()
         self.codegen_llm = codegen_llm or self._create_codegen_llm()
+        self.summarizer_llm = summarizer_llm or self.codegen_llm
         self.allowed_domains = allowed_domains
         self.user_id = user_id
         self.timezone = timezone or "UTC"
@@ -91,13 +105,25 @@ class AgentExecutor:
         self.output_model_schema = output_model_schema
         self.tools = Tools()
         
+        # Callbacks for DBOS workflow integration
+        self.send_message_callback = send_message_callback
+        self.check_stop_callback = check_stop_callback
+        self.session_id = session_id
+        self.cycle_id = cycle_id
+        
+        # Step counter for tracking execution progress
+        self.step_count = 0
+        
+        # History for code mode follow-up requests
+        self.history: List[BaseMessage] = []
+        
         # Storage for dynamically created tools
         self._dynamic_tools: Dict[str, Callable] = {}
         
         # Track which tool names are registered to avoid conflicts
         self._registered_tool_names: set[str] = set()
         
-        # Browser-use agent will be created per run (can't be reused across tasks)
+        # Browser-use agent will be reused for follow-up requests
         self.browser_use_agent: Optional[BrowserUseAgent] = None
         
         # Set up tools
@@ -146,13 +172,16 @@ class AgentExecutor:
         width = int(os.getenv("BROWSER_WIDTH", "1280"))
         height = int(os.getenv("BROWSER_HEIGHT", "720"))
         headless = os.getenv("HEADLESS", "false").lower() == "true"
-        
-        # Build Chrome args for WSL GPU fix
-        args = []
-        
-        # Disable GPU if BROWSER_DISABLE_GPU=1 (for WSL transparency issues)
-        if os.getenv("BROWSER_DISABLE_GPU", "").lower() in ("1", "true", "yes"):
-            args.extend(["--disable-gpu", "--disable-gpu-sandbox"])
+
+        # Build Chrome args ensuring GPU disabled (alignment with page load measurement path)
+        args = ["--disable-gpu", "--disable-gpu-sandbox"]
+        # Allow additional custom args via env var (comma-separated)
+        custom_args = os.getenv("BROWSER_EXTRA_ARGS")
+        if custom_args:
+            for a in custom_args.split(","):
+                clean = a.strip()
+                if clean:
+                    args.append(clean)
         
         # Determine user_data_dir for persistent profiles
         user_data_dir = None
@@ -166,22 +195,49 @@ class AgentExecutor:
         # Create profile with proper viewport and window settings
         profile = BrowserProfile(
             headless=headless,
-            # Viewport is what the browser *sees*
             viewport={"width": width, "height": height},
-            # Window size is the OS window size (used when not headless)
             window_size={"width": width, "height": height},
-            # Chrome command-line arguments
             args=args,
-            # User data directory for persistent cookies/sessions
             user_data_dir=user_data_dir,
-            # Allowed domains for navigation
             allowed_domains=self.allowed_domains,
-            # CRITICAL: keep_alive=True prevents browser shutdown when agents finish
-            # This allows multiple agents (including ai_exec sub-agents) to reuse the same browser
             keep_alive=True,
+            # Provide small network idle waits to reduce flakiness on first page interactions
+            wait_for_network_idle_page_load_time=float(os.getenv("BROWSER_NETWORK_IDLE_WAIT", "1.5")),
+            minimum_wait_page_load_time=float(os.getenv("BROWSER_MINIMUM_WAIT", "0.25"))
         )
         
         return BrowserSession(browser_profile=profile)
+
+    async def _ensure_browser_started(self):
+        """Robustly ensure browser session is started. Adds timeout, health check, and clearer logging.
+
+        Reasons:
+        - Prior implementation relied on internal attribute _cdp_client_root which may change.
+        - Occasional freezes observed during code mode initial navigation.
+        - This wraps start with a timeout and validates we can get a page instance.
+        """
+        if getattr(self.browser, "_started", False):
+            return
+        start_timeout = float(os.getenv("BROWSER_START_TIMEOUT", "20"))
+        logger.info(f"Starting browser (timeout={start_timeout}s)...")
+        try:
+            await asyncio.wait_for(self.browser.start(), timeout=start_timeout)
+        except asyncio.TimeoutError:
+            logger.error("Browser start timed out")
+            raise
+        except Exception as e:
+            logger.error(f"Browser start failed: {e}")
+            raise
+        # Health check
+        try:
+            page = await asyncio.wait_for(self.browser.get_current_page(), timeout=10)
+            if not page:
+                raise RuntimeError("Browser page object not available after start")
+            logger.info("Browser started successfully and page object acquired")
+            setattr(self.browser, "_started", True)
+        except Exception as e:
+            logger.error(f"Browser health check failed after start: {e}")
+            raise
     
     def _setup_tools(self):
         """Set up all tools from the agent."""
@@ -245,8 +301,8 @@ class AgentExecutor:
         """
         Run in loop mode using browser-use Agent.run.
         
-        Creates a new browser-use Agent for each run to ensure clean state.
-        Multiple runs can share the same BrowserSession instance.
+        Reuses browser-use Agent for follow-up requests.
+        Uses add_new_task() for new tasks on existing agent.
         
         If initial_url is provided, it's passed as initial_actions to the Agent,
         which automatically navigates before starting the main task.
@@ -266,34 +322,109 @@ class AgentExecutor:
             else:
                 logger.info("No SMCP tools available to add to task prompt")
             
-            # Check if ask_human_cli is available
-            has_ask_human_cli = any(
-                hasattr(t, 'name') and t.name == 'ask_human_cli' 
+            # Check if ask_human or ask_human_cli is available
+            has_ask_human = any(
+                hasattr(t, 'name') and t.name in ('ask_human', 'ask_human_cli')
                 for t in self.agent.tools
             )
-            if has_ask_human_cli:
-                task += "\nUse ask_human_cli if stuck or unauthenticated or task turned out to be ambiguous."
-                logger.info("Added ask_human_cli prompt injection")
+            if has_ask_human:
+                task += "\nUse ask_human if stuck or unauthenticated or task turned out to be ambiguous."
+                logger.info("Added ask_human prompt injection")
             
             logger.info(f"Final task for BrowserUseAgent: {task}")
             
-            # Create a fresh browser-use agent for this run
-            # Note: We can reuse the same BrowserSession instance across multiple agents
-            self.browser_use_agent = BrowserUseAgent(
-                task=task,
-                llm=self.llm,
-                browser=self.browser,
-                tools=self.tools,
-                initial_actions=initial_actions,  # Agent will execute navigation before task
-                output_model_schema=self.output_model_schema,  # Pass structured output schema
-                step_timeout=300  # Increase step timeout to 300 seconds (5 minutes)
-            )
+            # Reuse existing browser-use agent if available, otherwise create new one
+            if self.browser_use_agent is None:
+                logger.info("Creating new browser-use agent")
+                self.browser_use_agent = BrowserUseAgent(
+                    task=task,
+                    llm=self.llm,
+                    browser=self.browser,
+                    tools=self.tools,
+                    initial_actions=initial_actions,  # Agent will execute navigation before task
+                    output_model_schema=self.output_model_schema,  # Pass structured output schema
+                    step_timeout=3600  # 1 hour timeout - hooks handle stop checking via check_stop_callback
+                )
+            else:
+                # Reuse existing agent with new task
+                logger.info("Reusing existing browser-use agent with add_new_task")
+                self.browser_use_agent.add_new_task(task)
             
-            result = await self.browser_use_agent.run()
-            return result
-        finally:
-            # Clean up agent reference (but keep browser)
-            self.browser_use_agent = None
+            # Define thought extractor for hooks
+            def get_thought(agent) -> str:
+                """Extract current thought from browser-use agent."""
+                import random
+                try:
+                    if hasattr(agent, 'state') and agent.state and hasattr(agent.state, 'last_model_output'):
+                        model_output = agent.state.last_model_output
+                        
+                        if model_output:
+                            # Extract fields from browser-use's AgentOutput
+                            evaluation_previous_goal = model_output.evaluation_previous_goal
+                            memory = model_output.memory
+                            
+                            # Build candidates list
+                            candidates = []
+                            
+                            if memory:
+                                candidates.append(memory)
+                            
+                            if evaluation_previous_goal:
+                                # Ignore if ends with "Verdict: Failure"
+                                if not evaluation_previous_goal.strip().endswith("Verdict: Failure"):
+                                    # Trim "Verdict: Success" if present
+                                    cleaned_eval = evaluation_previous_goal.strip()
+                                    cleaned_eval = cleaned_eval.replace("Verdict: Success.", "").replace("Verdict: Success", "").strip()
+                                    candidates.append(cleaned_eval)
+                            
+                            # Randomly choose one if we have candidates
+                            if candidates:
+                                return random.choice(candidates)
+                    
+                    # Fallback
+                    return f"Completed step {self.step_count}"
+                except Exception as e:
+                    logger.debug(f"Error extracting thought: {e}")
+                    return f"Completed step {self.step_count}"
+            
+            # Create hooks using ExecutionHooks
+            hooks = ExecutionHooks(
+                agent_executor=self,
+                session_id=self.session_id,
+                cycle_id=self.cycle_id
+            )
+            on_step_start, on_step_end = hooks.create_loop_hooks(get_thought)
+            
+            # Run agent with hooks
+            try:
+                result = await self.browser_use_agent.run(
+                    on_step_start=on_step_start,
+                    on_step_end=on_step_end,
+                    max_steps=50  # Reasonable limit
+                )
+                
+                # Send ResponseToHuman on success
+                await hooks.send_response_to_human(result)
+                return result
+                
+            except InterruptedError:
+                # Agent was stopped - send AgentStopped
+                logger.info("Agent was interrupted (stopped or paused)")
+                await hooks.send_agent_stopped(reason="interrupted")
+                if self.browser_use_agent:
+                    return self.browser_use_agent.history
+                return None
+        except Exception as e:
+            # Send AgentStopped on error
+            logger.error(f"Agent execution failed: {e}")
+            if hasattr(self, 'session_id'):
+                hooks = ExecutionHooks(
+                    agent_executor=self,
+                    session_id=self.session_id,
+                    cycle_id=self.cycle_id
+                )
+                await hooks.send_agent_stopped(reason=f"error: {str(e)}")
+            raise
     
     async def _run_code_mode(self, task: str, initial_url: Optional[str] = None) -> Any:
         """
@@ -340,12 +471,8 @@ class AgentExecutor:
         - goto() in coderun.py matches observe on INPUT url, not current url
         - get_url() used instead of STATE["current_url"] for dynamic URL access
         """
-        # First, ensure browser is started and connected
-        if not self.browser._cdp_client_root:
-            logger.info("Starting browser connection...")
-            # Start the browser (this will launch browser subprocess and connect CDP)
-            await self.browser.start()
-            logger.debug("Browser started and connected via CDP")
+        # First, ensure browser is started and connected (robust)
+        await self._ensure_browser_started()
         
         # Create python executor first (needed for goto/observe tools)
         if self.python_executor is None:
@@ -364,113 +491,141 @@ class AgentExecutor:
         # Import helper for observe calls
         from .coderun import find_and_call_observe
         
-        # Iterative code generation and execution
-        # This history tracks the broader conversation: code generated -> execution error -> retry
-        # Each code generation may have its own internal refinement iterations for validation errors
-        # TODO: Persist tool calls across follow-up tasks to enable:
-        #   1. Simpler code generation - LLM can reference results from prior tool calls
-        #   2. Relaxed pre_tools constraints - allow tools to use knowledge from previous tasks
-        #   3. Better multi-turn conversations - maintain context of what's already been computed
-        # Implementation: Add TOOLS_CALLED and prior results to conversation_history/initial_state
-        conversation_history: List[BaseMessage] = []
+        # Use self.history for follow-up requests, or start fresh
+        # self.history contains UserMessage (TASK/RULES) and AssistantMessage (generated code) pairs
+        # Code generator will append to this during retries
         max_iterations = 10
         
-        for iteration in range(max_iterations):
-            logger.info(f"Code mode iteration {iteration + 1}/{max_iterations}")
-            
-            # Handle navigation and STATE population for each iteration
-            # - First iteration with initial_url: call goto() to navigate and observe
-            # - All other iterations: call observe on current URL to refresh STATE
-            if iteration == 0 and initial_url:
-                # First iteration with initial_url: use goto() tool to navigate + observe
-                # CRITICAL: goto() matches observe tool to REQUESTED URL (not final URL after redirect)
-                # This allows observe to run even if page redirects to login, detecting the login state
-                logger.info(f"Calling goto() tool for initial URL: {initial_url}")
-                try:
-                    goto_result = await self.python_executor.state["goto"](initial_url)
-                    logger.debug(f"goto() result: {goto_result}")
-                except Exception as e:
-                    logger.warning(f"Error during goto: {e}")
-            else:
-                # Subsequent iterations OR no initial_url: call observe on current URL
-                # This ensures STATE is refreshed with latest page state
-                logger.info(f"Calling observe for current page (iteration {iteration + 1})")
+        # Create hooks for code mode completion messages (if callbacks provided)
+        hooks = None
+        if self.send_message_callback:
+            hooks = ExecutionHooks(
+                agent_executor=self,
+                session_id=self.session_id,
+                cycle_id=self.cycle_id
+            )
+        
+        try:
+            for iteration in range(max_iterations):
+                logger.info(f"Code mode iteration {iteration + 1}/{max_iterations}")
+                
+                # Handle navigation and STATE population for first iteration only
+                if iteration == 0 and initial_url:
+                    # First iteration with initial_url: use goto() tool to navigate + observe
+                    # CRITICAL: goto() matches observe tool to REQUESTED URL (not final URL after redirect)
+                    # This allows observe to run even if page redirects to login, detecting the login state
+                    logger.info(f"Calling goto() tool for initial URL: {initial_url}")
+                    try:
+                        goto_result = await self.python_executor.state["goto"](initial_url)
+                        logger.debug(f"goto() result: {goto_result}")
+                    except Exception as e:
+                        logger.warning(f"Error during goto: {e}")
+                elif iteration == 0 and not initial_url:
+                    # No initial_url: call observe on current URL
+                    # This ensures STATE is refreshed with latest page state
+                    logger.info(f"Calling observe for current page")
+                    try:
+                        current_url_temp = await self.python_executor.state["get_url"]()
+                        if current_url_temp:
+                            await find_and_call_observe(
+                                current_url_temp,
+                                self.agent.tools,
+                                self.python_executor.state["STATE"],
+                                self,
+                                " (initial observe)"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Error calling observe: {e}")
+                
+                # Get current STATE and URL to pass to code generation
+                # This is CRITICAL - codegen needs to see if we're on login page, etc.
+                # Must be done AFTER goto/observe updates STATE
+                current_state = dict(self.python_executor.state.get("STATE", {}))
+                current_url = ""
                 try:
                     current_url = await self.python_executor.state["get_url"]()
-                    if current_url:
-                        await find_and_call_observe(
-                            current_url,
-                            self.agent.tools,
-                            self.python_executor.state["STATE"],
-                            self,
-                            f" (iteration {iteration + 1})"
-                        )
                 except Exception as e:
-                    logger.warning(f"Error calling observe: {e}")
-            
-            # Get current STATE and URL to pass to code generation
-            # This is CRITICAL - codegen needs to see if we're on login page, etc.
-            # Must be done AFTER goto/observe updates STATE
-            current_state = dict(self.python_executor.state.get("STATE", {}))
-            current_url = ""
-            try:
-                current_url = await self.python_executor.state["get_url"]()
-            except Exception as e:
-                logger.warning(f"Error getting current URL: {e}")
-            
-            logger.info(f"STATE for codegen (iteration {iteration + 1}): {current_state}")
-            logger.info(f"URL for codegen (iteration {iteration + 1}): {current_url}")
-            
-            # Generate code with conversation history AND current STATE
-            # The STATE tells codegen if we're on login page, what page state is, etc.
-            code = await self.code_generator.generate_code(
-                task=task,
-                history=conversation_history,
-                error=None,  # Error is in conversation history already
-                initial_state=current_state,
-                current_url=current_url
-            )
-            
-            if not code:
-                logger.error("Failed to generate valid code")
+                    logger.warning(f"Error getting current URL: {e}")
                 
-                # Check if we should stop or fall back to loop mode
-                if self.stop_if_codegen_fails:
-                    # CLI mode: raise error to stop execution
-                    raise RuntimeError("Code generation failed - no valid code produced")
-                else:
-                    # Interactive mode: fall back to loop mode
-                    logger.warning("Code generation failed, falling back to loop mode")
-                    return await self._run_loop_mode(task, initial_url=None)
-            
-            logger.info(f"Generated code ({len(code)} chars)")
-            
-            # Add generated code to conversation history
-            conversation_history.append(AssistantMessage(content=f"```python\n{code}\n```"))
-            
-            # Execute code
-            result = await self.python_executor(code)
-            
-            if result.error:
-                logger.error(f"Code execution error: {result.error}")
+                logger.info(f"STATE for codegen (iteration {iteration + 1}): {current_state}")
+                logger.info(f"URL for codegen (iteration {iteration + 1}): {current_url}")
                 
-                # Add error to conversation history for next iteration
-                error_message = f"Error during execution: {result.error}\n\nPlease fix the code."
+                # Generate code with self.history AND current STATE
+                # The STATE tells codegen if we're on login page, what page state is, etc.
+                # Code generator modifies history internally during retries
+                code = await self.code_generator.generate_code(
+                    task=task,
+                    history=self.history,  # Use self.history for follow-ups!
+                    error=None,  # Error is in history already
+                    initial_state=current_state,
+                    current_url=current_url
+                )
+                
+                if not code:
+                    logger.error("Failed to generate valid code")
+                    
+                    # Check if we should stop or fall back to loop mode
+                    if self.stop_if_codegen_fails:
+                        # CLI mode: raise error to stop execution
+                        raise RuntimeError("Code generation failed - no valid code produced")
+                    else:
+                        # Interactive mode: fall back to loop mode
+                        logger.warning("Code generation failed, falling back to loop mode")
+                        return await self._run_loop_mode(task, initial_url=None)
+                
+                logger.info(f"Generated code ({len(code)} chars)")
+                
+                # Update self.history with the generated code
+                # Code generator already appended UserMessage (TASK/RULES prompt without definitions)
+                # and AssistantMessage (generated code) during generate_code()
+                # But we need to check if it's a retry iteration (history already has messages)
+                # If this is a fresh run or first iteration, history was updated by generate_code
+                # If this is a retry, generate_code added error message and regenerated code
+                
+                # Execute code
+                result = await self.python_executor(code)
+                
+                if result.error:
+                    logger.error(f"Code execution error: {result.error}")
+                    
+                    # Add error to self.history for next iteration
+                    error_message = f"Error during execution: {result.error}\n\nPlease fix the code."
+                    if result.logs:
+                        error_message += f"\n\nLogs from execution:\n{result.logs}"
+                    
+                    self.history.append(UserMessage(content=error_message))
+                    continue
+                
+                # Success!
+                logger.info(f"Code execution completed successfully")
                 if result.logs:
-                    error_message += f"\n\nLogs from execution:\n{result.logs}"
+                    logger.info(f"Logs:\n{result.logs}")
+                logger.info(f"Result: {result.output}")
                 
-                conversation_history.append(UserMessage(content=error_message))
-                continue
+                # Send ResponseToHuman if hooks available
+                if hooks:
+                    await hooks.send_response_to_human(result=result.output)
+                
+                return result.output
             
-            # Success!
-            logger.info(f"Code execution completed successfully")
-            if result.logs:
-                logger.info(f"Logs:\n{result.logs}")
-            logger.info(f"Result: {result.output}")
+            # Ran out of iterations - send AgentStopped
+            error_msg = f"Failed to complete task after {max_iterations} iterations"
+            if hooks:
+                await hooks.send_agent_stopped(reason=f"max_iterations: {error_msg}")
+            raise RuntimeError(error_msg)
             
-            return result.output
-        
-        raise RuntimeError(f"Failed to complete task after {max_iterations} iterations")
+        except StopExecutionError as e:
+            # Code mode was stopped via decorator (check_stop_callback returned True)
+            logger.info(f"Code mode stopped via StopExecutionError: {e}")
+            if hooks:
+                await hooks.send_agent_stopped(reason=f"stop_requested: {str(e)}")
+            raise
+        except Exception as e:
+            # Unexpected error during code mode
+            logger.error(f"Code mode error: {e}")
+            if hooks:
+                await hooks.send_agent_stopped(reason=f"error: {str(e)}")
+            raise
     
     async def cleanup(self):
         """Clean up resources."""

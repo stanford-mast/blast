@@ -254,6 +254,125 @@ def fix_missing_awaits(code: str, async_functions: Set[str]) -> Tuple[str, bool]
         return code, False
 
 
+def flatten_main_block(code: str) -> Tuple[str, bool]:
+    """
+    Flatten 'if __name__ == "__main__"' blocks.
+    
+    These blocks don't execute in LocalPythonExecutor (code is wrapped in async function).
+    Also converts asyncio.run(func()) to await func() since we're in async context.
+    
+    Transforms:
+        if __name__ == "__main__":
+            result = asyncio.run(my_task())
+            print(result)
+    
+    To:
+        result = await my_task()
+        print(result)
+    
+    Args:
+        code: Python code to fix
+        
+    Returns:
+        Tuple of (fixed_code, was_modified)
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, False
+    
+    modified = False
+    
+    class MainBlockFlattener(ast.NodeTransformer):
+        def __init__(self):
+            self.modified = False
+            self.flattened_stmts = []
+        
+        def visit_If(self, node):
+            """Detect and flatten if __name__ == '__main__' blocks"""
+            # Check if this is "if __name__ == '__main__':"
+            is_main_block = False
+            if isinstance(node.test, ast.Compare):
+                if (isinstance(node.test.left, ast.Name) and node.test.left.id == '__name__' and
+                    len(node.test.ops) == 1 and isinstance(node.test.ops[0], ast.Eq) and
+                    len(node.test.comparators) == 1 and isinstance(node.test.comparators[0], ast.Constant) and
+                    node.test.comparators[0].value == '__main__'):
+                    is_main_block = True
+            
+            if is_main_block:
+                # Replace the if block with its contents (flattened to module level)
+                self.modified = True
+                logger.info("Flattening if __name__ == '__main__' block")
+                # Return the body statements directly (they'll replace the if statement)
+                # Visit each statement in the body to apply other transformations
+                flattened = []
+                for stmt in node.body:
+                    # Visit the statement to apply transformations (like asyncio.run fix)
+                    new_stmt = self.visit(stmt)
+                    if isinstance(new_stmt, list):
+                        flattened.extend(new_stmt)
+                    else:
+                        flattened.append(new_stmt)
+                return flattened
+            else:
+                # Not a main block, continue normal traversal
+                return self.generic_visit(node)
+        
+        def visit_Expr(self, node):
+            """Convert asyncio.run() to await in expression statements"""
+            # Transform the entire expression tree (handles nested calls like print(asyncio.run(...)))
+            new_value = self.visit(node.value)
+            if new_value is not node.value:
+                return ast.copy_location(ast.Expr(value=new_value), node)
+            return node
+        
+        def visit_Call(self, node):
+            """Convert asyncio.run() in any call context"""
+            # First, try to convert this call itself
+            converted = self._convert_asyncio_run(node)
+            if converted is not node:
+                return converted
+            
+            # If not converted, visit children (arguments, etc.)
+            return self.generic_visit(node)
+        
+        def visit_Assign(self, node):
+            """Convert asyncio.run() to await in assignments"""
+            if isinstance(node.value, ast.Call):
+                new_value = self._convert_asyncio_run(node.value)
+                if new_value is not node.value:
+                    self.modified = True
+                    return ast.copy_location(
+                        ast.Assign(targets=node.targets, value=new_value),
+                        node
+                    )
+            return self.generic_visit(node)
+        
+        def _convert_asyncio_run(self, node):
+            """Helper to convert asyncio.run(coro) to await coro"""
+            if isinstance(node.func, ast.Attribute):
+                if (isinstance(node.func.value, ast.Name) and 
+                    node.func.value.id == 'asyncio' and
+                    node.func.attr == 'run'):
+                    # asyncio.run(coro) -> await coro
+                    if node.args:
+                        self.modified = True
+                        logger.info("Converting asyncio.run() to await")
+                        return ast.copy_location(ast.Await(value=node.args[0]), node)
+            return node
+    
+    flattener = MainBlockFlattener()
+    new_tree = flattener.visit(tree)
+    
+    if flattener.modified:
+        # Fix missing required fields in the AST
+        ast.fix_missing_locations(new_tree)
+        new_code = ast.unparse(new_tree)
+        return new_code, True
+    else:
+        return code, False
+
+
 def fix_tool_ordering(code: str, tool_info: dict) -> Tuple[str, bool]:
     """
     TODO: Fix broken tool ordering by inserting missing tool calls.
@@ -305,6 +424,11 @@ def apply_code_fixes(
     original_code = code
     total_modified = False
     
+    # Pass 0: Flatten if __name__ == '__main__' blocks and convert asyncio.run() to await
+    # Do this FIRST so subsequent passes can process the flattened code
+    code, modified = flatten_main_block(code)
+    total_modified = total_modified or modified
+    
     # Pass 1: Transform ai_eval f-strings to explicit variable passing
     code, modified = transform_ai_eval_fstrings(code)
     total_modified = total_modified or modified
@@ -321,4 +445,4 @@ def apply_code_fixes(
     return code, total_modified
 
 
-__all__ = ["fix_missing_awaits", "fix_tool_ordering", "transform_ai_eval_fstrings", "apply_code_fixes"]
+__all__ = ["fix_missing_awaits", "fix_tool_ordering", "transform_ai_eval_fstrings", "flatten_main_block", "apply_code_fixes"]

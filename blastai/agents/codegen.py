@@ -36,6 +36,7 @@ class LLMTiming:
 
 # Example code showing realistic patterns
 # TODO: add example of logging in via ai_exec when on login page
+EXAMPLE_LABEL_WITH_STATE = "E4: ordering tool calls based on current STATE and tool preconditions/postconditions, passing previous tools results into next tool call either by direct access or ai_eval, using ai_eval to match a user-provided term to an option in a list"
 EXAMPLE_CODE = """
 E1: immediate return
 ```python
@@ -54,7 +55,7 @@ x = await tool_b(param="value")
 response = await ai_eval(f"Summary of {x.content}")
 ```
 
-E4: ordering tool calls based on current STATE and tool preconditions/postconditions, passing previous tools results into next tool call either by direct access or ai_eval, using ai_eval to match a user-provided term to an option in a list
+E4: multiple tool calls
 ```python
 await tool_c()
 x = await tool_d(id=123)
@@ -95,6 +96,9 @@ class CodeCandidate:
     # Iteration failure tracking
     total_iterations: int = 0      # Total iterations attempted (including failures)
     failed_iterations: int = 0     # Number of iterations that failed validation
+    # Per-iteration error tracking (order matches iteration execution)
+    iteration_errors: List[str] = field(default_factory=list)
+    iteration_error_types: List[str] = field(default_factory=list)  # syntax|types|ordering|pre-tools|none|unknown
 
 
 class CodeGenerator:
@@ -169,29 +173,32 @@ class CodeGenerator:
         lines.append("")
         
         # Initialize STATE dictionary dynamically from all tools' pre/post variables
-        # Collect all state keys referenced in pre/post and URL patterns
-        state_keys = set()
-        for t in self.agent.tools:
-            if t.tool_executor_type == ToolExecutorType.SMCP:
-                if getattr(t, "pre", None) and isinstance(t.pre, dict):
-                    state_keys.update(t.pre.keys())
-                if getattr(t, "post", None) and isinstance(t.post, dict):
-                    state_keys.update(t.post.keys())
-                # Note: We no longer track current_url in STATE - use get_url() instead
+        # Only include STATE if state_aware is True
+        if self.state_aware:
+            # Collect all state keys referenced in pre/post and URL patterns
+            state_keys = set()
+            for t in self.agent.tools:
+                if t.tool_executor_type == ToolExecutorType.SMCP:
+                    if getattr(t, "pre", None) and isinstance(t.pre, dict):
+                        state_keys.update(t.pre.keys())
+                    if getattr(t, "post", None) and isinstance(t.post, dict):
+                        state_keys.update(t.post.keys())
+                    # Note: We no longer track current_url in STATE - use get_url() instead
 
-        # Make deterministic ordering
-        state_keys_list = sorted(list(state_keys))
+            # Make deterministic ordering
+            state_keys_list = sorted(list(state_keys))
+            
+            # Define STATE dictionary (provided at runtime)
+            if state_keys_list:
+                state_init = "{" + ", ".join([f'"{k}": None' for k in state_keys_list]) + "}"
+                lines.append(f"STATE: Dict[str, Any] = {state_init}")
+                lines.append("")
         
-        # Define STATE dictionary (provided at runtime)
-        if state_keys_list:
-            state_init = "{" + ", ".join([f'"{k}": None' for k in state_keys_list]) + "}"
-            lines.append(f"STATE: Dict[str, Any] = {state_init}")
+        # Track which tools have been called (for pre_tools enforcement) - only if state_aware
+        if self.state_aware:
+            lines.append("# Track which tools have been called")
+            lines.append("TOOLS_CALLED: set[str] = set()")
             lines.append("")
-        
-        # Track which tools have been called (for pre_tools enforcement)
-        lines.append("# Track which tools have been called")
-        lines.append("TOOLS_CALLED: set[str] = set()")
-        lines.append("")
         
         # Add SMCP tool definitions with precondition/postcondition assertions
         for tool in self.agent.tools:
@@ -257,8 +264,8 @@ class CodeGenerator:
                 lines.append(f'    {smcp_tool.description}')
                 lines.append(f'    """')
                 
-                # PRE_TOOLS ASSERTIONS (check that required tools have been called)
-                if hasattr(smcp_tool, 'pre_tools') and smcp_tool.pre_tools:
+                # PRE_TOOLS ASSERTIONS (check that required tools have been called) - only if state_aware
+                if self.state_aware and hasattr(smcp_tool, 'pre_tools') and smcp_tool.pre_tools:
                     # pre_tools is Dict[str, List[str]] mapping param names to required tool names
                     # Flatten to get all required tools
                     required_tools = set()
@@ -307,9 +314,10 @@ class CodeGenerator:
                             if assertion:
                                 lines.append(f'    {assertion}')
                 
-                # Track that this tool was called (conceptually - runtime handles this)
-                lines.append(f'    TOOLS_CALLED.add("{smcp_tool.name}")')
-                lines.append('')
+                # Track that this tool was called (conceptually - runtime handles this) - only if state_aware
+                if self.state_aware:
+                    lines.append(f'    TOOLS_CALLED.add("{smcp_tool.name}")')
+                    lines.append('')
         
         # Add core tool definitions (simplified signatures)
         for tool in self.agent.tools:
@@ -456,17 +464,41 @@ class CodeGenerator:
     
     def _extract_code_from_response(self, response: str) -> Optional[str]:
         """Extract Python code from markdown code blocks."""
-        # Look for ```python ... ``` or ``` ... ```
+        # Primary: fenced code blocks
         patterns = [
             r'```python\s*\n(.*?)\n```',
+            r'```py\s*\n(.*?)\n```',
             r'```\s*\n(.*?)\n```'
         ]
-        
         for pattern in patterns:
             matches = re.findall(pattern, response, re.DOTALL)
             if matches:
-                return matches[0].strip()
-        
+                extracted = matches[0].strip()
+                # Guard against model echoing examples without user code marker
+                if extracted:
+                    return extracted
+        # Fallback heuristics: attempt to salvage code when no fences present
+        # 1. If response contains lines with 'await ' or assignment to result
+        lines = [l.rstrip() for l in response.splitlines()]
+        code_like = []
+        in_code = False
+        for l in lines:
+            stripped = l.strip()
+            if not stripped:
+                continue
+            # Start collecting when we see common Python starters
+            if not in_code and (
+                stripped.startswith(('result', 'await ', 'for ', 'if ', 'while ', 'import ', 'from ', 'def ', 'class ', '#'))
+                or 'await ' in stripped
+            ):
+                in_code = True
+            if in_code:
+                code_like.append(l)
+        fallback = '\n'.join(code_like).strip()
+        if fallback:
+            # Remove trailing triple backticks if model left them open
+            fallback = re.sub(r'```+$', '', fallback).strip()
+            return fallback if fallback else None
         return None
     
     async def generate_code(
@@ -539,6 +571,24 @@ class CodeGenerator:
         best = min(valid_candidates, key=lambda c: c.rank)
         logger.info(f"Selected best candidate with cost {best.rank} from {len(valid_candidates)} valid candidates")
         return best.code
+
+    # Public wrapper to expose a single candidate with iteration metadata
+    async def generate_candidate(
+        self,
+        task: str,
+        history: List[BaseMessage],
+        error: Optional[str] = None,
+        initial_state: Optional[Dict[str, Any]] = None,
+        current_url: Optional[str] = None
+    ) -> Optional[CodeCandidate]:
+        """Generate and return a single CodeCandidate (with retries and metrics)."""
+        return await self._generate_candidate(
+            task=task,
+            history=history,
+            initial_error=error,
+            initial_state=initial_state,
+            current_url=current_url,
+        )
     
     async def _generate_candidate(
         self,
@@ -575,6 +625,8 @@ class CodeGenerator:
         llm_timings: List[LLMTiming] = []
         total_iterations = 0
         failed_iterations = 0
+        iteration_errors: List[str] = []
+        iteration_error_types: List[str] = []
         
         # Build definition code (and cache CFG for validation performance)
         definition_code = self._build_definition_code()
@@ -594,7 +646,7 @@ class CodeGenerator:
             SystemMessage(content=f"""You are an expert in writing code that calls tools and programatically asks AI questions.
 <examples>
 Here are examples of good code to generate. Use them as reference but never copy them directly.
-{EXAMPLE_CODE}
+{EXAMPLE_CODE if not self.state_aware else EXAMPLE_CODE.replace("E4: multiple tool calls", EXAMPLE_LABEL_WITH_STATE + ":")}
 </examples>
 <instructions>
 Generate completion of the given code block to implement the TASK.
@@ -639,8 +691,8 @@ If an error is reported, fix the previously generated code accordingly.
                 prompt_parts.append(definition_code)
                 prompt_parts.append("")
                 
-                # Initialize STATE with initial values if provided
-                if initial_state:
+                # Initialize STATE with initial values if provided (only if state_aware)
+                if self.state_aware and initial_state:
                     prompt_parts.append("# Initialize STATE with current values")
                     state_init = ", ".join([f'"{k}": {repr(v)}' for k, v in initial_state.items()])
                     prompt_parts.append(f"STATE.update({{{state_init}}})")
@@ -733,7 +785,9 @@ If an error is reported, fix the previously generated code accordingly.
                         fix_time=total_fix_time,
                         llm_timings=llm_timings,
                         total_iterations=total_iterations,
-                        failed_iterations=failed_iterations
+                        failed_iterations=failed_iterations,
+                        iteration_errors=iteration_errors,
+                        iteration_error_types=iteration_error_types
                     )
                 else:
                     # Invalid - prepare for next iteration
@@ -741,6 +795,10 @@ If an error is reported, fix the previously generated code accordingly.
                     logger.warning(f"✗ VALIDATION FAILED (took {validation_elapsed:.3f}s): {validation_error}")
                     logger.warning(f"Invalid code:\n```python\n{code}\n```")
                     error = validation_error
+                    # Track error details
+                    iteration_errors.append(validation_error or "")
+                    etype = self._classify_error(validation_error)
+                    iteration_error_types.append(etype)
                     # Add assistant message and error feedback to conversation
                     messages.append(AssistantMessage(content=f"```python\n{code}\n```"))
                     # Continue to next iteration with error
@@ -768,8 +826,25 @@ If an error is reported, fix the previously generated code accordingly.
             fix_time=total_fix_time,
             llm_timings=llm_timings,
             total_iterations=total_iterations,
-            failed_iterations=failed_iterations
+            failed_iterations=failed_iterations,
+            iteration_errors=iteration_errors,
+            iteration_error_types=iteration_error_types
         )
+
+    def _classify_error(self, error: Optional[str]) -> str:
+        """Classify a validation error string into a category for fractional pass metrics."""
+        if not error:
+            return "unknown"
+        e = error.lower()
+        if "syntax" in e or "invalid syntax" in e:
+            return "syntax"
+        if "line " in e and (":" in error):
+            return "types"
+        if "precondition" in e or "tool ordering" in e or "ordering" in e:
+            return "ordering"
+        if "pre-tools" in e:
+            return "pre-tools"
+        return "unknown"
 
 
 __all__ = ["CodeGenerator", "CodeCandidate", "EXAMPLE_CODE"]

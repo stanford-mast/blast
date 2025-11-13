@@ -102,7 +102,7 @@ def check_tool_ordering(
             return True, None  # Stop this path
         
         # Check tool calls in this block
-        for func_name, call_node in block.calls:
+        for func_name, call_node, comp_depth in block.calls:
             # Special handling for ai_exec - resets state
             if func_name == "ai_exec":
                 state = {}  # Reset state after ai_exec
@@ -433,6 +433,52 @@ possibly-missing-implicit-call = "ignore"
         return True, None  # Don't fail validation if ty check fails
 
 
+def check_missing_imports(tree: ast.AST) -> Optional[str]:
+    """
+    Check for common missing imports by detecting attribute access on known stdlib modules.
+    
+    This catches cases like:
+    - re.search(...) without 'import re'
+    - json.dumps(...) without 'import json'
+    - asyncio.run(...) without 'import asyncio'
+    
+    Args:
+        tree: Parsed AST of the code
+    
+    Returns:
+        Error message if missing import detected, None otherwise
+    """
+    # Collect all imported module names
+    imported_modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                # Handle 'import foo' and 'import foo as bar'
+                imported_modules.add(alias.name.split('.')[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                imported_modules.add(node.module.split('.')[0])
+    
+    # Common stdlib modules that are often used without importing
+    COMMON_MODULES = {
+        're', 'json', 'os', 'sys', 'math', 'random', 'datetime', 'time',
+        'pathlib', 'collections', 'itertools', 'functools', 'operator',
+        'string', 'decimal', 'copy', 'pickle', 'sqlite3', 'csv',
+        'logging', 'warnings', 'traceback', 'inspect', 'gc', 'weakref'
+    }
+    
+    # Find attribute access on potential module names
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            # Check if accessing attribute on a Name node (e.g., re.search)
+            if isinstance(node.value, ast.Name):
+                module_name = node.value.id
+                if module_name in COMMON_MODULES and module_name not in imported_modules:
+                    return f"Missing import: '{module_name}' is used but not imported (found '{module_name}.{node.attr}')"
+    
+    return None
+
+
 def check_code_candidate(
     code: str,
     agent: Any = None,
@@ -444,9 +490,10 @@ def check_code_candidate(
     
     Performs:
     1. Syntax validation
-    2. Optional basedpyright type checking (if definition_code provided)
-    3. CFG construction
-    4. Tool ordering validation via CFG traversal with precondition/postcondition checking
+    2. Missing import detection
+    3. Optional basedpyright type checking (if definition_code provided)
+    4. CFG construction
+    5. Tool ordering validation via CFG traversal with precondition/postcondition checking
     
     Args:
         code: Generated Python code
@@ -463,7 +510,17 @@ def check_code_candidate(
     except SyntaxError as e:
         return False, f"Syntax error at line {e.lineno}: {e.msg}"
     
-    # 2. Optional basedpyright type checking if we have definition code
+    # 2. Check for missing imports (common stdlib modules)
+    # This catches cases like using 're.search' without 'import re'
+    # BUT: Only check the generated code if we don't have definition_code
+    # If we have definition_code, the missing import check happens during type checking
+    # against the full code (definition + generated)
+    if definition_code is None:
+        missing_import_error = check_missing_imports(tree)
+        if missing_import_error:
+            return False, missing_import_error
+    
+    # 3. Optional basedpyright type checking if we have definition code
     if definition_code is not None:
         # Wrap user code in async function to allow await statements
         # Use Any return type since generated code may return different types
@@ -476,7 +533,7 @@ async def _user_generated_code() -> Any:
         if not is_valid:
             return False, type_error
     
-    # 3. Build CFG and validate tool ordering if we have agent context
+    # 4. Build CFG and validate tool ordering if we have agent context
     if agent is not None:
         try:
             cfg_builder = CFGBuilder()

@@ -5,9 +5,20 @@
   "logo": "assets/blast_icon_only.svg",
   "favicon": "assets/blast_icon_only.svg",
   "colors": {
-    "primary": "#ffe067"
+    "primary": "#ffe067",
+    "light": "#ffe067"
   },
-  "theme": "mint",
+  "theme": "willow",
+  "appearance": {
+    "default": "dark",
+    "strict": true
+  },
+  "background": {
+    "color": {
+      "dark": "#1f1f1f",
+      "light": "#ffffff"
+    }
+  },
   "navigation": {
     "languages": [],
     "versions": [],

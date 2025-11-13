@@ -1,11 +1,17 @@
+- id: sagehr-1
+  initial_url: https://sage.hr/signin
+  goal: 'Approve any single day requests from Caleb'
+  smcp_registry: smcp-registries/sage-hr.json
+  user_id: caleb3
 - id: dashdish-deepresearch0
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app
   goal: 'DashDish: Go to the first in Best Near Me and tell me how many ratings it has.
     Then  tell me what its cheapest item is.'
 - id: dashdish-deepresearch1
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app
-  goal: 'DashDish: Go through all the Best Near Me and tell me how many ratings each one has.
-    Then go through each and tell me what its cheapest item is.'
+  goal: 'DashDish: How many ratings does each in national favorites have? Then go through each and tell me its cheapest item. Then repeat but for most expensive item.'
+  smcp_registry: smcp-registries/dashdish.json
+  user_id: caleb3
 - id: dashdish-1
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app
   goal: 'DashDish: Its my son’s birthday, please order me a Pizza from anywhere and
