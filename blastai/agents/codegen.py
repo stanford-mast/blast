@@ -52,16 +52,17 @@ result = f"It is {x.items[0].field1} and {x.items[0].field2}" if x.items else "<
 E3: result with ai_eval
 ```python
 x = await tool_b(param="value")
-response = await ai_eval(f"Summary of {x.content}")
+response = await ai_eval("Summary of {data}", data=x.content)
 ```
 
-E4: multiple tool calls
+E4: multiple tool calls with ai_eval for matching user terms to options
 ```python
 await tool_c()
 x = await tool_d(id=123)
 y = await tool_e(p1=x.data)
-z = await tool_f(ai_eval(f"Name in {y.options} closest to 'the ttanic'"))
-result = ai_eval(f"Response telling user about {z.info} since they asked about the titanic")
+closest_name = await ai_eval("Name in {options} closest to 'the titanic'", options=y.options)
+z = await tool_f(item_name=closest_name)
+result = await ai_eval("Response about {info}", info=z.info)
 ```
 
 E5: control flow with loops and conditionals
@@ -69,7 +70,8 @@ E5: control flow with loops and conditionals
 await tool_c()
 x = await tool_e(123)
 results = [await tool_f(item_name=item.name) for item in x.items if item.value > 3]
-result = ai_eval(f"Summary of {results} for whatever specific goal user had")
+result = await ai_eval("Summary of {results}", results=results)
+```
 """
 
 RULES = """
@@ -119,7 +121,8 @@ class CodeGenerator:
         accept_cost_threshold: Optional[float] = None,
         min_candidates_for_comparison: int = 1,
         compare_cost_threshold: Optional[float] = None,
-        timezone: str = "UTC"
+        timezone: str = "UTC",
+        debug_print_prompt: bool = False
     ):
         """
         Initialize code generator.
@@ -134,6 +137,7 @@ class CodeGenerator:
             min_candidates_for_comparison: Minimum candidates before comparison (default 1)
             compare_cost_threshold: If set, compare and return when we have min_candidates below this threshold (default None)
             timezone: Timezone string in IANA format for current date/time context (default 'UTC')
+            debug_print_prompt: If True, print the full codegen prompt for first iteration (default False)
         """
         self.agent = agent
         self.llm = llm
@@ -144,6 +148,7 @@ class CodeGenerator:
         self.min_candidates_for_comparison = min_candidates_for_comparison
         self.compare_cost_threshold = compare_cost_threshold
         self.timezone = timezone
+        self.debug_print_prompt = debug_print_prompt
         
         # Cache for definition code CFG (built once, reused across iterations)
         self._definition_code_cache: Optional[str] = None
@@ -360,7 +365,8 @@ class CodeGenerator:
         lines.append('async def ai_eval(expr: str, **kwargs) -> str:')
         lines.append('    """')
         lines.append('    Evaluate an expression by asking AI.')
-        lines.append('    Supports template format: ai_eval("Name in {options} closest to X", options=values)')
+        lines.append('    Template format: ai_eval("Result from {variable}", variable=value)')
+        lines.append('    The template string uses {variable} placeholders that get replaced with kwargs.')
         lines.append('    """')
         lines.append('    raise NotImplementedError("Runtime implementation")')
         lines.append('')
@@ -714,6 +720,19 @@ If an error is reported, fix the previously generated code accordingly.
             
             # Add user message to conversation
             messages.append(UserMessage(content=prompt))
+            
+            # Debug: Print full prompt on first iteration if enabled
+            if self.debug_print_prompt and iteration == 0:
+                print("\n" + "="*100)
+                print("CODEGEN PROMPT (First Iteration)")
+                print("="*100)
+                print("\nSYSTEM MESSAGE:")
+                print("-"*100)
+                print(messages[0].content)
+                print("\nUSER MESSAGE:")
+                print("-"*100)
+                print(prompt)
+                print("="*100 + "\n")
             
             # Generate code
             try:

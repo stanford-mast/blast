@@ -148,7 +148,8 @@ async def generate_code_with_timing(
     task: str,
     config: CodegenConfig,
     codegen_llm: BaseChatModel,
-    timezone: str = "America/Los_Angeles"
+    timezone: str = "America/Los_Angeles",
+    debug_print_prompt: bool = False
 ) -> Tuple[str, float, float, object, object]:
     """
     Generate code for a task and measure timing and cost.
@@ -166,7 +167,8 @@ async def generate_code_with_timing(
         num_candidates=1,  # Generate single candidate
         state_aware=config.with_protocol,
         max_iterations=1,  # Force single iteration per user's simplification
-        timezone=timezone
+        timezone=timezone,
+        debug_print_prompt=debug_print_prompt
     )
     
     # Measure generation time
@@ -504,13 +506,17 @@ async def run_evaluation_for_task(
     measure_actual_latency: bool,
     measure_page_load: bool,
     results_dir: Path,
-    parallel: int = 1
+    parallel: int = 1,
+    print_code: bool = False,
+    print_prompt: bool = False
 ) -> Tuple[List[CodegenResult], List[PageLoadResult]]:
     """
     Run evaluation for a single task across all configs.
     
     Args:
         parallel: Number of runs to execute in parallel (default: 1)
+        print_code: Whether to print generated code for each run (default: False)
+        print_prompt: Whether to print codegen prompt for first run (default: False)
     
     Returns:
         Tuple of (codegen_results, page_load_results)
@@ -564,11 +570,14 @@ async def run_evaluation_for_task(
                     )
                     
                     # Generate code
+                    # Print prompt only for first run (run_num == 0) and first config
+                    debug_prompt = print_prompt and run_num == 0
                     generated_code, gen_time, gen_cost, candidate, code_generator = await generate_code_with_timing(
                         agent=agent,
                         task=task_goal,
                         config=config,
-                        codegen_llm=codegen_llm
+                        codegen_llm=codegen_llm,
+                        debug_print_prompt=debug_prompt
                     )
                     
                     # Handle failed generation
@@ -619,6 +628,11 @@ async def run_evaluation_for_task(
                     
                     status = "✓" if codecheck_result.overall_pass else "✗"
                     console.print(f"  Run {run_num + 1}/{num_runs}... {status} (gen: {gen_time:.2f}s, est_cost: {estimated_cost:.2f}s)")
+                    
+                    # Print generated code if requested
+                    if print_code:
+                        console.print(f"\n[dim]Generated code for run {run_num + 1}:[/]")
+                        console.print(Panel(generated_code, title=f"Run {run_num + 1} - {config.model}", border_style="cyan"))
                     
                     return result
                 
@@ -832,7 +846,11 @@ def compute_summary_statistics(
               help='Number of runs per config (default: 32)')
 @click.option('--parallel', type=int, default=1,
               help='Number of parallel runs to execute simultaneously (default: 1, max: 8)')
-def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bool, runs: int, parallel: int):
+@click.option('--print-code/--no-print-code', default=False,
+              help='Print generated code for each run (default: False)')
+@click.option('--print-prompt/--no-print-prompt', default=False,
+              help='Print codegen prompt for first run (default: False)')
+def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bool, runs: int, parallel: int, print_code: bool, print_prompt: bool):
     """
     Evaluate code generation performance across different configurations.
     
@@ -858,8 +876,8 @@ def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bo
     
     # Define configs to test
     configs = [
-        CodegenConfig(model="gpt-4.1", with_protocol=True),
-        CodegenConfig(model="gpt-4.1", with_protocol=False),
+        CodegenConfig(model="claude-sonnet-4-5-20250929", with_protocol=True),
+        CodegenConfig(model="claude-sonnet-4-5-20250929", with_protocol=False),
         # CodegenConfig(model="meta-llama/llama-4-maverick-17b-128e-instruct", with_protocol=True),  # temporarily disabled
         # CodegenConfig(model="meta-llama/llama-4-maverick-17b-128e-instruct", with_protocol=False), # temporarily disabled
         # Swap in Groq's OpenAI-compatible gpt-oss model
@@ -919,7 +937,9 @@ def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bo
                 measure_actual_latency=actual_latency,
                 measure_page_load=page_load,
                 results_dir=results_dir,
-                parallel=parallel
+                parallel=parallel,
+                print_code=print_code,
+                print_prompt=print_prompt
             )
             
             # Save results
