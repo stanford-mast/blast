@@ -19,6 +19,7 @@ from .resource_manager import ResourceManager
 from .scheduler import Scheduler
 from .cache import CacheManager
 from .planner import Planner
+from .utils import deep_update
 
 if TYPE_CHECKING:
     from browser_use.agent.views import AgentHistoryList
@@ -48,11 +49,11 @@ class Engine:
         if config_path:
             with open(config_path) as f:
                 user_config = yaml.safe_load(f)
-                # Update nested dicts
+                # Update nested dicts using deep_update
                 if 'settings' in user_config:
-                    config['settings'].update(user_config['settings'])
+                    deep_update(config['settings'], user_config['settings'])
                 if 'constraints' in user_config:
-                    config['constraints'].update(user_config['constraints'])
+                    deep_update(config['constraints'], user_config['constraints'])
         
         return config
     

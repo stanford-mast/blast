@@ -83,6 +83,11 @@ class Constraints(BaseModel):
         description="Types of parallelism to allow: task (subtasks), data (content extraction), first_of_n (first result)"
     )
     
+    first_of_n_num_copies: int = Field(
+        default=3,
+        description="Number of copies to launch for first_of_n parallelism strategy"
+    )
+    
     max_parallelism_nesting_depth: int = Field(
         default=1,
         description="Maximum depth of nested parallel tasks"
