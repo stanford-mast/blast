@@ -143,7 +143,7 @@ const CodeBlock = ({ inline, className, children, ...props }: any) => {
         textArea.select();
         const successful = document.execCommand('copy');
         document.body.removeChild(textArea);
-        
+
         if (successful) {
           setCopied(true);
           setCopyError(false);
@@ -180,9 +180,8 @@ const CodeBlock = ({ inline, className, children, ...props }: any) => {
     <div className="relative group mb-4">
       <button
         onClick={handleCopy}
-        className={`absolute top-2 right-2 p-1.5 rounded-md hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10 ${
-          copyError ? 'opacity-100' : ''
-        }`}
+        className={`absolute top-2 right-2 p-1.5 rounded-md hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10 ${copyError ? 'opacity-100' : ''
+          }`}
         aria-label={copyError ? 'Failed to copy code' : copied ? 'Code copied!' : 'Copy code'}
         title={copyError ? 'Failed to copy code' : copied ? 'Copied!' : 'Copy to clipboard'}
       >
@@ -266,7 +265,11 @@ export const MarkdownRenderer = ({ content, className = '' }: MarkdownRendererPr
   return (
     <div className={`markdown-content ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath, remarkEmoji]}
+        remarkPlugins={[
+          remarkGfm,
+          [remarkMath, { singleDollarTextMath: false }],
+          remarkEmoji
+        ]}
         rehypePlugins={[
           rehypeRaw,
           [rehypeSanitize, sanitizeSchema],
