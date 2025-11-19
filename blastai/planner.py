@@ -139,6 +139,23 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
             logger.warning(f"Failed to generate tool use annotations: {e}")
             return None
     
+    def _get_parallel_task_guidance(self, tool_annotation: str) -> str:
+        """Generate guidance text for parallel task execution.
+        
+        Args:
+            tool_annotation: The tool annotation string to append guidance to
+            
+        Returns:
+            Complete guidance string with parallel task execution instructions
+        """
+
+        guidance_text = """
+        IMPORTANT:
+        - The above is your execution plan. You should use the launch_subtask tool if you need to create parallel tasks. For each item you need to process in parallel: 1. Call launch_subtask once for each item with the specific details 2. After launching all subtasks, use get_subtask_results to collect and aggregate their results 3. For parallel tasks, do NOT attempt to complete all items sequentially yourself
+        - If the initial url for the subtask is not available or confirmed, you should set optional_initial_search_or_url to the current page url.
+        """
+        return tool_annotation + "\n\n" + guidance_text
+
     async def plan(
         self,
         task_description: str,
@@ -177,8 +194,9 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
             parallelism = self.constraints.allow_parallelism
 
             if parallelism.get("first_of_n", False):
+                num_copies = self.constraints.first_of_n_num_copies
                 guidance_parts.append(
-                    f'Execute launch_subtask(task="{task_description}", optional_initial_search_or_url={initial_url}, num_copies=3) '
+                    f'Execute launch_subtask(task="{task_description}", optional_initial_search_or_url={initial_url}, num_copies={num_copies}) '
                     "--> then get_first_subtask_result with the returned subtask IDs"
                     " Do not attempt to complete the task yourself - delegate it to subtasks. Unless polling for subtask results repeatedly fails, in which case you can attempt to complete the task yourself."
                 )
@@ -186,7 +204,7 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
             if parallelism.get("task", False):
                 tool_annotation = await self._generate_tool_use_annotations(context_task_description)
                 if tool_annotation:
-                    guidance_parts.append(tool_annotation + "\n\nIMPORTANT: The above is your execution plan. You should use the launch_subtask tool if you need to create parallel tasks. For each item you need to process in parallel:\n1. Call launch_subtask once for each item with the specific details\n2. After launching all subtasks, use get_subtask_results to collect and aggregate their results\n3. For parallel tasks, do NOT attempt to complete all items sequentially yourself")
+                    guidance_parts.append(self._get_parallel_task_guidance(tool_annotation))
 
             if parallelism.get("data", False):
                 guidance_parts.append(

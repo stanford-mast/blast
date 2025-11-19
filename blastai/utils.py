@@ -6,7 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 import json
-from typing import Dict, Optional, List, Union, Any
+from typing import Dict, Optional, List, Any, Mapping
 from browser_use.llm.base import BaseChatModel
 from browser_use.llm.openai.chat import ChatOpenAI
 from browser_use.llm.anthropic.chat import ChatAnthropic
@@ -15,6 +15,23 @@ from browser_use.llm.google.chat import ChatGoogle
 from browser_use.llm.groq.chat import ChatGroq
 
 from .models import is_openai_model
+
+def deep_update(base_dict: Dict[str, Any], update_dict: Mapping[str, Any]) -> Dict[str, Any]:
+    """Recursively update a dictionary.
+    
+    Args:
+        base_dict: The dictionary to be updated
+        update_dict: The dictionary containing updates
+        
+    Returns:
+        Updated dictionary (modified in-place)
+    """
+    for key, value in update_dict.items():
+        if isinstance(value, dict) and key in base_dict and isinstance(base_dict[key], dict):
+            deep_update(base_dict[key], value)
+        else:
+            base_dict[key] = value
+    return base_dict
 
 def init_model(model_name: str, **kwargs: Any) -> BaseChatModel:
     """Initialize a chat model with proper configuration.
