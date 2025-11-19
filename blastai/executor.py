@@ -1,14 +1,9 @@
 """BLAST Executor for managing browser-based task execution."""
 
-import asyncio
 import logging
 import os
-import random
-import re
 import time
-from datetime import datetime
-from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote_plus, urlparse
 
 from browser_use import Agent, Controller
@@ -20,10 +15,9 @@ from lmnr import Laminar
 logger = logging.getLogger(__name__)
 
 from .config import Constraints, Settings
-from .models import TokenUsage, is_openai_model
+from .models import TokenUsage
 from .resource_factory_utils import cleanup_stealth_profile_dir
-from .response import AgentHistoryListResponse, AgentReasoning
-from .utils import get_base_url_for_provider
+from .response import AgentReasoning
 
 # Initialize Laminar if available and API key is set
 laminar_api_key = os.environ.get("LMNR_PROJECT_API_KEY")

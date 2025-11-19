@@ -1,6 +1,5 @@
 """Tests for price and token usage tracking."""
 
-from typing import List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,7 +7,6 @@ import pytest
 from blastai import Engine
 from blastai.config import Constraints
 from blastai.executor import Executor
-from blastai.models import TokenUsage
 from blastai.scheduler import TaskState
 
 
@@ -23,7 +21,7 @@ def get_mock_executor(task_id: str = "test-task"):
 
 
 def get_mock_usage_summary(
-    total_cost: int,
+    total_cost: float,
     total_prompt_tokens: int,
     total_prompt_cached_tokens: int,
     total_completion_tokens: int,
@@ -210,7 +208,7 @@ async def test_engine_get_metrics_cost_aggregation():
         )
 
         # Test 2: Simulate executor1 having a second round, total cost should be 0.03 + 0.02 = 0.05
-        mock_service1.get_usage_summary = AsyncMock(return_value=get_mock_usage_summary(0.03, 1800, 0, 700, 4500))
+        mock_service1.get_usage_summary = AsyncMock(return_value=get_mock_usage_summary(0.03, 3800, 0, 700, 4500))
 
         await executor1._get_cost_from_agent(executor1.agent)
 
