@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
 import asyncio
 import os
+import platform
 import re
 import shlex
 import shutil
 import socket
 import subprocess
 import sys
-import platform
 import tempfile
 from pathlib import Path
 from shutil import which
-from browser_use import BrowserSession, BrowserProfile
+
+from browser_use import BrowserProfile, BrowserSession
 from patchright.async_api import async_playwright as async_patchright
+
 
 def get_stealth_profile_dir(task_id: str) -> str:
     """Get a unique stealth profile directory path for a task."""
     # Get base and task-specific paths
-    base_stealth_dir = os.path.expanduser('~/.config/browseruse/profiles/stealth')
-    stealth_dir = os.path.expanduser(f'~/.config/browseruse/profiles/stealth_{task_id}')
-    
+    base_stealth_dir = os.path.expanduser("~/.config/browseruse/profiles/stealth")
+    stealth_dir = os.path.expanduser(f"~/.config/browseruse/profiles/stealth_{task_id}")
+
     base_stealth_path = Path(base_stealth_dir)
     stealth_dir_path = Path(stealth_dir)
-    
+
     # Ensure base directory exists
     if not base_stealth_path.exists():
         return base_stealth_dir
-    
+
     # Create task-specific directory
     if stealth_dir_path.exists():
         shutil.rmtree(stealth_dir)
@@ -34,22 +36,25 @@ def get_stealth_profile_dir(task_id: str) -> str:
         shutil.copytree(base_stealth_dir, stealth_dir)
     else:
         stealth_dir_path.mkdir(parents=True, exist_ok=True)
-    
+
     return stealth_dir
+
 
 def cleanup_stealth_profile_dir(profile_dir: str) -> None:
     """Safely clean up a stealth profile directory."""
     try:
-        if not profile_dir or 'stealth_' not in profile_dir:
+        if not profile_dir or "stealth_" not in profile_dir:
             return
-            
+
         profile_path = Path(os.path.expanduser(profile_dir))
         if profile_path.exists():
             shutil.rmtree(profile_path)
     except Exception as e:
         print(f"Error cleaning up stealth profile: {e}")
 
+
 # ─── Helper: detect OS and install missing dependencies ───────────────────────
+
 
 def install_with_apt(packages):
     cmd = ["sudo", "apt-get", "update"]
@@ -57,27 +62,28 @@ def install_with_apt(packages):
     cmd = ["sudo", "apt-get", "install", "-y"] + packages
     subprocess.run(cmd, check=True)
 
+
 def install_with_yum(packages):
     cmd = ["sudo", "yum", "install", "-y"] + packages
     subprocess.run(cmd, check=True)
+
 
 def install_with_brew(packages):
     cmd = ["brew", "install"] + packages
     subprocess.run(cmd, check=True)
 
+
 def ensure_noVNC():
     noVNC_dir = Path.home() / "noVNC"
     if not noVNC_dir.exists():
         print("Cloning noVNC into ~/noVNC …")
-        subprocess.run(
-            ["git", "clone", "https://github.com/novnc/noVNC.git", str(noVNC_dir)],
-            check=True
-        )
+        subprocess.run(["git", "clone", "https://github.com/novnc/noVNC.git", str(noVNC_dir)], check=True)
     # Ensure novnc_proxy is executable
     proxy = noVNC_dir / "utils" / "novnc_proxy"
     if not proxy.exists():
         print("❌ noVNC proxy script not found after clone.")
         sys.exit(1)
+
 
 def check_and_install_dependencies():
     system = platform.system()
@@ -147,10 +153,12 @@ def check_and_install_dependencies():
     # 7) Ensure noVNC is present
     ensure_noVNC()
 
+
 # Global set to track allocated display numbers
 allocated_displays = set()
 
 # ─── Helper: find a free display & start Xvnc ─────────────────────────────────
+
 
 async def find_free_display():
     """
@@ -170,11 +178,7 @@ async def find_free_display():
             continue
 
         # 1) Kill any existing Xvnc on :N
-        subprocess.run(
-            ["vncserver", "-kill", f":{n}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+        subprocess.run(["vncserver", "-kill", f":{n}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # 2) Remove leftover ~/.vnc/X<N>.sock, ~/.vnc/*.pid, ~/.vnc/*.log
         for suffix in [f"X{n}.sock", f"{home.name}:{n}.pid", f"{home.name}:{n}.log"]:
             try:
@@ -203,13 +207,7 @@ async def start_xvnc(display: int):
     vnc_dir = home / ".vnc"
     vnc_dir.mkdir(exist_ok=True)
 
-    cmd = [
-        "Xvnc",
-        f":{display}",
-        "-geometry", "1280x720",
-        "-depth", "24",
-        "-SecurityTypes", "None"
-    ]
+    cmd = ["Xvnc", f":{display}", "-geometry", "1280x720", "-depth", "24", "-SecurityTypes", "None"]
     print(f"[Xvnc] {' '.join(cmd)}")
     proc = await asyncio.create_subprocess_exec(*cmd)
 
@@ -220,7 +218,9 @@ async def start_xvnc(display: int):
             raise RuntimeError(f"Xvnc exited with code {proc.returncode} on :{display}")
     return proc
 
+
 # ─── Helper: start fluxbox ────────────────────────────────────────────────────
+
 
 async def start_window_manager(display: int):
     """
@@ -260,6 +260,7 @@ async def start_window_manager(display: int):
 
 # ─── Helper: find free HTTP port & start noVNC ─────────────────────────────────
 
+
 async def find_free_http_port(start: int = 6080, end: int = 6099):
     """
     Return first free TCP port in [start..end].
@@ -278,12 +279,13 @@ async def setup_novnc_session(display: int) -> Path:
     """Create a session-specific noVNC directory with a patched vnc.html"""
     base_dir = Path.home() / "noVNC"
     session_dir = Path.home() / f"noVNC_session_{display}"
-    
+
     # Copy the entire noVNC directory for this session
     if not session_dir.exists():
         import shutil
+
         shutil.copytree(base_dir, session_dir)
-        
+
     # Patch the UI in this session's copy
     html_path = session_dir / "vnc.html"
     patch_version = "v0.1.22"
@@ -296,7 +298,7 @@ async def setup_novnc_session(display: int) -> Path:
             r"<!-- custom patch v0\.\d+\.\d+ -->\s*(<style>.*?</style>\s*)?(<script>.*?</script>\s*)?",
             "",
             html,
-            flags=re.DOTALL
+            flags=re.DOTALL,
         )
         if new_html == html:
             break
@@ -351,6 +353,7 @@ window.addEventListener('load', function () {{
     print(f"\u2705 Patched {html_path} with {patch_version}")
     return session_dir
 
+
 async def start_novnc(display: int):
     """
     Launch noVNC's novnc_proxy, forwarding VNC (5900+display) → HTTP.
@@ -359,7 +362,7 @@ async def start_novnc(display: int):
     vnc_port = 5900 + display
     http_base = 6080  # Base HTTP port
     initial_port = http_base + (display - 1)  # Offset by display number
-    
+
     # Setup a session-specific noVNC directory
     novnc_dir = await setup_novnc_session(display)
     proxy = novnc_dir / "utils" / "novnc_proxy"
@@ -371,7 +374,9 @@ async def start_novnc(display: int):
     await asyncio.sleep(0.5)
     return proc, port
 
+
 # ─── Helper: start Playwright Chromium ────────────────────────────────────────
+
 
 async def start_playwright(display: int, url: str, stealth: bool = False):
     """Launch a browser session using browser_use with the same configuration"""
@@ -384,9 +389,9 @@ async def start_playwright(display: int, url: str, stealth: bool = False):
 
     # Set up browser args
     browser_args = {
-        'headless': False,
-        'env': env,
-        'args': [
+        "headless": False,
+        "env": env,
+        "args": [
             "--disable-gpu",
             f"--app={url}",
             "--window-size=1280,720",
@@ -394,27 +399,27 @@ async def start_playwright(display: int, url: str, stealth: bool = False):
             "--disable-infobars",
             "--class=BorderlessChromium",
             "--disable-features=AutomationControlled",
-            '--start-fullscreen',
-            '--start-maximized',
-            '--disable-translate',
-            '--disable-dev-shm-usage'
+            "--start-fullscreen",
+            "--start-maximized",
+            "--disable-translate",
+            "--disable-dev-shm-usage",
         ],
-        'ignore_default_args': ["--enable-automation", "--no-sandbox"],
+        "ignore_default_args": ["--enable-automation", "--no-sandbox"],
     }
 
     if stealth:
         # Use patchright and stealth profile for stealth mode
         playwright = await async_patchright().start()
-        browser_args['playwright'] = playwright
-        
+        browser_args["playwright"] = playwright
+
         # Get stealth profile directory
         stealth_dir = get_stealth_profile_dir(f"vnc_{display}")
-        browser_args['user_data_dir'] = stealth_dir
-        browser_args['disable_security'] = False
-        browser_args['deterministic_rendering'] = False
+        browser_args["user_data_dir"] = stealth_dir
+        browser_args["disable_security"] = False
+        browser_args["deterministic_rendering"] = False
     else:
         # Use regular temporary profile
-        browser_args['user_data_dir'] = tempfile.mkdtemp(prefix="pw-user-data-")
+        browser_args["user_data_dir"] = tempfile.mkdtemp(prefix="pw-user-data-")
 
     # Create browser profile and session
     browser_profile = BrowserProfile(**browser_args)
@@ -455,11 +460,7 @@ class VNCSession:
                 pass
 
         # Terminate subprocesses
-        for name, proc in [
-            ("noVNC proxy", self.novnc_proc),
-            ("fluxbox", self.flux_proc),
-            ("Xvnc", self.xvnc_proc)
-        ]:
+        for name, proc in [("noVNC proxy", self.novnc_proc), ("fluxbox", self.flux_proc), ("Xvnc", self.xvnc_proc)]:
             if proc:
                 print(f"Terminating {name} (PID {proc.pid})…")
                 try:
@@ -470,11 +471,7 @@ class VNCSession:
 
         # Kill vncserver
         print(f"Killing vncserver on :{self.display}…")
-        subprocess.run(
-            ["vncserver", "-kill", f":{self.display}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+        subprocess.run(["vncserver", "-kill", f":{self.display}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         # Remove display from allocated set
         allocated_displays.remove(self.display)
@@ -487,6 +484,7 @@ class VNCSession:
         if self.stealth_dir:
             cleanup_stealth_profile_dir(self.stealth_dir)
 
+
 async def launch_session(target_url: str, stealth: bool = False) -> VNCSession:
     """Launch a VNC session with browser on a free display"""
     # 1) Find a free display, start Xvnc on it
@@ -498,10 +496,7 @@ async def launch_session(target_url: str, stealth: bool = False) -> VNCSession:
 
     # 3) Start noVNC to proxy VNC → HTTP
     novnc_proc, novnc_port = await start_novnc(display)
-    print(
-        f"noVNC URL → "
-        f"http://localhost:{novnc_port}/vnc.html?host=localhost&port={novnc_port}&autoconnect=true"
-    )
+    print(f"noVNC URL → http://localhost:{novnc_port}/vnc.html?host=localhost&port={novnc_port}&autoconnect=true")
 
     # 4) Launch Playwright→Chromium inside DISPLAY=:N with optional stealth mode
     browser_session, page = await start_playwright(display, target_url, stealth)
@@ -514,8 +509,9 @@ async def launch_session(target_url: str, stealth: bool = False) -> VNCSession:
         novnc_port=novnc_port,
         browser_session=browser_session,
         page=page,
-        stealth=stealth
+        stealth=stealth,
     )
+
 
 async def main():
     # Check/install dependencies
@@ -526,10 +522,10 @@ async def main():
         # Launch multiple sessions with different URLs
         sessions.append(await launch_session("https://example.com", stealth=True))
         sessions.append(await launch_session("https://w3schools.com"))
-        
+
         print("\nAll sessions are now running!")
         print("Press Ctrl+C to terminate all sessions")
-        
+
         # Block until Ctrl+C
         await asyncio.Event().wait()
 
@@ -541,6 +537,7 @@ async def main():
         for session in sessions:
             await session.cleanup()
         print("All sessions cleaned up. Exiting.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

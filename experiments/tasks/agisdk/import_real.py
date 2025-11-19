@@ -2,14 +2,13 @@
 Imports REAL benchmark tasks from the agisdk repository (https://github.com/agi-inc/agisdk).
 """
 
-from pathlib import Path
 import json
+from pathlib import Path
+
 import yaml
 
 # Path to the REAL tasks directory
-REAL_TASK_DIR = Path(__file__).parent / Path(
-    "agisdk/src/agisdk/REAL/browsergym/webclones/tasks"
-)
+REAL_TASK_DIR = Path(__file__).parent / Path("agisdk/src/agisdk/REAL/browsergym/webclones/tasks")
 OUTPUT_DIR = Path(__file__).parent / Path("agisdk.yaml")
 
 
@@ -37,9 +36,7 @@ def main():
     output.sort(key=lambda x: x["id"])
 
     with open(OUTPUT_DIR, "w") as f:
-        yaml.dump(
-            output, f, sort_keys=False, default_flow_style=False, allow_unicode=True
-        )
+        yaml.dump(output, f, sort_keys=False, default_flow_style=False, allow_unicode=True)
 
 
 if __name__ == "__main__":
