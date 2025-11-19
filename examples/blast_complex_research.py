@@ -7,11 +7,8 @@ import time
 from pathlib import Path
 
 from browser_use import Agent, Browser, BrowserConfig
-from langchain_community.callbacks import get_openai_callback
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
-
-from blastai.utils import estimate_llm_cost
 
 # Complex research task
 TASK = "where did the CEOs of the 10 largest space stocks right now go to college and what specific college experiences most impacted them?"
@@ -33,26 +30,19 @@ async def run_with_browser_use() -> tuple[float, str, float]:
         llm=ChatOpenAI(model="gpt-4.1"),  # From llm_model
         use_vision=False,  # From allow_vision=false
         browser=browser,  # Pass browser instance directly
+        calculate_cost=True,  # Enable automatic cost tracking
     )
 
     start_time = time.time()
-    total_cost = 0.0
     try:
-        # Run with cost tracking and estimation
-        with get_openai_callback() as cb:
-            history = await agent.run()
-            cost = cb.total_cost
-            if cost == 0 and cb.total_tokens > 0:
-                cached_tokens = getattr(cb, "prompt_tokens_cached", 0)
-                cost = estimate_llm_cost(
-                    model_name="gpt-4.1",
-                    prompt_tokens=cb.prompt_tokens,
-                    completion_tokens=cb.completion_tokens,
-                    cached_tokens=cached_tokens,
-                )
-            total_cost = cost
-
+        history = await agent.run()
         end_time = time.time()
+
+        # Get cost from agent's built-in token cost service
+        total_cost = 0.0
+        if history.usage and history.usage.total_cost:
+            total_cost = history.usage.total_cost
+
         await browser.close()
         return end_time - start_time, history.final_result(), total_cost
     except Exception as e:

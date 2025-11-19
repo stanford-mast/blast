@@ -1,6 +1,5 @@
 """Utility functions for BlastAI."""
 
-import json
 import os
 import shutil
 import subprocess
@@ -100,46 +99,6 @@ def get_base_url_for_provider(provider: str) -> Optional[str]:
         # Check both possible env var names
         return os.environ.get("DEEPSEEK_BASE_URL") or os.environ.get("DEEPSEEK_API_BASE")
     return None
-
-
-def estimate_llm_cost(
-    model_name: str, prompt_tokens: int, completion_tokens: int, cached_tokens: Optional[int] = 0
-) -> float:
-    """Estimate LLM cost based on token counts and model pricing.
-
-    Args:
-        model_name: Name of the LLM model (with optional provider prefix)
-        prompt_tokens: Number of input tokens
-        completion_tokens: Number of output tokens
-        cached_tokens: Number of cached input tokens (default: 0)
-
-    Returns:
-        Estimated cost in USD (0.0 for non-OpenAI models)
-    """
-    # Only calculate costs for OpenAI models
-    if not is_openai_model(model_name):
-        return 0.0
-
-    # Load pricing config
-    pricing_path = os.path.join(os.path.dirname(__file__), "pricing_openai_api.json")
-    with open(pricing_path) as f:
-        pricing_config = json.load(f)
-
-    # Strip provider prefix if present (e.g., "openai:gpt-4" -> "gpt-4")
-    if ":" in model_name:
-        _, model_name = model_name.split(":", 1)
-
-    if model_name not in pricing_config["models"]:
-        return 0.0
-
-    pricing = pricing_config["models"][model_name]
-
-    # Calculate costs
-    input_cost = (prompt_tokens - cached_tokens) * pricing["input"] / 1_000_000
-    cached_cost = cached_tokens * pricing.get("cachedInput", pricing["input"]) / 1_000_000
-    output_cost = completion_tokens * pricing["output"] / 1_000_000
-
-    return input_cost + cached_cost + output_cost
 
 
 def get_appdata_dir() -> Path:
