@@ -207,7 +207,7 @@ async def test_engine_get_metrics_cost_aggregation():
             f"Total tokens should be 3000, got {metrics['total_token_usage']['total']}"
         )
 
-        # Test 2: Simulate executor1 having a second round, total cost should be 0.03 + 0.02 = 0.05
+        # Test 2: Simulate executor1 having a second round, executor1's cumulative cost becomes $0.03, total should be 0.03 + 0.02 = 0.05
         mock_service1.get_usage_summary = AsyncMock(return_value=get_mock_usage_summary(0.03, 3800, 0, 700, 4500))
 
         await executor1._get_cost_from_agent(executor1.agent)
@@ -220,7 +220,7 @@ async def test_engine_get_metrics_cost_aggregation():
 
         expected_cost_rounded = 0.05
         assert metrics["total_cost"] == expected_cost_rounded, (
-            f"Total cost should be ${expected_cost_rounded:.2f} (0.045 rounded), got ${metrics['total_cost']}"
+            f"Total cost should be ${expected_cost_rounded:.2f}, got ${metrics['total_cost']}"
         )
 
         # Tokens should be 4500 (executor1) + 2000 (executor2) = 6500
