@@ -1,21 +1,39 @@
+"""
+Runner for experiments.
+
+Usage:
+    python -m experiments.runner --config configs/testing-experiment-config.yaml [--evaluate]
+
+Options:
+    --config: Path to the experiment config file
+    --evaluate: Whether to evaluate the result using the agisdk evaluator. This is only supported when running tasks in the REAL Bench format.
+"""
+
 import argparse
 import asyncio
 import hashlib
 import json
-import logging
 import os
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
 
 import yaml
 
 from blastai import Engine
 from blastai.logging_setup import setup_logging
 from blastai.response import AgentHistoryListResponse
+
+from .logger import ExperimentLogger
+from .task_state_utils import (
+    fetch_final_state,
+    get_all_completed_tasks,
+    get_successful_task,
+    merge_parallel_final_states,
+)
+from .utils import ensure_parent_dir
 
 
 def parse_args():
@@ -32,55 +50,6 @@ def parse_args():
         help="Whether to evaluate the result using the agisdk evaluator. This is only supported when running one of the REAL tasks: https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks",
     )
     return parser.parse_args()
-
-
-AGISDK_TIMEOUT = 10000
-
-
-def ensure_parent_dir(file_path: str | Path) -> None:
-    """Ensure the parent directory of a file path exists."""
-    Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-
-
-def get_successful_task(
-    parallelism_config: Dict[str, Any],
-    task_states: Dict[str, Any],
-    logger: logging.Logger,
-) -> Optional[Any]:
-    """Get the successful task according to the parallelism config. For first-of-n, we need to find the subtask that succeeded. Otherwise, we can use the main task."""
-    if parallelism_config.get("first_of_n", False):
-        return get_successful_subtask(task_states, logger)
-    return get_successful_main_task(task_states, logger)
-
-
-def get_successful_main_task(task_states: Dict[str, Any], logger: logging.Logger) -> Optional[Any]:
-    """Get the successful main task from the task states."""
-    if len(task_states) != 1:
-        logger.warning(f"Expected 1 task state, got {len(task_states)}", indent=6)
-
-    for task_state in task_states.values():
-        if task_state.parent_task_id is None and task_state.executor:
-            return task_state
-    logger.warning("No successful main task found", indent=6)
-    return None
-
-
-def get_successful_subtask(task_states: Dict[str, Any], logger: logging.Logger) -> Optional[Any]:
-    """Get the successful subtask from the task states."""
-    for task_state in task_states.values():
-        # Look for the successful subtask
-        if (
-            task_state.is_completed
-            and task_state.success
-            and task_state.executor
-            and task_state.executor.browser_session
-            and task_state.parent_task_id
-        ):
-            logger.info(f"Found successful subtask: {task_state.id}", indent=6)
-            return task_state
-
-    logger.warning("No successful subtask found", indent=6)
-    return None
 
 
 @dataclass
@@ -100,37 +69,7 @@ class ExperimentResult:
     total_time: float
     metrics: Dict[str, Any]
     final_result: Optional[str]
-    final_state: Optional[Dict[str, Any]]
-
-
-class ExperimentLogger:
-    """ExperimentLogger sets up logging for experiments. This is separate from the engine logging."""
-
-    def __init__(self, experiment_folder: str):
-        self.experiment_folder = experiment_folder
-        self.logger = self._setup_logger()
-
-    def _setup_logger(self) -> logging.Logger:
-        """Set up logging for a single experiment run."""
-        logger = logging.getLogger("blastai-experiment-runner")
-        logger.setLevel(logging.DEBUG)
-
-        logger.handlers.clear()
-
-        log_file = Path(self.experiment_folder) / f"{logger.name}.log"
-        ensure_parent_dir(log_file)
-        file_handler = logging.FileHandler(log_file, mode="w")
-        logger.addHandler(file_handler)
-
-        return logger
-
-    def info(self, message: str, indent: int = 0):
-        """Log info message."""
-        self.logger.info(f"{' ' * indent}{message}")
-
-    def error(self, message: str, indent: int = 0):
-        """Log error message."""
-        self.logger.error(f"{' ' * indent}{message}")
+    final_state_path: Optional[str]
 
 
 class ExperimentRunner:
@@ -145,7 +84,8 @@ class ExperimentRunner:
         self.load_config()
 
         self.logger = ExperimentLogger(self.config["settings"]["logs_dir"])
-        self.results_count = 0
+        self.expected_results_count = 0
+        self.actual_results_count = 0
 
     def load_config(self):
         """Load the experiment config."""
@@ -196,11 +136,26 @@ class ExperimentRunner:
                 "require_patchright": True,
                 "require_human_in_loop": False,
                 "share_browser_process": False,
-                "allowed_domains": None,
+                "allowed_domains": None,  # TODO: Support adding allowed domains for the task
                 "allow_vision": False,
                 **stage_config,  # Override with stage-specific parallelism config
             },
         }
+
+    def _try_create_evaluator(self, task_id: str, version: str):
+        """Try to create an evaluator for the task."""
+        try:
+            from agisdk.REAL.browsergym.webclones.evaluate import (
+                WebCloneEvaluator,
+            )
+            from agisdk.REAL.browsergym.webclones.task_config import TaskConfig
+
+            task_config = TaskConfig(task_id, version)
+            evaluator = WebCloneEvaluator(task_config)
+            return evaluator
+        except Exception as e:
+            self.logger.error(f"Failed to create evaluator: {e}", indent=6)
+            raise
 
     def _save_config(self, config: Dict[str, Any], experiment_folder: str) -> str:
         """Write the engine configuration to a file."""
@@ -212,6 +167,29 @@ class ExperimentRunner:
 
         return str(config_path)
 
+    def _save_final_state(
+        self, experiment_folder: str, final_result: Optional[str] = None, final_state: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Save the final result and/or final state to a file.
+
+        Args:
+            experiment_folder: The folder to save the final state to.
+            final_result: The final result from the agent.
+            final_state: The final state from the environment.
+        """
+        final_state_path = Path(experiment_folder) / "final_state.json"
+
+        data = {}
+        if final_result is not None:
+            data["final_result"] = final_result
+        if final_state is not None:
+            data["final_state"] = final_state
+
+        with open(final_state_path, "w") as f:
+            json.dump(data, f, indent=2)
+        return str(final_state_path)
+
     async def run_single_experiment(
         self,
         task: Dict[str, str],
@@ -220,7 +198,7 @@ class ExperimentRunner:
         run_number: int,
         shared_experiment_id: Optional[str] = None,
         evaluate: bool = False,
-    ) -> ExperimentResult:
+    ) -> Optional[ExperimentResult]:
         """Run a single experiment with given configuration."""
         experiment_folder, experiment_id = self._create_experiment_folder(
             task["id"], stage_name, run_number, shared_experiment_id
@@ -238,7 +216,13 @@ class ExperimentRunner:
         start_time = time.time()
 
         engine = None
+        result = None
+        evaluator = None
+
         try:
+            if self.evaluate:
+                evaluator = self._try_create_evaluator(task["id"], "custom")
+
             engine = await Engine.create(config_path=config_path)
             setup_logging(engine.settings, engine._instance_hash)
 
@@ -256,89 +240,101 @@ class ExperimentRunner:
                 total_time=0.0,
                 metrics={},
                 final_result=None,
-                final_state=None,
+                final_state_path=None,
             )
 
+            # Run the task
             task_result = await engine.run(task["goal"], initial_url=task["initial_url"], mode="block")
+            assert isinstance(task_result, AgentHistoryListResponse), "Task result is not an AgentHistoryListResponse"
+            assert task_result.is_done(), "Task is not done"
+
             finish_time = time.time()
             result.total_time = finish_time - start_time
             self.logger.info(f"Finished running task in {result.total_time:.2f} seconds", indent=6)
 
             metrics = await engine.get_metrics()
+            result.metrics = metrics
+            result.reported_success = bool(task_result.is_successful())
+            result.final_result = task_result.final_result()
+            result.final_state_path = self._save_final_state(experiment_folder, final_result=result.final_result)
 
-            if isinstance(task_result, AgentHistoryListResponse):
-                result.reported_success = bool(task_result.is_successful()) if task_result.is_done() else False
-                result.metrics = metrics
-                result.final_result = task_result.final_result() if task_result.is_done() else None
+            if not evaluate:  # If not evaluating, return the result
+                return result
 
-                # Evaluate the result to judge success
-                if evaluate and "initial_url" in task:
-                    try:
-                        task_states = engine.scheduler.tasks
-                        executor = None
+            if "initial_url" not in task:
+                self.logger.error("Initial URL not found in task config. Unable to evaluate result.", indent=6)
+                return result
 
-                        # Based on the parallelism config, figure out which task / browser session to use for evaluation
-                        successful_task = get_successful_task(parallelism_config, task_states, self.logger)
+            task_states = engine.scheduler.tasks
+            is_single_task_mode = not parallelism_config.get("task", False)
 
-                        if successful_task and successful_task.executor:
-                            executor = successful_task.executor
+            if is_single_task_mode:  # For sequential or first-of-n mode, only get the state from the successful task
+                self.logger.info("Single task mode: fetching state from one successful task", indent=6)
 
-                        if executor and executor.browser_session:
-                            page = await executor.browser_session.get_current_page()
+                successful_task = get_successful_task(parallelism_config, task_states, self.logger)
+                if not successful_task:
+                    self.logger.error("No successful task found for evaluation", indent=6)
+                    return result
 
-                            finish_url = urljoin(task["initial_url"], "finish")
-                            self.logger.info(f"Navigating to finish page: {finish_url}", indent=6)
+                final_state = await fetch_final_state(successful_task, task["initial_url"], self.logger)
+                if final_state is None:
+                    self.logger.error("Failed to fetch final state for evaluation", indent=6)
+                    return result
 
-                            # Reference: https://github.com/agi-inc/agisdk/blob/main/src/agisdk/REAL/browsergym/webclones/base.py#L146
-                            await page.goto(finish_url, timeout=AGISDK_TIMEOUT)
-                            await page.wait_for_load_state("networkidle", timeout=AGISDK_TIMEOUT)
-                            pre_element = await page.wait_for_selector("pre", timeout=AGISDK_TIMEOUT)
-                            if pre_element:
-                                env_state = await pre_element.inner_text()
-                                env_state_json = json.loads(env_state)
+                final_state_path = self._save_final_state(
+                    experiment_folder, final_result=result.final_result, final_state=final_state
+                )
+                self.logger.info(f"Saved final state to {final_state_path}", indent=6)
 
-                                result.final_state = env_state_json
-                                self.logger.info("Saved final state for AGISDK evaluation", indent=6)
+            else:  # For task parallelism, merge states from all completed tasks
+                self.logger.info(
+                    "Task parallelism mode: fetching and merging states from all completed tasks", indent=6
+                )
+                completed_tasks = get_all_completed_tasks(task_states, self.logger)
 
-                                try:
-                                    from agisdk.REAL.browsergym.webclones.evaluate import (
-                                        WebCloneEvaluator,
-                                    )
-                                    from agisdk.REAL.browsergym.webclones.task_config import (
-                                        TaskConfig,
-                                    )
+                final_states = await asyncio.gather(
+                    *[fetch_final_state(task_state, task["initial_url"], self.logger) for task_state in completed_tasks]
+                )
+                valid_states_dict = {
+                    task_state.id: state
+                    for task_state, state in zip(completed_tasks, final_states)
+                    if state is not None
+                }
+                final_state = merge_parallel_final_states(valid_states_dict, self.logger)
+                if not final_state:
+                    self.logger.error("Failed to merge final states for evaluation", indent=6)
+                    return result
 
-                                    task_config = TaskConfig(task["id"])
-                                    evaluator = WebCloneEvaluator(task_config)
+                final_state_path = self._save_final_state(
+                    experiment_folder, final_result=result.final_result, final_state=final_state
+                )
+                self.logger.info(f"Saved final state to {final_state_path}", indent=6)
 
-                                    reward, done, message, info = evaluator.evaluate(
-                                        env_state_json, result.final_result
-                                    )
-                                    self.logger.info(
-                                        f"Evaluation result: {message}, Reward: {reward}",
-                                        indent=6,
-                                    )
-                                    result.evaluated_success = all(result[0] for result in info["results"])
-                                except Exception as e:
-                                    self.logger.error(f"Failed to evaluate result: {e}", indent=6)
-                                    result.evaluated_success = False
-                                    result.error = str(e)
-
-                    except Exception as e:
-                        self.logger.error(f"Failed to get AGISDK finish page: {e}", indent=6)
-            else:
-                self.logger.error(f"Unexpected result type: {type(task_result)}")
-                result.error = f"Unexpected result type: {type(task_result)}"
+            try:
+                # Wrap the state in the expected format for the evaluator
+                env_state = {"final_state": final_state, "final_result": result.final_result}
+                reward, _, message, info = evaluator.evaluate(env_state, result.final_result)
+                self.logger.info(
+                    f"Evaluation result: {message}, Reward: {reward}",
+                    indent=6,
+                )
+                result.evaluated_success = all(result[0] for result in info["results"])
+            except Exception as e:
+                self.logger.error(f"Failed to evaluate result: {e}", indent=6)
+                result.evaluated_success = False
+                result.error = str(e)
 
         except Exception as e:
-            self.logger.error(f"Run {run_number} failed with error: {e}")
-            result.error = str(e)
+            self.logger.error(f"Run {run_number} failed with error: {e}", indent=4)
+            if result is not None:
+                result.error = str(e)
+            else:
+                result = None
 
         finally:
             if engine:
                 await engine.stop()
-        self.logger.info(f"Run {run_number} completed in {result.total_time:.2f} seconds", indent=4)
-        self.logger.info(f"Result: {result}", indent=4)
+        self.logger.info(f"Run {run_number} completed in {result.total_time if result else 0:.2f} seconds", indent=4)
         self.logger.info("--------------------------------", indent=2)
         return result
 
@@ -355,7 +351,8 @@ class ExperimentRunner:
         self.logger.info(
             f"Running {len(tasks)} tasks across {len(stages)} stages, {settings['runs_per_stage']} runs per stage"
         )
-        self.logger.info(f"Expected {len(tasks) * len(stages) * settings['runs_per_stage']} results")
+        self.expected_results_count = len(tasks) * len(stages) * settings["runs_per_stage"]
+        self.logger.info(f"Expected {self.expected_results_count} results")
         self.logger.info(f"Tasks: {tasks}")
         self.logger.info(f"Stages: {stages}")
         self.logger.info(f"Settings: {settings}")
@@ -389,6 +386,14 @@ class ExperimentRunner:
                         evaluate=self.evaluate,
                     )
 
+                    if result is None:
+                        self.logger.error(f"Run {run_num} failed: result is None", indent=6)
+                        continue
+
+                    if result.error:
+                        self.logger.error(f"Run {run_num} failed with error: {result.error}", indent=6)
+                        continue
+
                     # Use the experiment ID from the first run for subsequent runs
                     if shared_experiment_id is None:
                         shared_experiment_id = result.experiment_id
@@ -398,10 +403,12 @@ class ExperimentRunner:
                     await asyncio.sleep(2)
 
             # Clear results after each task
-            self.results_count += len(self.results)
+            self.actual_results_count += len(self.results)
             self.results.clear()
 
-        self.logger.info(f"Experiment completed with {self.results_count} results")
+        self.logger.info(
+            f"Experiment completed with {self.actual_results_count} results out of {self.expected_results_count} expected"
+        )
         self.logger.info("--------------------------------")
 
     def save_results(self, results_path: Path):
