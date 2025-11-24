@@ -325,6 +325,7 @@ class ExperimentRunner:
                 result.error = str(e)
 
         except Exception as e:
+            self.logger.error(f"Run {run_number} failed with error: {e}", indent=4)
             if result is not None:
                 result.error = str(e)
             else:
