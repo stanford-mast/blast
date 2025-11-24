@@ -48,6 +48,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import psutil
 from browser_use import Agent
+from browser_use.agent.views import AgentHistoryList
 from browser_use.browser import BrowserProfile, BrowserSession
 
 from .config import Constraints, Settings
@@ -265,6 +266,30 @@ class ResourceManager:
 
         return True
 
+    def _calculate_max_new_executors(self) -> int:
+        """Calculate maximum number of new executors that can be created given current constraints.
+
+        Returns:
+            Maximum number of new executors allowed
+        """
+        running_executors = sum(1 for task in self.scheduler.tasks.values() if task.executor)
+
+        # Start with max concurrent browsers constraint
+        max_new = self.constraints.max_concurrent_browsers - running_executors
+
+        # Check memory limit if set
+        if self.constraints.max_memory is not None:
+            total_memory = self._get_total_memory_usage()
+            available_memory = self.constraints.max_memory - total_memory
+            # Estimate 500MB per executor
+            max_new_by_memory = max(0, int(available_memory / (500 * 1024 * 1024)))
+            max_new = min(max_new, max_new_by_memory)
+
+        # Cost limits are checked per-task during creation since they're time-based
+        # and can change during parallel creation
+
+        return max(0, max_new)
+
     async def _request_executor(self, task_id: str) -> Optional[Executor]:
         """Request a new executor if constraints allow."""
         if not self.check_constraints_sat(with_new_executors=1):
@@ -316,6 +341,54 @@ class ResourceManager:
             engine_hash=self.engine_hash,
             sensitive_data=sensitive_data,
         )
+
+    async def _create_and_setup_executor(
+        self, task_id: str
+    ) -> Optional[Tuple[Executor, Tools, Optional[AgentHistoryList]]]:
+        """Create and setup executor for a single task.
+
+        This method combines all the steps needed to prepare an executor:
+        1. Check if task still needs executor (task may have been handled by cache)
+        2. Check constraints
+        3. Request new executor
+        4. Create Tools instance
+        5. Retrieve cached plan if available
+
+        Args:
+            task_id: Task ID
+
+        Returns:
+            Tuple of (executor, tools, cached_plan) if successful, None if failed or not needed
+        """
+        # Check if task still exists and needs an executor
+        task = self.scheduler.tasks.get(task_id)
+        if not task or task.executor or task.is_completed:
+            return None
+
+        # Check if task has cached result
+        lineage = self.scheduler.get_lineage(task_id)
+        if self.cache_manager.get_result(lineage, task.cache_options):
+            return None
+
+        # Request new executor (includes constraint checks)
+        executor = await self._request_executor(task_id)
+        if not executor:
+            return None
+
+        # Get cached plan if available
+        cached_plan = self.cache_manager.get_plan(lineage, task.cache_options)
+
+        # Create Tools instance with queues
+        queues = task.interactive_queues
+        tools = Tools(
+            scheduler=self.scheduler,
+            task_id=task_id,
+            resource_manager=self,
+            human_request_queue=queues["to_client"] if queues else None,
+            human_response_queue=queues["from_client"] if queues else None,
+        )
+
+        return (executor, tools, cached_plan)
 
     async def end_task(self, task_id: str, cleanup_executor: bool = True):
         """Force end a task.
@@ -479,34 +552,46 @@ class ResourceManager:
                 priority_groups = self.scheduler.priority_sort(ready_tasks)
 
                 # Try to allocate new executors
+                # Process each priority group sequentially,
+                # but create executors in parallel within each group
                 tasks_allocated = 0
                 tasks_not_allocated = len(ready_tasks)
                 for group in priority_groups:
-                    for task_id in group.task_ids:
-                        # Skip tasks that have cached results (they were handled above)
-                        task = self.scheduler.tasks[task_id]
-                        lineage = self.scheduler.get_lineage(task_id)
-                        if self.cache_manager.get_result(lineage, task.cache_options):
+                    # Calculate how many new executors we can create
+                    max_new_executors = self._calculate_max_new_executors()
+                    if max_new_executors <= 0:
+                        break
+
+                    tasks_to_allocate = group.task_ids[:max_new_executors]
+                    if not tasks_to_allocate:
+                        continue
+
+                    # Create executors in parallel for tasks that can be allocated
+                    logger.debug(
+                        f"Creating {len(tasks_to_allocate)} executors in parallel for priority group '{group.name}'"
+                    )
+                    creation_results = await asyncio.gather(
+                        *[self._create_and_setup_executor(task_id) for task_id in tasks_to_allocate],
+                        return_exceptions=True,
+                    )
+
+                    # Process results and start execution for successful creations
+                    for task_id, result in zip(tasks_to_allocate, creation_results):
+                        if isinstance(result, Exception):
+                            logger.error(f"Failed to create executor for task {task_id}: {result}")
+                            continue
+                        elif result is None:
+                            # Task was handled by cache or reuse, or constraints prevented creation
                             continue
 
-                        # Request new executor
-                        executor = await self._request_executor(task_id)
-                        if not executor:
-                            # Stop if constraints would be violated
-                            break
+                        executor, tools, cached_plan = result
 
-                        # Get cached plan if available
-                        cached_plan = self.cache_manager.get_plan(lineage, task.cache_options)
+                        # Set task ID on executor
+                        task = self.scheduler.tasks.get(task_id)
+                        if not task:
+                            logger.error(f"Task {task_id} not found during executor creation")
+                            continue
 
-                        # Create Tools instance with queues
-                        queues = task.interactive_queues
-                        tools = Tools(
-                            scheduler=self.scheduler,
-                            task_id=task_id,
-                            resource_manager=self,
-                            human_request_queue=queues["to_client"] if queues else None,
-                            human_response_queue=queues["from_client"] if queues else None,
-                        )
                         executor.set_task_id(task.id, tools.controller)
 
                         # Start execution
