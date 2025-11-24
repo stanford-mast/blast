@@ -11,8 +11,8 @@ Each task has the following fields:
   - id: # The unique identifier for the task
     initial_url: # Optional initial url
     goal: # The actual task definition
-    allowed_domains: # Optional domain restrictions (default)
-    evaluate: # Optional boolean to enable evaluation (see below) 
+    allowed_domains: # Optional domain restrictions (default: same as initial_url, see below)
+    evaluate: # Optional boolean to enable evaluation (default: false, see below)
 ```
 
 #### Domain Restrictions

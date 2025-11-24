@@ -200,7 +200,7 @@ class ExperimentRunner:
 
     async def run_single_experiment(
         self,
-        task_config: Dict[str, str],
+        task_config: Dict[str, Any],
         stage_config: Dict[str, Any],
         stage_name: str,
         run_number: int,
@@ -228,7 +228,7 @@ class ExperimentRunner:
         evaluator = None
 
         try:
-            # If need to do evaluation, first test if the evaluator can be created before running the task
+            # If evaluation is needed, first test if the evaluator can be created before running the task
             if do_eval:
                 evaluator = self._try_create_evaluator(task_config["id"], "custom")
 
