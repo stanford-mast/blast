@@ -40,23 +40,21 @@ Module Responsibilities:
 
 import asyncio
 import logging
-import os
 import time
-from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 import psutil
-from browser_use import Agent
-from browser_use.browser import BrowserProfile, BrowserSession
+from browser_use.agent.views import AgentHistoryList
 
+from .cache import CacheManager
 from .config import Constraints, Settings
 from .executor import Executor
 from .models import TokenUsage
-from .resource_factory import cleanup_stealth_profile_dir, create_executor
+from .resource_factory import create_executor
+from .scheduler import Scheduler
 from .secrets import SecretsManager
 from .tools import Tools
-from .utils import find_local_browser, init_model
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +64,11 @@ class ResourceManager:
 
     def __init__(self, scheduler, constraints: Constraints, settings: Settings, engine_hash: str, cache_manager):
         """Initialize resource manager."""
-        self.scheduler = scheduler
-        self.constraints = constraints
-        self.settings = settings
-        self.engine_hash = engine_hash
-        self.cache_manager = cache_manager
+        self.scheduler: Scheduler = scheduler
+        self.constraints: Constraints = constraints
+        self.settings: Settings = settings
+        self.engine_hash: str = engine_hash
+        self.cache_manager: CacheManager = cache_manager
 
         # We don't use shared browser process to avoid VNC session management complexity
 
@@ -131,9 +129,9 @@ class ResourceManager:
         for proc in psutil.process_iter(["pid", "name", "cmdline", "create_time"]):
             try:
                 proc_name = proc.info["name"].lower()
-                if (
-                    "headless_shell" in proc_name or "chromium" in proc_name or "playwright" in proc_name
-                ) and proc.info["create_time"] >= self._start_time:
+                if ("headless_shell" in proc_name or "chromium" in proc_name) and proc.info[
+                    "create_time"
+                ] >= self._start_time:
                     total_memory += proc.memory_info().rss
 
                     # Include child processes
@@ -265,6 +263,27 @@ class ResourceManager:
 
         return True
 
+    def _calculate_max_new_executors(self) -> int:
+        """Calculate maximum number of new executors that can be created given current constraints.
+
+        Returns:
+            Maximum number of new executors allowed
+        """
+        running_executors = sum(1 for task in self.scheduler.tasks.values() if task.executor)
+
+        # Start with max concurrent browsers constraint
+        max_new = self.constraints.max_concurrent_browsers - running_executors
+
+        # Check memory limit if set
+        if self.constraints.max_memory is not None:
+            total_memory = self._get_total_memory_usage()
+            available_memory = self.constraints.max_memory - total_memory
+            # Estimate memory for new executors (500MB each)
+            max_new_by_memory = max(0, int(available_memory / (500 * 1024 * 1024)))
+            max_new = min(max_new, max_new_by_memory)
+
+        return max(0, max_new)
+
     async def _request_executor(self, task_id: str) -> Optional[Executor]:
         """Request a new executor if constraints allow."""
         if not self.check_constraints_sat(with_new_executors=1):
@@ -316,6 +335,54 @@ class ResourceManager:
             engine_hash=self.engine_hash,
             sensitive_data=sensitive_data,
         )
+
+    async def _create_and_setup_executor(
+        self, task_id: str
+    ) -> Optional[Tuple[Executor, Tools, Optional[AgentHistoryList]]]:
+        """Create and setup executor for a single task.
+
+        This method combines all the steps needed to prepare an executor:
+        1. Check if task still needs executor (task may have been handled by cache)
+        2. Check constraints
+        3. Request new executor
+        4. Create Tools instance
+        5. Retrieve cached plan if available
+
+        Args:
+            task_id: Task ID
+
+        Returns:
+            Tuple of (executor, tools, cached_plan) if successful, None if failed or not needed
+        """
+        # Check if task still exists and needs an executor
+        task = self.scheduler.tasks.get(task_id)
+        if not task or task.executor or task.is_completed:
+            return None
+
+        # Check if task has cached result
+        lineage = self.scheduler.get_lineage(task_id)
+        if self.cache_manager.get_result(lineage, task.cache_options):
+            return None
+
+        # Request new executor (includes constraint checks)
+        executor = await self._request_executor(task_id)
+        if not executor:
+            return None
+
+        # Get cached plan if available
+        cached_plan = self.cache_manager.get_plan(lineage, task.cache_options)
+
+        # Create Tools instance with queues
+        queues = task.interactive_queues
+        tools = Tools(
+            scheduler=self.scheduler,
+            task_id=task_id,
+            resource_manager=self,
+            human_request_queue=queues["to_client"] if queues else None,
+            human_response_queue=queues["from_client"] if queues else None,
+        )
+
+        return (executor, tools, cached_plan)
 
     async def end_task(self, task_id: str, cleanup_executor: bool = True):
         """Force end a task.
@@ -479,40 +546,59 @@ class ResourceManager:
                 priority_groups = self.scheduler.priority_sort(ready_tasks)
 
                 # Try to allocate new executors
+                # Process each priority group sequentially,
+                # but create executors in parallel within each group
                 tasks_allocated = 0
                 tasks_not_allocated = len(ready_tasks)
                 for group in priority_groups:
-                    for task_id in group.task_ids:
-                        # Skip tasks that have cached results (they were handled above)
-                        task = self.scheduler.tasks[task_id]
-                        lineage = self.scheduler.get_lineage(task_id)
-                        if self.cache_manager.get_result(lineage, task.cache_options):
+                    # Calculate how many new executors we can create
+                    max_new_executors = self._calculate_max_new_executors()
+                    if max_new_executors <= 0:
+                        break
+
+                    tasks_to_allocate = group.task_ids[:max_new_executors]
+                    if not tasks_to_allocate:
+                        continue
+
+                    # Create executors in parallel for tasks that can be allocated
+                    logger.debug(
+                        f"Creating {len(tasks_to_allocate)} executors in parallel for priority group '{group.name}'"
+                    )
+                    creation_results = await asyncio.gather(
+                        *[self._create_and_setup_executor(task_id) for task_id in tasks_to_allocate],
+                        return_exceptions=True,
+                    )
+
+                    # Process results and start execution for successful creations
+                    exec_starts = []
+                    for task_id, result in zip(tasks_to_allocate, creation_results):
+                        if isinstance(result, Exception):
+                            logger.error(f"Failed to create executor for task {task_id}: {result}")
+                            continue
+                        elif result is None:
+                            # Task was handled by cache or reuse, or constraints prevented creation
                             continue
 
-                        # Request new executor
-                        executor = await self._request_executor(task_id)
-                        if not executor:
-                            # Stop if constraints would be violated
-                            break
+                        executor, tools, cached_plan = result
 
-                        # Get cached plan if available
-                        cached_plan = self.cache_manager.get_plan(lineage, task.cache_options)
+                        # Set task ID on executor
+                        task = self.scheduler.tasks.get(task_id)
+                        if not task:
+                            logger.error(f"Task {task_id} not found during executor creation")
+                            continue
 
-                        # Create Tools instance with queues
-                        queues = task.interactive_queues
-                        tools = Tools(
-                            scheduler=self.scheduler,
-                            task_id=task_id,
-                            resource_manager=self,
-                            human_request_queue=queues["to_client"] if queues else None,
-                            human_response_queue=queues["from_client"] if queues else None,
-                        )
                         executor.set_task_id(task.id, tools.controller)
+                        exec_starts.append((task_id, self.scheduler.start_task_exec(task_id, executor, cached_plan)))
 
-                        # Start execution
-                        await self.scheduler.start_task_exec(task_id, executor, cached_plan)
-                        tasks_allocated += 1
-                        tasks_not_allocated -= 1
+                    # Start all task executions in parallel
+                    if exec_starts:
+                        exec_results = await asyncio.gather(*[coro for _, coro in exec_starts], return_exceptions=True)
+                        for (task_id, _), result in zip(exec_starts, exec_results):
+                            if isinstance(result, Exception):
+                                logger.error(f"Failed to start execution for task {task_id}: {result}")
+                            else:
+                                tasks_allocated += 1
+                                tasks_not_allocated -= 1
 
                 # Get current executor stats
                 running_executors = sum(

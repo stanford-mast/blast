@@ -76,8 +76,8 @@ class Constraints(BaseModel):
     )
 
     require_human_in_loop: bool = Field(
-        default=True,
-        description="Whether to enable human-in-loop capabilities including VNC access and human assistance",
+        default=False,
+        description="Whether to enable human-in-loop capabilities including VNC access and human assistance (requires vncserver installed)",
     )
 
     share_browser_process: bool = Field(default=True, description="Whether to share browser process between requests")

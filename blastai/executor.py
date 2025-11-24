@@ -372,17 +372,25 @@ class Executor:
         """Clean up resources properly.
 
         Cleanup order:
-        1. Close agent (which closes browser session)
-        2. Clean up VNC session (which also cleans up its browser session)
-        3. Clean up user data directory
-        4. Clear all references
+        1. Close browser session (agent.close() does not kill the browser session if keep_alive=True)
+        2. Close agent
+        3. Clean up VNC session (which also cleans up its browser session)
+        4. Clean up user data directory
+        5. Clear all references
 
         Each cleanup step is attempted even if previous steps fail.
         All errors are logged but don't prevent other cleanup steps.
         """
         errors = []
 
-        # Close agent first (this closes the browser session)
+        # Close browser session
+        if self.browser_session:
+            try:
+                await self.browser_session.kill()
+            except Exception as e:
+                errors.append(f"Error killing browser session: {e}")
+
+        # Close agent
         if self.agent:
             try:
                 await self.agent.close()
