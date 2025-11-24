@@ -120,10 +120,12 @@ class ExperimentRunner:
         return [initial_url]  # default to "same"
 
     def _create_engine_config(
-        self, stage_config: Dict[str, Any], experiment_folder: str, task: Dict[str, Any]
+        self, stage_config: Dict[str, Any], experiment_folder: str, task_config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Create engine configuration for the experiment."""
-        allowed_domains = self._resolve_allowed_domains(task.get("allowed_domains"), task.get("initial_url", ""))
+        allowed_domains = self._resolve_allowed_domains(
+            task_config.get("allowed_domains"), task_config.get("initial_url", "")
+        )
         self.logger.info(f"Allowed domains: {allowed_domains}", indent=4)
 
         return {
