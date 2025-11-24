@@ -76,7 +76,9 @@ async def test_browser_session_creation_benchmark():
         last_status_print = 0
 
         while elapsed < max_wait_time:
-            executors_assigned = sum(1 for tid in task_ids if scheduler.tasks[tid].executor is not None)
+            executors_assigned = sum(
+                1 for tid in task_ids if scheduler.tasks.get(tid) and scheduler.tasks.get(tid).executor is not None
+            )
 
             # Print status every second
             if elapsed - last_status_print >= 1.0:
@@ -92,14 +94,19 @@ async def test_browser_session_creation_benchmark():
         creation_time = time.time() - start_time
 
         # Verify all created
-        successful = sum(1 for tid in task_ids if scheduler.tasks[tid].executor is not None)
+        successful = sum(
+            1 for tid in task_ids if scheduler.tasks.get(tid) and scheduler.tasks.get(tid).executor is not None
+        )
 
         print(f"\n{'=' * 70}")
         print(f"Results:")
         print(f"{'=' * 70}")
         print(f"  Browsers created: {successful}/{NUM_BROWSERS}")
         print(f"  Total time: {creation_time:.2f}s")
-        print(f"  Average per browser: {creation_time / successful:.2f}s")
+        if successful > 0:
+            print(f"  Average per browser: {creation_time / successful:.2f}s")
+        else:
+            print(f"  Average per browser: N/A (no browsers created)")
         print(f"")
         print(f"{'=' * 70}\n")
 

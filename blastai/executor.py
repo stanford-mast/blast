@@ -373,10 +373,10 @@ class Executor:
 
         Cleanup order:
         1. Close browser session (agent.close() does not kill the browser session if keep_alive=True)
-        1. Close agent
-        2. Clean up VNC session (which also cleans up its browser session)
-        3. Clean up user data directory
-        4. Clear all references
+        2. Close agent
+        3. Clean up VNC session (which also cleans up its browser session)
+        4. Clean up user data directory
+        5. Clear all references
 
         Each cleanup step is attempted even if previous steps fail.
         All errors are logged but don't prevent other cleanup steps.
