@@ -109,11 +109,11 @@ def merge_parallel_final_states(final_states: Dict[str, Any], logger: logging.Lo
 
     This is only used if parallelism is enabled.
     """
-    if not final_states.keys():
+    if not final_states:
         logger.warning("No final states to merge", indent=8)
         return {}
 
-    if len(final_states.keys()) == 1:
+    if len(final_states) == 1:
         logger.info("Only one final state, no merging needed", indent=8)
         return list(final_states.values())[0]
 

@@ -261,7 +261,7 @@ class ExperimentRunner:
             if not evaluate:  # If not evaluating, return the result
                 return result
 
-            if not "initial_url" in task:
+            if "initial_url" not in task:
                 self.logger.error("Initial URL not found in task config. Unable to evaluate result.", indent=6)
                 return result
 
