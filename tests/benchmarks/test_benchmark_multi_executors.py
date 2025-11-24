@@ -27,7 +27,7 @@ async def test_browser_session_creation_benchmark():
 
     This test launches N real browser sessions and measures the time.
     """
-    NUM_BROWSERS = 10
+    NUM_BROWSERS = 20
 
     # Setup components
     constraints = Constraints()
@@ -61,7 +61,7 @@ async def test_browser_session_creation_benchmark():
             task_ids.append(task_id)
 
         print(f"\n{'=' * 70}")
-        print(f"Benchmarking Real Browser Session Creation")
+        print(f"Benchmarking Browser Session Creation")
         print(f"{'=' * 70}")
         print(f"Number of browsers: {NUM_BROWSERS}")
         print(f"Starting timer...")
