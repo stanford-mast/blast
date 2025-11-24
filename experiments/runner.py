@@ -256,9 +256,7 @@ class ExperimentRunner:
             result.metrics = metrics
             result.reported_success = bool(task_result.is_successful())
             result.final_result = task_result.final_result()
-
-            # Save final result
-            self._save_final_state(experiment_folder, final_result=result.final_result)
+            result.final_state_path = self._save_final_state(experiment_folder, final_result=result.final_result)
 
             if not evaluate:  # If not evaluating, return the result
                 return result
