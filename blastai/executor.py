@@ -390,7 +390,7 @@ class Executor:
             except Exception as e:
                 errors.append(f"Error killing browser session: {e}")
 
-        # Close agent (browser session already killed above)
+        # Close agent
         if self.agent:
             try:
                 await self.agent.close()
