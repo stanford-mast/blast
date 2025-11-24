@@ -91,7 +91,7 @@ If you want to evaluate the results for tasks in the REAL Bench format, set `eva
 ### Import tasks
 All tasks from [agisdk-REAL](https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks) have already been imported and can be found in `tasks/agisdk/agisdk.yaml`. To re-import them, clone the `agisdk` repo and run `python tasks/agisdk/import_real.py`.
 
-### Evalute your own tasks
+### Evaluate your own tasks
 You can also set up evals for tasks from your own fork of `agisdk`. Here are the steps:
 1. In this directory, clone the `agisdk` repo.
 2. `cd agisdk && pip install -e .` to install it in editable mode.
