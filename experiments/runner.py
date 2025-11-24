@@ -2,11 +2,10 @@
 Runner for experiments.
 
 Usage:
-    python -m experiments.runner --config configs/testing-experiment-config.yaml [--evaluate]
+    python -m experiments.runner --config configs/testing-experiment-config.yaml
 
 Options:
     --config: Path to the experiment config file
-    --evaluate: Whether to evaluate the result using the agisdk evaluator. This is only supported when running tasks in the REAL Bench format.
 """
 
 import argparse
@@ -44,11 +43,6 @@ def parse_args():
         default="configs/testing-experiment-config.yaml",
         help="Path to the experiment config file",
     )
-    parser.add_argument(
-        "--evaluate",
-        action="store_true",
-        help="Whether to evaluate the result using the agisdk evaluator. This is only supported when running one of the REAL tasks: https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks",
-    )
     return parser.parse_args()
 
 
@@ -73,13 +67,8 @@ class ExperimentResult:
 
 
 class ExperimentRunner:
-    def __init__(
-        self,
-        config_path: str = "experiments/experiment-config.yaml",
-        evaluate: bool = False,
-    ):
+    def __init__(self, config_path: str = "experiments/experiment-config.yaml"):
         self.config_path = config_path
-        self.evaluate = evaluate
         self.results: List[ExperimentResult] = []
         self.load_config()
 
@@ -211,23 +200,23 @@ class ExperimentRunner:
 
     async def run_single_experiment(
         self,
-        task: Dict[str, str],
+        task_config: Dict[str, str],
         stage_config: Dict[str, Any],
         stage_name: str,
         run_number: int,
         shared_experiment_id: Optional[str] = None,
-        evaluate: bool = False,
     ) -> Optional[ExperimentResult]:
         """Run a single experiment with given configuration."""
         experiment_folder, experiment_id = self._create_experiment_folder(
-            task["id"], stage_name, run_number, shared_experiment_id
+            task_config["id"], stage_name, run_number, shared_experiment_id
         )
+        do_eval = task_config.get("evaluate", False)
 
         self.logger.info(f"Running {stage_name} - Run {run_number}", indent=4)
         self.logger.info(f"Experiment ID: {experiment_id}", indent=4)
 
         # Create and save engine configuration
-        engine_config = self._create_engine_config(stage_config, experiment_folder, task)
+        engine_config = self._create_engine_config(stage_config, experiment_folder, task_config)
         config_path = self._save_config(engine_config, experiment_folder)
         parallelism_config = stage_config["allow_parallelism"]
 
@@ -239,8 +228,9 @@ class ExperimentRunner:
         evaluator = None
 
         try:
-            if self.evaluate:
-                evaluator = self._try_create_evaluator(task["id"], "custom")
+            # If need to do evaluation, first test if the evaluator can be created before running the task
+            if do_eval:
+                evaluator = self._try_create_evaluator(task_config["id"], "custom")
 
             engine = await Engine.create(config_path=config_path)
             setup_logging(engine.settings, engine._instance_hash)
@@ -248,7 +238,7 @@ class ExperimentRunner:
             result = ExperimentResult(
                 experiment_id=experiment_id,
                 engine_id=engine._instance_hash,
-                task_goal=task["goal"],
+                task_goal=task_config["goal"],
                 llm_model=engine_config["constraints"]["llm_model"],
                 llm_model_mini=engine_config["constraints"]["llm_model_mini"],
                 stage_name=stage_name,
@@ -263,7 +253,7 @@ class ExperimentRunner:
             )
 
             # Run the task
-            task_result = await engine.run(task["goal"], initial_url=task["initial_url"], mode="block")
+            task_result = await engine.run(task_config["goal"], initial_url=task_config["initial_url"], mode="block")
             assert isinstance(task_result, AgentHistoryListResponse), "Task result is not an AgentHistoryListResponse"
             assert task_result.is_done(), "Task is not done"
 
@@ -277,10 +267,11 @@ class ExperimentRunner:
             result.final_result = task_result.final_result()
             result.final_state_path = self._save_final_state(experiment_folder, final_result=result.final_result)
 
-            if not evaluate:  # If not evaluating, return the result
+            # If not evaluating, return the result
+            if not do_eval:
                 return result
 
-            if "initial_url" not in task:
+            if "initial_url" not in task_config:
                 self.logger.error("Initial URL not found in task config. Unable to evaluate result.", indent=6)
                 return result
 
@@ -295,7 +286,7 @@ class ExperimentRunner:
                     self.logger.error("No successful task found for evaluation", indent=6)
                     return result
 
-                final_state = await fetch_final_state(successful_task, task["initial_url"], self.logger)
+                final_state = await fetch_final_state(successful_task, task_config["initial_url"], self.logger)
                 if final_state is None:
                     self.logger.error("Failed to fetch final state for evaluation", indent=6)
                     return result
@@ -312,7 +303,10 @@ class ExperimentRunner:
                 completed_tasks = get_all_completed_tasks(task_states, self.logger)
 
                 final_states = await asyncio.gather(
-                    *[fetch_final_state(task_state, task["initial_url"], self.logger) for task_state in completed_tasks]
+                    *[
+                        fetch_final_state(task_state, task_config["initial_url"], self.logger)
+                        for task_state in completed_tasks
+                    ]
                 )
                 valid_states_dict = {
                     task_state.id: state
@@ -402,7 +396,6 @@ class ExperimentRunner:
                         stage_name=stage_name,
                         run_number=run_num,
                         shared_experiment_id=shared_experiment_id,
-                        evaluate=self.evaluate,
                     )
 
                     if result is None:
@@ -442,12 +435,12 @@ class ExperimentRunner:
 async def main():
     args = parse_args()
     config_path = args.config
-    evaluate = args.evaluate
+
     if not os.path.exists(config_path):
         print(f"Config file not found: {config_path}")
         return
 
-    runner = ExperimentRunner(config_path, evaluate)
+    runner = ExperimentRunner(config_path)
     try:
         await runner.run_experiment(runner.config)
     finally:
