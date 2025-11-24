@@ -116,8 +116,27 @@ class ExperimentRunner:
         ensure_parent_dir(experiment_folder)
         return str(experiment_folder), experiment_id
 
-    def _create_engine_config(self, stage_config: Dict[str, Any], experiment_folder: str) -> Dict[str, Any]:
+    def _resolve_allowed_domains(self, allowed_domains_config: Any, initial_url: str) -> Optional[List[str]]:
+        """Resolve allowed_domains configuration based on mode."""
+        if allowed_domains_config == "all":  # all domains are allowed
+            return None
+
+        if allowed_domains_config is None or allowed_domains_config == "same":  # same domain as initial_url
+            return [initial_url]
+
+        if isinstance(allowed_domains_config, list):  # list of domains
+            return allowed_domains_config
+
+        self.logger.warning(f"Unknown allowed_domains mode: {allowed_domains_config}. Defaulting to 'same'.", indent=4)
+        return [initial_url]  # default to "same"
+
+    def _create_engine_config(
+        self, stage_config: Dict[str, Any], experiment_folder: str, task: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Create engine configuration for the experiment."""
+        allowed_domains = self._resolve_allowed_domains(task.get("allowed_domains"), task.get("initial_url", ""))
+        self.logger.info(f"Allowed domains: {allowed_domains}", indent=4)
+
         return {
             "settings": {
                 "local_browser_path": "none",
@@ -136,7 +155,7 @@ class ExperimentRunner:
                 "require_patchright": True,
                 "require_human_in_loop": False,
                 "share_browser_process": False,
-                "allowed_domains": None,  # TODO: Support adding allowed domains for the task
+                "allowed_domains": allowed_domains,
                 "allow_vision": False,
                 **stage_config,  # Override with stage-specific parallelism config
             },
@@ -208,7 +227,7 @@ class ExperimentRunner:
         self.logger.info(f"Experiment ID: {experiment_id}", indent=4)
 
         # Create and save engine configuration
-        engine_config = self._create_engine_config(stage_config, experiment_folder)
+        engine_config = self._create_engine_config(stage_config, experiment_folder, task)
         config_path = self._save_config(engine_config, experiment_folder)
         parallelism_config = stage_config["allow_parallelism"]
 

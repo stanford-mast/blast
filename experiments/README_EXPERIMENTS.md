@@ -7,11 +7,35 @@ An experiment runner that lets you quickly start evaluating blast on a variety o
 Make a copy of `config/demo-experiment-config.yaml` or `config/testing-experiment-config.yaml`. Then, replace the **tasks** section with actual task(s) you wish to run. 
 
 Each task has the following fields:
-```
+```yaml
   - id: # The unique identifier for the task
     initial_url: # Optional initial url
     goal: # The actual task definition
+    allowed_domains: # Optional domain restrictions (see below)
 ```
+
+#### Domain Restrictions
+The `allowed_domains` field supports three modes for controlling which domains the browser can navigate to during task execution:
+
+1. **`same`** (default) - Only allows navigation to the same domain as the initial URL (including subdomains)
+   ```yaml
+   allowed_domains: same
+   # Or simply omit the field to use the default
+   ```
+
+2. **`all`** - Allows navigation to all domains
+   ```yaml
+   allowed_domains: all
+   ```
+
+3. **List of domains** - Specify a custom list of allowed domain patterns
+   ```yaml
+   allowed_domains:
+     - "*.example.com"
+     - "*.google.com"
+     - "https://trusted-site.org"
+   ```
+
 For convenience, all tasks from [agisdk-REAL](https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks) have already been imported and can be found in `tasks/agisdk/agisdk.yaml`.
 
 Next, edit the **stages** section to configure the experiment stages. For example, to evaluate results under `baseline` and `data-parallelism`, you can set it as follows:
