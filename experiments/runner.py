@@ -391,7 +391,7 @@ class ExperimentRunner:
                 shared_experiment_id = None
                 for run_num in range(1, settings["runs_per_stage"] + 1):
                     result = await self.run_single_experiment(
-                        task=task,
+                        task_config=task,
                         stage_config=stage_config,
                         stage_name=stage_name,
                         run_number=run_num,
