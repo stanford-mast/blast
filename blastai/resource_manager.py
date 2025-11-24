@@ -570,6 +570,7 @@ class ResourceManager:
                     )
 
                     # Process results and start execution for successful creations
+                    exec_starts = []
                     for task_id, result in zip(tasks_to_allocate, creation_results):
                         if isinstance(result, Exception):
                             logger.error(f"Failed to create executor for task {task_id}: {result}")
@@ -587,11 +588,17 @@ class ResourceManager:
                             continue
 
                         executor.set_task_id(task.id, tools.controller)
+                        exec_starts.append((task_id, self.scheduler.start_task_exec(task_id, executor, cached_plan)))
 
-                        # Start execution
-                        await self.scheduler.start_task_exec(task_id, executor, cached_plan)
-                        tasks_allocated += 1
-                        tasks_not_allocated -= 1
+                    # Start all task executions in parallel
+                    if exec_starts:
+                        exec_results = await asyncio.gather(*[coro for _, coro in exec_starts], return_exceptions=True)
+                        for (task_id, _), result in zip(exec_starts, exec_results):
+                            if isinstance(result, Exception):
+                                logger.error(f"Failed to start execution for task {task_id}: {result}")
+                            else:
+                                tasks_allocated += 1
+                                tasks_not_allocated -= 1
 
                 # Get current executor stats
                 running_executors = sum(
