@@ -40,24 +40,21 @@ Module Responsibilities:
 
 import asyncio
 import logging
-import os
 import time
-from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 import psutil
-from browser_use import Agent
 from browser_use.agent.views import AgentHistoryList
-from browser_use.browser import BrowserProfile, BrowserSession
 
+from .cache import CacheManager
 from .config import Constraints, Settings
 from .executor import Executor
 from .models import TokenUsage
-from .resource_factory import cleanup_stealth_profile_dir, create_executor
+from .resource_factory import create_executor
+from .scheduler import Scheduler
 from .secrets import SecretsManager
 from .tools import Tools
-from .utils import find_local_browser, init_model
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +64,11 @@ class ResourceManager:
 
     def __init__(self, scheduler, constraints: Constraints, settings: Settings, engine_hash: str, cache_manager):
         """Initialize resource manager."""
-        self.scheduler = scheduler
-        self.constraints = constraints
-        self.settings = settings
-        self.engine_hash = engine_hash
-        self.cache_manager = cache_manager
+        self.scheduler: Scheduler = scheduler
+        self.constraints: Constraints = constraints
+        self.settings: Settings = settings
+        self.engine_hash: str = engine_hash
+        self.cache_manager: CacheManager = cache_manager
 
         # We don't use shared browser process to avoid VNC session management complexity
 
@@ -132,9 +129,9 @@ class ResourceManager:
         for proc in psutil.process_iter(["pid", "name", "cmdline", "create_time"]):
             try:
                 proc_name = proc.info["name"].lower()
-                if (
-                    "headless_shell" in proc_name or "chromium" in proc_name or "playwright" in proc_name
-                ) and proc.info["create_time"] >= self._start_time:
+                if ("headless_shell" in proc_name or "chromium" in proc_name) and proc.info[
+                    "create_time"
+                ] >= self._start_time:
                     total_memory += proc.memory_info().rss
 
                     # Include child processes
@@ -281,12 +278,9 @@ class ResourceManager:
         if self.constraints.max_memory is not None:
             total_memory = self._get_total_memory_usage()
             available_memory = self.constraints.max_memory - total_memory
-            # Estimate 500MB per executor
+            # Estimate memory for new executors (500MB each)
             max_new_by_memory = max(0, int(available_memory / (500 * 1024 * 1024)))
             max_new = min(max_new, max_new_by_memory)
-
-        # Cost limits are checked per-task during creation since they're time-based
-        # and can change during parallel creation
 
         return max(0, max_new)
 
