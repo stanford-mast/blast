@@ -3,7 +3,7 @@
 import logging
 from pathlib import Path
 
-from utils import ensure_parent_dir
+from .utils import ensure_parent_dir
 
 
 class ExperimentLogger:

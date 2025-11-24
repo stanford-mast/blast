@@ -21,18 +21,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from logger import ExperimentLogger
-from task_state_utils import (
+
+from blastai import Engine
+from blastai.logging_setup import setup_logging
+from blastai.response import AgentHistoryListResponse
+
+from .logger import ExperimentLogger
+from .task_state_utils import (
     fetch_final_state,
     get_all_completed_tasks,
     get_successful_task,
     merge_parallel_final_states,
 )
-from utils import ensure_parent_dir
-
-from blastai import Engine
-from blastai.logging_setup import setup_logging
-from blastai.response import AgentHistoryListResponse
+from .utils import ensure_parent_dir
 
 
 def parse_args():
@@ -386,7 +387,11 @@ class ExperimentRunner:
                         evaluate=self.evaluate,
                     )
 
-                    if result and result.error:
+                    if result is None:
+                        self.logger.error(f"Run {run_num} failed: result is None", indent=6)
+                        continue
+
+                    if result.error:
                         self.logger.error(f"Run {run_num} failed with error: {result.error}", indent=6)
                         continue
 
