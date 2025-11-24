@@ -1,7 +1,8 @@
 tasks:
 - id: fly-unified-6
   initial_url: https://real-flyunified.vercel.app/
-  allowed_domains: same  # See README.md for allowed_domains configuration. Defaults to "same" as initial_url.
+  allowed_domains: same  # Controls which domains the browser can navigate to during task execution. Defaults to "same" as initial_url.
+  evaluate: true # Whether to evaluate the result using the agisdk evaluator. This is only supported when running tasks in the REAL Bench format. Defaults to False.
   goal: 'Reserve me a seat for the flight from Austin to Pittsburgh departing on December
     11th, 2024 at 8:00 in Basic Economy.
 

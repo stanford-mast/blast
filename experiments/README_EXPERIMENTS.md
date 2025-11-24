@@ -11,7 +11,8 @@ Each task has the following fields:
   - id: # The unique identifier for the task
     initial_url: # Optional initial url
     goal: # The actual task definition
-    allowed_domains: # Optional domain restrictions (see below)
+    allowed_domains: # Optional domain restrictions (default: same as initial_url, see below)
+    evaluate: # Optional boolean to enable evaluation (default: false, see below)
 ```
 
 #### Domain Restrictions
@@ -35,6 +36,19 @@ The `allowed_domains` field supports three modes for controlling which domains t
      - "*.google.com"
      - "https://trusted-site.org"
    ```
+
+#### Evaluation
+The `evaluate` field controls whether to evaluate the task result using the agisdk evaluator. This is only supported when running tasks in the REAL Bench format. By default, evaluation is disabled.
+
+```yaml
+evaluate: true  # Enable evaluation
+# Or omit the field to disable evaluation (default)
+```
+
+When evaluation is enabled, the runner will:
+1. Fetch the final state from the browser
+2. Use the agisdk evaluator to check if the task was completed successfully
+3. Include the evaluation results in the experiment output
 
 For convenience, all tasks from [agisdk-REAL](https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks) have already been imported and can be found in `tasks/agisdk/agisdk.yaml`.
 
@@ -72,15 +86,15 @@ Finally, edit the **settings** section to configure the experiment settings. `ru
 
 That's it! You can now run the experiment by running `python runner.py --config <path-to-your-config-file>`. 
 
-When you run one of the tasks from the [agisdk-REAL](https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks), you can add the `--evaluate` flag to evaluate the results: `python runner.py --config <path-to-your-config-file> --evaluate`
+If you want to evaluate the results for tasks in the REAL Bench format, set `evaluate: true` in the task configuration.
 
 ### Import tasks
 All tasks from [agisdk-REAL](https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks) have already been imported and can be found in `tasks/agisdk/agisdk.yaml`. To re-import them, clone the `agisdk` repo and run `python tasks/agisdk/import_real.py`.
 
-### Evalute your own tasks
+### Evaluate your own tasks
 You can also set up evals for tasks from your own fork of `agisdk`. Here are the steps:
 1. In this directory, clone the `agisdk` repo.
 2. `cd agisdk && pip install -e .` to install it in editable mode.
-3. Add the task to an experiment config file. 
+3. Add the task to an experiment config file.
 
 You should now be able to run evals on your own tasks.
