@@ -78,4 +78,9 @@ When you run one of the tasks from the [agisdk-REAL](https://github.com/agi-inc/
 All tasks from [agisdk-REAL](https://github.com/agi-inc/agisdk/tree/main/src/agisdk/REAL/browsergym/webclones/tasks) have already been imported and can be found in `tasks/agisdk/agisdk.yaml`. To re-import them, clone the `agisdk` repo and run `python tasks/agisdk/import_real.py`.
 
 ### Evalute your own tasks
-You can also set up evals for your tasks. Clone the `agisdk` repo, and make sure to install it in editable mode. You can then create a new task json in `src/agisdk/REAL/browsergym/webclones/tasks`. Your task json just needs to follow the same format as the other tasks.
+You can also set up evals for tasks from your own fork of `agisdk`. Here are the steps:
+1. In this directory, clone the `agisdk` repo.
+2. `cd agisdk && pip install -e .` to install it in editable mode.
+3. Add the task to an experiment config file. 
+
+You should now be able to run evals on your own tasks.
