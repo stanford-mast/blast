@@ -114,7 +114,7 @@ async def create_executor(
         browser_args = {
             "headless": constraints.require_headless,
             "user_data_dir": None,  # Use ephemeral profile for security
-            "keep_alive": is_interactive,  # Keep browser alive for interactive sessions to support follow-up questions
+            "keep_alive": True,
             "highlight_elements": False,  # Disable element highlighting
         }
 
