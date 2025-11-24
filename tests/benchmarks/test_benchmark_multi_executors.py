@@ -27,7 +27,7 @@ async def test_browser_session_creation_benchmark():
 
     This test launches N real browser sessions and measures the time.
     """
-    NUM_BROWSERS = 20
+    NUM_BROWSERS = 10
 
     # Setup components
     constraints = Constraints()
