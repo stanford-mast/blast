@@ -430,9 +430,8 @@ Explain the content of the chunk and that the requested information is not avail
 
                     return ActionResult(success=False, error=f"{summary}\n\n" + "\n".join(combined_results))
 
-                return ActionResult(
-                    is_done=True, success=True, extracted_content="📋 Subtask results:\n" + "\n".join(combined_results)
-                )
+                # Don't set is_done here. The main agent should synthesize results and decide when to finish.
+                return ActionResult(extracted_content="📋 Subtask results:\n" + "\n".join(combined_results))
             except Exception as e:
                 return ActionResult(success=False, error=f"Failed to get subtask results: {str(e)}")
 
