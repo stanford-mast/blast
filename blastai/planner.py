@@ -153,15 +153,14 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
 
         guidance_text = """
         IMPORTANT:
-        - The above execution plan is not always correct, because it does not have knowledge of the specific site details. You should decide whether to use the plan or to create subtasks based on the status of the site and your task. Your ultimate goal is to try to complete the user-specified task as efficiently as possible.
         - You should use the launch_subtask tool if you need to create parallel tasks. For each item you need to process in parallel: 
             1. Call launch_subtask once for each item with the specific details 
             2. After launching all subtasks, use get_subtask_results to collect and aggregate their results 
             3. For parallel tasks, do NOT attempt to complete all items sequentially yourself
-        - If the initial url for the subtask is not available or confirmed, you should set optional_initial_search_or_url to the current page url.
-          - For example, you can navigate to a specific section using URL fragments like example.com#section-name or use the current page URL with a fragment like https://current-page.com#top
-        - When launching subtasks, you should also pass in any helpful context that would be useful for the subtask.
-          - For example, what you have tried so far, what you have found, what you have learned, etc.
+        - If the initial URL for the subtask is not available or confirmed, you should set optional_initial_search_or_url to the current page url.
+          - e.g., you can navigate to a specific section using URL fragments like example.com#section-name
+        - If your subtask is starting from scratch (e.g. because the initial URL is not available or confirmed), you should pass in any helpful details that would be useful for the subtask.
+          - e.g., any first steps you have taken that the subtask should also take, or any context that would be useful for the subtask.
         """
         return tool_annotation + "\n\n" + guidance_text
 
