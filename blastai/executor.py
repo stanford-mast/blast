@@ -166,6 +166,8 @@ class Executor:
                         initial_actions = [{"go_to_url": {"url": url, "new_tab": False}}]
 
                     logger.debug(f"Creating new agent for task: {task} with sensitive data: {self.sensitive_data}")
+                    # Use longer step_timeout when parallelism is enabled, so the main agent can wait for subtasks
+                    step_timeout = 600 if self.constraints.allow_parallelism.get("task", False) else 180
                     self.agent = Agent(
                         task=task,
                         browser_session=self.browser_session,
@@ -175,6 +177,7 @@ class Executor:
                         initial_actions=initial_actions,
                         sensitive_data=self.sensitive_data,
                         calculate_cost=True,
+                        step_timeout=step_timeout,
                     )
                 else:
                     # For follow-up tasks, we need to clear any initial_actions
@@ -262,6 +265,8 @@ class Executor:
             else:
                 # Reuse cached plan
                 if not self.agent:
+                    # Use longer step_timeout when parallelism is enabled (main agent may wait for subtasks)
+                    step_timeout = 600 if self.constraints.allow_parallelism.get("task", False) else 180
                     self.agent = Agent(
                         task="",  # Plan already contains the task
                         browser_session=self.browser_session,
@@ -270,6 +275,7 @@ class Executor:
                         use_vision=self.constraints.allow_vision,
                         sensitive_data=self.sensitive_data,
                         calculate_cost=True,
+                        step_timeout=step_timeout,
                     )
                 # Run plan
                 try:
