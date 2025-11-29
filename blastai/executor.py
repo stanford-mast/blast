@@ -167,7 +167,7 @@ class Executor:
 
                     logger.debug(f"Creating new agent for task: {task} with sensitive data: {self.sensitive_data}")
                     # Use longer step_timeout when parallelism is enabled, so the main agent can wait for subtasks
-                    step_timeout = 600 if self.constraints.allow_parallelism.get("task", False) else 120
+                    step_timeout = 600 if self.constraints.allow_parallelism.get("task", False) else 180
                     self.agent = Agent(
                         task=task,
                         browser_session=self.browser_session,
