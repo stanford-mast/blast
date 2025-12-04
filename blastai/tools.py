@@ -172,10 +172,10 @@ class Tools:
 
         @self.controller.action("Get first successful result from subtask(s)")
         async def get_first_subtask_result(comma_separated_list_of_task_ids: str) -> ActionResult:
-            """Get the first SUCCESSFUL result from multiple subtasks running in parallel.
+            """Get the first successful result from multiple subtasks running in parallel.
 
-            Waits for the first subtask to succeed. If a subtask fails, continues
-            waiting for others. Only returns error if ALL subtasks fail.
+            Waits for the first subtask to succeed.
+            If a subtask fails, continues waiting for others.
 
             Args:
                 comma_separated_list_of_task_ids: Comma-separated list of task IDs
@@ -189,7 +189,7 @@ class Tools:
             ]
             if not task_ids:
                 return ActionResult(success=False, error="No valid task IDs provided (filtered out current task)")
-            return await self._get_first_subtask_result(scheduler, task_ids, as_final=True)
+            return await self._get_first_subtask_result(scheduler, task_ids, as_final=False)
 
         @self.controller.action("""Extract structured, semantic data (e.g. product description, price, all information about XYZ) from the current webpage based on a textual query.
 Only use this for extracting info from a single product/article page, not for entire listings or search results pages.
