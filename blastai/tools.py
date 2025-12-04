@@ -4,13 +4,14 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Dict, List, Optional
 
 import markdownify
 from browser_use import ActionResult, Controller
+from browser_use.agent.views import AgentHistoryList
 from browser_use.browser import BrowserSession
 from browser_use.llm.base import BaseChatModel
-from browser_use.llm.messages import SystemMessage, UserMessage
+from browser_use.llm.messages import UserMessage
 
 from .response import HumanRequest, HumanResponse
 from .scheduler import Scheduler
@@ -73,14 +74,14 @@ class Tools:
     async def _get_first_subtask_result(
         self, scheduler: Scheduler, task_ids: List[str], as_final: bool = False
     ) -> ActionResult:
-        """Helper function to get first result from multiple subtasks.
+        """Helper function to get first self-reported successful result from multiple subtasks.
 
         Args:
             task_ids: List of task IDs
             as_final: Whether to return result as final
 
         Returns:
-            First available result
+            First successful result
         """
         # Create actual Tasks (not just coroutine objects)
         task_map: Dict[asyncio.Task, str] = {}
@@ -89,48 +90,58 @@ class Tools:
             t = asyncio.create_task(coro)
             task_map[t] = tid
 
+        pending = set(task_map.keys())
+
         try:
-            # Wait until the first one finishes
-            done, pending = await asyncio.wait(task_map.keys(), return_when=asyncio.FIRST_COMPLETED)
+            # Here we check the pending set multiple times so we get a chance to wait for the first successful result.
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
 
-            # Try each completed task until we find a valid result
-            while done:
-                completed_task = done.pop()
-                completed_tid = task_map[completed_task]
-                try:
-                    result = await completed_task
-                    if result:  # Only use if we got a valid result
-                        # Cancel any others
-                        for p in pending:
-                            p.cancel()
-                        for t in done:
-                            t.cancel()
+                for completed_task in done:
+                    completed_tid = task_map[completed_task]
+                    try:
+                        result: AgentHistoryList = await completed_task
+                        if result and result.is_successful():
+                            for p in pending:
+                                p.cancel()
 
-                        # Clean up the other subtasks in the resource manager
-                        for other_tid in task_ids:
-                            if other_tid != completed_tid:
-                                await self.resource_manager.end_task(other_tid)
+                            for other_tid in task_ids:
+                                if other_tid != completed_tid:
+                                    await self.resource_manager.end_task(other_tid)
 
-                        if as_final:
-                            return ActionResult(
-                                success=True,
-                                extracted_content=result.final_result(),
-                                is_done=True,  # Mark this as the final result
-                            )
-                        else:
-                            return ActionResult(
-                                extracted_content=(
-                                    f"📋 First result from subtask {completed_tid}: {result.final_result()}"
+                            if as_final:
+                                return ActionResult(
+                                    success=True,
+                                    extracted_content=result.final_result(),
+                                    is_done=True,
                                 )
-                            )
-                except Exception as e:
-                    logger.error(f"Task {completed_tid} failed: {e}")
-                    continue
+                            else:
+                                return ActionResult(
+                                    extracted_content=(
+                                        f"📋 First successful result from subtask {completed_tid}: {result.final_result()}"
+                                    )
+                                )
+                    except Exception as e:
+                        logger.error(f"Task {completed_tid} failed: {e}")
+                        await self.resource_manager.end_task(completed_tid)
 
-            # If we get here, no tasks produced a valid result
-            return ActionResult(success=False, error="No valid results available from any subtask")
+            # Clean up all failed tasks
+            for tid in task_ids:
+                task = scheduler.tasks.get(tid)
+                if task and task.executor:
+                    await self.resource_manager.end_task(tid)
+
+            return ActionResult(success=False, error="All subtasks failed - no successful result", is_done=True)
 
         except Exception as e:
+            # Cancel all pending asyncio tasks
+            for p in pending:
+                p.cancel()
+            # Clean up resources for all tasks
+            for tid in task_ids:
+                task = scheduler.tasks.get(tid)
+                if task and task.executor:
+                    await self.resource_manager.end_task(tid)
             return ActionResult(success=False, error=f"Failed to get first subtask result: {e}")
 
     def _register_subtask_tools(self, scheduler: Scheduler):
@@ -174,15 +185,18 @@ class Tools:
             else:
                 return ActionResult(extracted_content=f'🚀 Launched subtasks {",".join(task_ids)} to "{task}"')
 
-        @self.controller.action("Get first result from subtask(s)")
+        @self.controller.action("Get first successful result from subtask(s)")
         async def get_first_subtask_result(comma_separated_list_of_task_ids: str) -> ActionResult:
-            """Get the first result from multiple subtasks running in parallel.
+            """Get the first successful result from multiple subtasks running in parallel.
+
+            Waits for the first subtask to succeed.
+            If a subtask fails, continues waiting for others.
 
             Args:
                 comma_separated_list_of_task_ids: Comma-separated list of task IDs
 
             Returns:
-                First available result from any subtask
+                First successful result from any subtask
             """
             # Filter out current task ID from list
             task_ids = [
@@ -190,7 +204,7 @@ class Tools:
             ]
             if not task_ids:
                 return ActionResult(success=False, error="No valid task IDs provided (filtered out current task)")
-            return await self._get_first_subtask_result(scheduler, task_ids, as_final=False)
+            return await self._get_first_subtask_result(scheduler, task_ids, as_final=True)
 
         @self.controller.action("""Extract structured, semantic data (e.g. product description, price, all information about XYZ) from the current webpage based on a textual query.
 Only use this for extracting info from a single product/article page, not for entire listings or search results pages.
