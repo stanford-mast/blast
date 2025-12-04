@@ -123,6 +123,13 @@ class Tools:
                                 )
                     except Exception as e:
                         logger.error(f"Task {completed_tid} failed: {e}")
+                        await self.resource_manager.end_task(completed_tid)
+
+            # Clean up all failed tasks
+            for tid in task_ids:
+                task = scheduler.tasks.get(tid)
+                if task and task.executor:
+                    await self.resource_manager.end_task(tid)
 
             return ActionResult(success=False, error="All subtasks failed - no successful result", is_done=True)
 
