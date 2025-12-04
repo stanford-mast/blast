@@ -189,7 +189,7 @@ class Tools:
             ]
             if not task_ids:
                 return ActionResult(success=False, error="No valid task IDs provided (filtered out current task)")
-            return await self._get_first_subtask_result(scheduler, task_ids, as_final=False)
+            return await self._get_first_subtask_result(scheduler, task_ids, as_final=True)
 
         @self.controller.action("""Extract structured, semantic data (e.g. product description, price, all information about XYZ) from the current webpage based on a textual query.
 Only use this for extracting info from a single product/article page, not for entire listings or search results pages.
