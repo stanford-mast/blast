@@ -134,6 +134,14 @@ class Tools:
             return ActionResult(success=False, error="All subtasks failed - no successful result", is_done=True)
 
         except Exception as e:
+            # Cancel all pending asyncio tasks
+            for p in pending:
+                p.cancel()
+            # Clean up resources for all tasks
+            for tid in task_ids:
+                task = scheduler.tasks.get(tid)
+                if task and task.executor:
+                    await self.resource_manager.end_task(tid)
             return ActionResult(success=False, error=f"Failed to get first subtask result: {e}")
 
     def _register_subtask_tools(self, scheduler: Scheduler):
