@@ -6,7 +6,7 @@ import shutil
 import time
 from pathlib import Path
 
-from browser_use import Agent, Browser, BrowserConfig
+from browser_use import Agent, Browser, BrowserProfile
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
 
@@ -19,10 +19,10 @@ TASK = "Compare UW, Berkeley, and Stanford biomedical data science programs"
 async def run_with_browser_use() -> tuple[float, str, float]:
     """Run task with browser-use directly."""
     # Create browser with settings matching BLAST's default_config.yaml
-    config = BrowserConfig(
+    browser_profile = BrowserProfile(
         headless=True  # From require_headless=false
     )
-    browser = Browser(config=config)
+    browser = Browser(browser_profile=browser_profile)
 
     # Create agent with same model and vision settings as BLAST
     agent = Agent(
