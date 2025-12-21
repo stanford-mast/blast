@@ -6,8 +6,7 @@ import shutil
 import time
 from pathlib import Path
 
-from browser_use import Agent, Browser, BrowserProfile
-from langchain_openai import ChatOpenAI
+from browser_use import Agent, Browser, BrowserProfile, ChatOpenAI
 from openai import OpenAI
 
 # Complex research task
@@ -74,12 +73,13 @@ async def main():
     print(f"Task: {TASK}\n")
 
     # # Run BLAST first
+    # # Make sure to run `blastai serve` first in your terminal.
     # print("Running with BLAST...")
     # blast_time, blast_result = run_with_blast()
     # print(f"BLAST Time: {blast_time:.2f}s")
     # print("BLAST Result:")
     # print(blast_result)
-    # print("\n" + "="*80 + "\n")
+    # print("\n" + "=" * 80 + "\n")
 
     # Then run browser-use
     print("Running with browser-use...")
