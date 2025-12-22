@@ -538,7 +538,7 @@ class Scheduler:
         task.executor_run_task = None  # Clear the run task since it's done
 
         # Set success flag based on result or explicit success parameter
-        task.success = success if success is not None else bool(result)
+        task.success = success if success is not None else (result.is_successful() if result else False)
 
         if result:
             task.result = result
