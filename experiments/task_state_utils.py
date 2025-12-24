@@ -23,7 +23,12 @@ def get_successful_task(
     Otherwise, we can use the main task.
     """
     if parallelism_config.get("first_of_n", False):
-        return get_successful_subtask(task_states, logger)
+        subtask = get_successful_subtask(task_states, logger)
+        if subtask:
+            return subtask
+        # Fall back to main task if no subtasks found (single browser case)
+        logger.info("No subtasks found in first-of-n mode, falling back to main task", indent=6)
+        return get_successful_main_task(task_states, logger)
     return get_successful_main_task(task_states, logger)
 
 
