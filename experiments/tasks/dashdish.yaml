@@ -1,0 +1,5 @@
+tasks:
+- id: dashdish-deepresearch1
+  initial_url: https://dashdish-demo.vercel.app/
+  goal: 'Find the top 10 restaurants sorted by number of reviews (most reviews first), and for each restaurant find the cheapest and most expensive menu items (output a list of restaurant objects with name, num_reviews, cheapest_item, most_expensive_item)'
+  smcp_registry: smcp-registries/dashdish.json

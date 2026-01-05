@@ -149,7 +149,7 @@ class CoreTool(Tool):
     
     def __post_init__(self):
         """Validate CoreTool name."""
-        valid_names = ["update_smcp_tool", "remove_smcp_tool", "list_smcp_tools", "ask_html", "ask_human_cli"]
+        valid_names = ["update_smcp_tool", "remove_smcp_tool", "list_smcp_tools", "ask_html", "ask_human", "ask_human_cli"]
         if self.name not in valid_names:
             raise ValueError(f"CoreTool name must be one of {valid_names}, got {self.name}")
     

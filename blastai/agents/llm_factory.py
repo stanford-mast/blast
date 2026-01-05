@@ -43,6 +43,21 @@ class LLMFactory:
         """
         model_lower = model_name.lower()
         
+        # Check for explicit namespace prefix first (e.g., "openai/gpt-oss-20b", "meta-llama/llama-*")
+        if '/' in model_name:
+            namespace = model_name.split('/')[0].lower()
+            model_part = model_name.split('/')[1].lower() if len(model_name.split('/')) > 1 else ''
+            
+            # Groq models: all open-source models in any namespace (meta-llama, qwen, moonshotai, etc.)
+            if namespace in ['meta-llama', 'qwen', 'moonshotai']:
+                return 'groq'
+            # Special case: openai/gpt-oss-* models are Groq-served open-source models
+            elif namespace == 'openai' and 'gpt-oss' in model_part:
+                return 'groq'
+            # Explicit provider namespaces
+            elif namespace in ['openai', 'anthropic', 'google', 'groq']:
+                return namespace
+        
         # OpenAI models
         if model_lower.startswith('gpt-') or model_lower.startswith('o1-') or model_lower.startswith('o3-'):
             return 'openai'
@@ -54,13 +69,6 @@ class LLMFactory:
         # Google models
         if model_lower.startswith('gemini-') or model_lower.startswith('gemma-'):
             return 'google'
-        
-        # Groq models (use namespace prefixes)
-        if '/' in model_name:
-            namespace = model_name.split('/')[0].lower()
-            if namespace in ['meta-llama', 'qwen', 'moonshotai', 'openai', 'google']:
-                # These namespaces are typically used by Groq
-                return 'groq'
         
         # Default to OpenAI for unknown models (allows custom endpoints)
         return 'openai'
@@ -140,6 +148,10 @@ class LLMFactory:
             config_kwargs = {}
             if temperature is not None:
                 config_kwargs['temperature'] = temperature
+            # Set thinking_budget=0 to disable thinking mode for Gemini models
+            # Exception: gemini-2.5-pro cannot disable thinking (minimum 128 tokens)
+            if 'thinking_budget' not in kwargs and 'gemini-2.5-pro' not in model_name.lower():
+                config_kwargs['thinking_budget'] = 0
             config_kwargs.update(kwargs)
             
             return ChatGoogle(

@@ -23,6 +23,7 @@ from .models import Agent, Tool, SMCPTool, CoreTool, ToolExecutorType, SMCPToolT
 from .tools_smcp import add_smcp_tool, execute_smcp_tool
 from .tools_synthesis import add_core_tool
 from .execution_hooks import ExecutionHooks, StopExecutionError
+from .timing_tracker import set_current_tracker
 
 # Apply browser-use patches early, before any browser-use tools are created
 from ..browser_use_patches import apply_all_patches
@@ -32,6 +33,47 @@ if TYPE_CHECKING:
     from browser_use.browser import BrowserSession
 
 logger = logging.getLogger(__name__)
+
+
+class LLMTimingWrapper:
+    """
+    Wraps an LLM to track calls to the timing tracker.
+    
+    When browser-use calls ainvoke() on the LLM, this wrapper intercepts it,
+    records timing to the global timing tracker, and delegates to the wrapped LLM.
+    """
+    
+    def __init__(self, llm: BaseChatModel):
+        self._llm = llm
+    
+    async def ainvoke(self, messages, output_format=None, **kwargs):
+        """Intercept ainvoke calls to track timing."""
+        import time
+        from .timing_tracker import get_current_tracker
+        
+        tracker = get_current_tracker()
+        
+        # Call LLM with timing tracking
+        start_time = time.time()
+        try:
+            response = await self._llm.ainvoke(messages, output_format=output_format, **kwargs)
+        finally:
+            elapsed = time.time() - start_time
+            
+            # Record LLM timing if tracker is available
+            if tracker is not None:
+                tracker.record_llm_call(
+                    total_seconds=elapsed,
+                    prefill_seconds=None,
+                    decode_seconds=None,
+                    tokens=None,
+                )
+        
+        return response
+    
+    def __getattr__(self, name):
+        """Delegate all other attributes to the wrapped LLM."""
+        return getattr(self._llm, name)
 
 
 class AgentExecutor:
@@ -51,17 +93,21 @@ class AgentExecutor:
         browser: Optional['BrowserSession'] = None,
         state_aware: bool = True,
         codegen_llm: Optional[BaseChatModel] = None,
+        codegen_llms: Optional[List[Dict[str, Any]]] = None,
         parallel_codegen: int = 1,
         output_model_schema: Optional[type[BaseModel]] = None,
         user_id: Optional[str] = None,
         timezone: Optional[str] = None,
         stop_if_codegen_fails: bool = False,
+        disable_ai_exec_fallback: bool = False,
         allowed_domains: Optional[List[str]] = None,
         send_message_callback: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
         check_stop_callback: Optional[Callable[[], bool]] = None,
+        ask_human_callback: Optional[Callable[[str], Any]] = None,
         session_id: Optional[str] = None,
         cycle_id: Optional[int] = None,
-        summarizer_llm: Optional[BaseChatModel] = None
+        summarizer_llm: Optional[BaseChatModel] = None,
+        timing_tracker: Optional['TimingTracker'] = None
     ):
         """
         Initialize AgentExecutor.
@@ -72,8 +118,12 @@ class AgentExecutor:
             browser: Optional BrowserSession instance. If None, creates new one. 
                      Multiple Agents can share a BrowserSession instance.
             state_aware: Include preconditions/postconditions in generated code (default True)
-            codegen_llm: Optional LLM for code generation. If None, uses same as llm.
-            parallel_codegen: Number of parallel code generations (default 1)
+            codegen_llm: Optional single LLM for code generation. Deprecated - use codegen_llms instead.
+            codegen_llms: Optional list of model configs for parallel code generation.
+                         Format: [{"model": "openai/gpt-oss-20b", "count": 3}, {"model": "openai/gpt-oss-120b", "count": 3}]
+                         If None, falls back to codegen_llm or environment vars.
+            parallel_codegen: Number of parallel code generations when using single codegen_llm (default 1).
+                             Ignored when codegen_llms is provided (count is per-model).
             output_model_schema: Optional Pydantic model for structured output (passed to browser-use Agent)
             user_id: Optional user identifier for persistent browser profiles. If set and browser=None,
                      creates a browser with user_data_dir specific to this user, persisting cookies/sessions.
@@ -81,38 +131,50 @@ class AgentExecutor:
                      Used to determine current date/time for code generation context. Defaults to UTC.
             stop_if_codegen_fails: If True, raise error when code generation fails. 
                      If False (default), fall back to loop mode.
+            disable_ai_exec_fallback: If True, raise error when SMCP tool execution fails instead of falling back to ai_exec.
+                     Useful for evaluating pure SMCP code execution. Defaults to False.
             allowed_domains: Optional list of allowed domains for browser navigation. 
                      Auto-derived from initial URL if not specified. Example: ["*.sage.hr"]
             send_message_callback: Optional callback for sending messages (AgentThought, RequestForHuman, etc.)
                      Signature: async def callback(session_id: str, message: Dict[str, Any])
             check_stop_callback: Optional callback to check if execution should stop
                      Signature: def callback() -> bool
+            ask_human_callback: Optional async callback for ask_human requests from generated code
+                     Signature: async def callback(question: str, cycle_id?: int, user_email?: str) -> str
             session_id: Optional session ID for message routing
             cycle_id: Optional cycle ID to include in messages
             summarizer_llm: Optional LLM for summarizing agent thoughts. Defaults to codegen_llm.
+            timing_tracker: Optional TimingTracker for detailed performance measurement
         """
         self.agent = agent
         self.llm = llm or self._create_llm_from_env()
+        self.codegen_llms_config = codegen_llms
         self.codegen_llm = codegen_llm or self._create_codegen_llm()
         self.summarizer_llm = summarizer_llm or self.codegen_llm
         self.allowed_domains = allowed_domains
         self.user_id = user_id
         self.timezone = timezone or "UTC"
         self.stop_if_codegen_fails = stop_if_codegen_fails
+        self.disable_ai_exec_fallback = disable_ai_exec_fallback
         self.browser = browser or self._create_browser()
         self.state_aware = state_aware
         self.parallel_codegen = parallel_codegen
         self.output_model_schema = output_model_schema
+        self.timing_tracker = timing_tracker  # Add timing tracker
         self.tools = Tools()
         
         # Callbacks for DBOS workflow integration
         self.send_message_callback = send_message_callback
         self.check_stop_callback = check_stop_callback
+        self.ask_human_callback = ask_human_callback
         self.session_id = session_id
         self.cycle_id = cycle_id
         
         # Step counter for tracking execution progress
         self.step_count = 0
+        
+        # Current execution mode (for SMCP tool timeout adjustment)
+        self.current_mode: Optional[str] = None
         
         # History for code mode follow-up requests
         self.history: List[BaseMessage] = []
@@ -150,11 +212,11 @@ class AgentExecutor:
         )
     
     def _create_codegen_llm(self) -> BaseChatModel:
-        """Create LLM specifically for code generation (uses Llama-4 Maverick by default)."""
+        """Create LLM specifically for code generation (uses Claude 3.5 Sonnet by default)."""
         from .llm_factory import LLMFactory
         
-        # Use dedicated codegen model if specified, otherwise use Llama-4 Maverick
-        model = os.getenv("BLASTAI_CODEGEN_MODEL", "meta-llama/llama-4-maverick-17b-128e-instruct")
+        # Use dedicated codegen model if specified, otherwise use Claude 3.5 Sonnet (superior code generation)
+        model = os.getenv("BLASTAI_CODEGEN_MODEL", "claude-3-5-sonnet-20241022")
         provider = os.getenv("BLASTAI_CODEGEN_PROVIDER")  # Optional provider override
         
         return LLMFactory.create_llm(
@@ -255,7 +317,8 @@ class AgentExecutor:
             agent=self.agent,
             browser=self.browser,
             llm=self.llm,
-            agent_executor=self
+            agent_executor=self,
+            no_state_checking=True  # Skip observe in tool wrappers since we call it at start
         )
     
     async def run(self, task: str, mode: str = "loop", initial_url: Optional[str] = None) -> Any:
@@ -284,20 +347,33 @@ class AgentExecutor:
                 else:
                     self.allowed_domains = [f"*.{parsed.hostname}"]
         
-        # Prepend agent description to task (with space if description exists)
-        if self.agent.description:
-            full_task = f"{self.agent.description} {task}"
-        else:
-            full_task = task
-        
-        if mode == "loop":
-            return await self._run_loop_mode(full_task, initial_url)
-        elif mode == "code":
-            return await self._run_code_mode(full_task, initial_url)
-        else:
-            raise ValueError(f"Unknown mode: {mode}. Use 'loop' or 'code'.")
+        # Set module-level current TimingTracker so lower-level helpers can record timings
+        try:
+            set_current_tracker(self.timing_tracker)
+
+            # For loop mode: prepend agent description to task (browser-use expects combined prompt)
+        # For code mode: keep task separate (codegen adds description independently)
+            if mode == "loop":
+                self.current_mode = "loop"
+                if self.agent.description:
+                    full_task = f"{self.agent.description} {task}"
+                else:
+                    full_task = task
+                return await self._run_loop_mode(full_task, initial_url)
+            elif mode == "code":
+                self.current_mode = "code"
+                # Code mode: pass task only (codegen will add agent.description separately)
+                return await self._run_code_mode(task, initial_url)
+            else:
+                raise ValueError(f"Unknown mode: {mode}. Use 'loop' or 'code'.")
+        finally:
+            # Clear module-level tracker to avoid cross-run contamination
+            try:
+                set_current_tracker(None)
+            except Exception:
+                pass
     
-    async def _run_loop_mode(self, task: str, initial_url: Optional[str] = None) -> Any:
+    async def _run_loop_mode(self, task: str, initial_url: Optional[str] = None, include_smcp_tools: bool = True) -> Any:
         """
         Run in loop mode using browser-use Agent.run.
         
@@ -306,6 +382,12 @@ class AgentExecutor:
         
         If initial_url is provided, it's passed as initial_actions to the Agent,
         which automatically navigates before starting the main task.
+        
+        Args:
+            task: Task description
+            initial_url: Optional URL to navigate to before starting
+            include_smcp_tools: Whether to include SMCP tools in task prompt (default True).
+                               Set to False when falling back from code mode to avoid tool confusion.
         """
         try:
             # Build initial actions if URL provided
@@ -314,13 +396,16 @@ class AgentExecutor:
                 logger.info(f"Setting initial URL: {initial_url}")
                 initial_actions = [{'navigate': {'url': initial_url, 'new_tab': False}}]
             
-            # Append SMCP tool names to task
-            smcp_tool_names = [t.name for t in self.agent.tools if t.tool_executor_type == ToolExecutorType.SMCP]
-            if smcp_tool_names:
-                task += " You may use " + ", ".join(smcp_tool_names) + "."
-                logger.info(f"Added {len(smcp_tool_names)} SMCP tools to task prompt: {smcp_tool_names}")
+            # Append SMCP tool names to task (only if include_smcp_tools=True)
+            if include_smcp_tools:
+                smcp_tool_names = [t.name for t in self.agent.tools if t.tool_executor_type == ToolExecutorType.SMCP]
+                if smcp_tool_names:
+                    task += " You may use " + ", ".join(smcp_tool_names) + "."
+                    logger.info(f"Added {len(smcp_tool_names)} SMCP tools to task prompt: {smcp_tool_names}")
+                else:
+                    logger.info("No SMCP tools available to add to task prompt")
             else:
-                logger.info("No SMCP tools available to add to task prompt")
+                logger.info("Skipping SMCP tools in loop mode (fallback from code mode)")
             
             # Check if ask_human or ask_human_cli is available
             has_ask_human = any(
@@ -336,9 +421,11 @@ class AgentExecutor:
             # Reuse existing browser-use agent if available, otherwise create new one
             if self.browser_use_agent is None:
                 logger.info("Creating new browser-use agent")
+                # Wrap LLM to track timing through the global tracker
+                wrapped_llm = LLMTimingWrapper(self.llm)
                 self.browser_use_agent = BrowserUseAgent(
                     task=task,
-                    llm=self.llm,
+                    llm=wrapped_llm,
                     browser=self.browser,
                     tools=self.tools,
                     initial_actions=initial_actions,  # Agent will execute navigation before task
@@ -395,18 +482,22 @@ class AgentExecutor:
             )
             on_step_start, on_step_end = hooks.create_loop_hooks(get_thought)
             
-            # Run agent with hooks
+            # Start execution timing for loop-mode
+            if self.timing_tracker:
+                try:
+                    self.timing_tracker.start_execution()
+                except Exception:
+                    logger.debug("Failed to start execution timer")
+
             try:
                 result = await self.browser_use_agent.run(
                     on_step_start=on_step_start,
                     on_step_end=on_step_end,
                     max_steps=50  # Reasonable limit
                 )
-                
-                # Send ResponseToHuman on success
+                # Success
                 await hooks.send_response_to_human(result)
                 return result
-                
             except InterruptedError:
                 # Agent was stopped - send AgentStopped
                 logger.info("Agent was interrupted (stopped or paused)")
@@ -414,6 +505,13 @@ class AgentExecutor:
                 if self.browser_use_agent:
                     return self.browser_use_agent.history
                 return None
+            finally:
+                # Ensure execution timing is ended even on error
+                if self.timing_tracker:
+                    try:
+                        self.timing_tracker.end_execution()
+                    except Exception:
+                        logger.debug("Failed to end execution timer")
         except Exception as e:
             # Send AgentStopped on error
             logger.error(f"Agent execution failed: {e}")
@@ -480,12 +578,50 @@ class AgentExecutor:
         
         # Create code generator (needs to be created before iteration loop)
         if self.code_generator is None:
+            # Build list of LLMs for parallel generation
+            # Code generation always uses GPT-OSS models for best code quality
+            # The selected agent model (self.codegen_llm) is used for ai_eval/ai_exec in generated code
+            from .llm_factory import LLMFactory
+            llms_for_codegen = []
+            
+            # Hardcoded multi-model configuration for code generation (16 candidates total)
+            # Diversity across providers for resilience against single provider outages:
+            # - 3x GPT-OSS-20B (Groq, smaller, fast)
+            # - 5x GPT-OSS-120B (Groq, larger, high quality)
+            # - 4x Gemini-2.5-Flash (Google, fast, high quality)
+            # - 4x GPT-4-Mini (OpenAI, small but capable)
+            codegen_models = [
+                {"model": "openai/gpt-oss-20b", "count": 3},
+                {"model": "openai/gpt-oss-120b", "count": 5},
+                {"model": "gemini-2.5-flash", "count": 4},
+                {"model": "gpt-4-mini", "count": 4}
+            ]
+            
+            for config in codegen_models:
+                model_name = config["model"]
+                count = config.get("count", 1)
+                
+                # Create LLM instance for this model
+                llm_instance = LLMFactory.create_llm(
+                    model_name=model_name,
+                    temperature=0.0  # Zero temperature for deterministic code
+                )
+                
+                # Add 'count' instances to the list
+                for _ in range(count):
+                    llms_for_codegen.append(llm_instance)
+            
+            logger.info(f"Using {len(llms_for_codegen)} total LLM instances for code generation: {codegen_models}")
+            logger.info(f"Agent LLM ({self.codegen_llm.model if hasattr(self.codegen_llm, 'model') else 'unknown'}) will be used for ai_eval/ai_exec calls in generated code")
+            
             self.code_generator = CodeGenerator(
                 agent=self.agent,
-                llm=self.codegen_llm,
-                num_candidates=self.parallel_codegen,
+                llms=llms_for_codegen,
                 state_aware=self.state_aware,
-                timezone=self.timezone
+                timezone=self.timezone,
+                compare_cost_threshold=None,  # No cost-based threshold, use min_candidates only
+                min_candidates_for_comparison=4,  # Wait for at least 4 candidates before comparing
+                accept_cost_threshold=None  # No immediate acceptance threshold
             )
         
         # Import helper for observe calls
@@ -494,7 +630,11 @@ class AgentExecutor:
         # Use self.history for follow-up requests, or start fresh
         # self.history contains UserMessage (TASK/RULES) and AssistantMessage (generated code) pairs
         # Code generator will append to this during retries
-        max_iterations = 10
+        # Respect CodeGenerator's configured max_iterations when available
+        if self.code_generator is not None:
+            max_iterations = getattr(self.code_generator, 'max_iterations', 10)
+        else:
+            max_iterations = 10
         
         # Create hooks for code mode completion messages (if callbacks provided)
         hooks = None
@@ -509,18 +649,24 @@ class AgentExecutor:
             for iteration in range(max_iterations):
                 logger.info(f"Code mode iteration {iteration + 1}/{max_iterations}")
                 
-                # Handle navigation and STATE population for first iteration only
-                if iteration == 0 and initial_url:
-                    # First iteration with initial_url: use goto() tool to navigate + observe
+                # Handle navigation and STATE population for first iteration of first cycle only
+                # Check both iteration (code gen retry) and cycle_id (agent execution cycle)
+                if self.cycle_id is None:
+                    is_first_cycle = True
+                else:
+                    is_first_cycle = self.cycle_id <= 1
+                
+                if iteration == 0 and initial_url and is_first_cycle:
+                    # First iteration of first cycle with initial_url: use goto() tool to navigate + observe
                     # CRITICAL: goto() matches observe tool to REQUESTED URL (not final URL after redirect)
                     # This allows observe to run even if page redirects to login, detecting the login state
-                    logger.info(f"Calling goto() tool for initial URL: {initial_url}")
+                    logger.info(f"Calling goto() tool for initial URL (cycle {self.cycle_id}): {initial_url}")
                     try:
                         goto_result = await self.python_executor.state["goto"](initial_url)
                         logger.debug(f"goto() result: {goto_result}")
                     except Exception as e:
                         logger.warning(f"Error during goto: {e}")
-                elif iteration == 0 and not initial_url:
+                else:
                     # No initial_url: call observe on current URL
                     # This ensures STATE is refreshed with latest page state
                     logger.info(f"Calling observe for current page")
@@ -543,6 +689,7 @@ class AgentExecutor:
                 current_state = dict(self.python_executor.state.get("STATE", {}))
                 current_url = ""
                 try:
+                    # get_url() has built-in recovery logic for about:blank issues
                     current_url = await self.python_executor.state["get_url"]()
                 except Exception as e:
                     logger.warning(f"Error getting current URL: {e}")
@@ -553,13 +700,26 @@ class AgentExecutor:
                 # Generate code with self.history AND current STATE
                 # The STATE tells codegen if we're on login page, what page state is, etc.
                 # Code generator modifies history internally during retries
-                code = await self.code_generator.generate_code(
-                    task=task,
-                    history=self.history,  # Use self.history for follow-ups!
-                    error=None,  # Error is in history already
-                    initial_state=current_state,
-                    current_url=current_url
-                )
+                if self.timing_tracker:
+                    try:
+                        self.timing_tracker.start_planning()
+                    except Exception:
+                        logger.debug("Failed to start planning timer")
+
+                try:
+                    code = await self.code_generator.generate_code(
+                        task=task,
+                        history=self.history,  # Use self.history for follow-ups!
+                        error=None,  # Error is in history already
+                        initial_state=current_state,
+                        current_url=current_url
+                    )
+                finally:
+                    if self.timing_tracker:
+                        try:
+                            self.timing_tracker.end_planning()
+                        except Exception:
+                            logger.debug("Failed to end planning timer")
                 
                 if not code:
                     logger.error("Failed to generate valid code")
@@ -569,9 +729,10 @@ class AgentExecutor:
                         # CLI mode: raise error to stop execution
                         raise RuntimeError("Code generation failed - no valid code produced")
                     else:
-                        # Interactive mode: fall back to loop mode
+                        # Interactive mode: fall back to loop mode WITHOUT SMCP tools
+                        # (only use ask_human if available from rule graph)
                         logger.warning("Code generation failed, falling back to loop mode")
-                        return await self._run_loop_mode(task, initial_url=None)
+                        return await self._run_loop_mode(task, initial_url=None, include_smcp_tools=False)
                 
                 logger.info(f"Generated code ({len(code)} chars)")
                 
@@ -583,10 +744,31 @@ class AgentExecutor:
                 # If this is a retry, generate_code added error message and regenerated code
                 
                 # Execute code
-                result = await self.python_executor(code)
+                if self.timing_tracker:
+                    try:
+                        self.timing_tracker.start_execution()
+                    except Exception:
+                        logger.debug("Failed to start execution timer")
+
+                try:
+                    result = await self.python_executor(code)
+                finally:
+                    if self.timing_tracker:
+                        try:
+                            self.timing_tracker.end_execution()
+                        except Exception:
+                            logger.debug("Failed to end execution timer")
                 
                 if result.error:
                     logger.error(f"Code execution error: {result.error}")
+                    
+                    # Check if this is a StopExecutionError - if so, re-raise immediately
+                    # Don't treat stop requests as fixable code errors
+                    if "StopExecutionError" in result.error:
+                        logger.info("Detected StopExecutionError in code execution - stopping immediately")
+                        if hooks:
+                            await hooks.send_agent_stopped(reason=f"stop_requested: {result.error}")
+                        raise StopExecutionError(result.error)
                     
                     # Add error to self.history for next iteration
                     error_message = f"Error during execution: {result.error}\n\nPlease fix the code."
@@ -600,7 +782,7 @@ class AgentExecutor:
                 logger.info(f"Code execution completed successfully")
                 if result.logs:
                     logger.info(f"Logs:\n{result.logs}")
-                logger.info(f"Result: {result.output}")
+                logger.info(f"Output: {result.output}")
                 
                 # Send ResponseToHuman if hooks available
                 if hooks:
@@ -629,23 +811,29 @@ class AgentExecutor:
     
     async def cleanup(self):
         """Clean up resources."""
-        # Try to close the Browser if it has a close() coroutine
+        # BrowserSession has a kill() method to properly close the browser
         if self.browser:
             try:
-                close_fn = getattr(self.browser, "close", None)
-                if close_fn and asyncio.iscoroutinefunction(close_fn):
-                    await close_fn()
-                elif close_fn and callable(close_fn):
-                    # synchronous close
-                    close_fn()
-            except AttributeError:
-                # Fallback: try to close browser-use agent if available
-                pass
+                # Try BrowserSession.kill() method
+                kill_fn = getattr(self.browser, "kill", None)
+                if kill_fn and asyncio.iscoroutinefunction(kill_fn):
+                    await kill_fn()
+                else:
+                    # Fallback to close() if it exists
+                    close_fn = getattr(self.browser, "close", None)
+                    if close_fn and asyncio.iscoroutinefunction(close_fn):
+                        await close_fn()
+                    elif close_fn and callable(close_fn):
+                        # synchronous close
+                        close_fn()
+            except Exception as e:
+                # Best-effort cleanup; log but don't raise
+                logger.warning(f"Browser cleanup failed: {e}")
 
         # If a browser-use Agent was created, attempt to close its session
         if self.browser_use_agent:
             try:
                 await self.browser_use_agent.close()
-            except Exception:
-                # Best-effort cleanup; don't raise
-                pass
+            except Exception as e:
+                # Best-effort cleanup; log but don't raise
+                logger.warning(f"Browser-use agent cleanup failed: {e}")

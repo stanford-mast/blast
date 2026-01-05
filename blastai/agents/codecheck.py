@@ -68,6 +68,115 @@ def matches_pattern(state_value: Any, pattern: Any, params: Dict[str, Any] = Non
         return state_value == pattern
 
 
+def find_callable_tools(current_state: Dict[str, Any], tools: List[Any]) -> List[str]:
+    """
+    Find all tools whose preconditions are satisfied by the current state.
+    
+    Args:
+        current_state: Current abstract state
+        tools: List of tool objects (Agent.tools)
+        
+    Returns:
+        List of tool names that can be called
+    """
+    import logging
+    from .models import ToolExecutorType, SMCPToolType
+    
+    logger = logging.getLogger(__name__)
+    callable_tools = []
+    
+    logger.debug(f"Finding callable tools for state: {current_state}")
+    
+    for tool in tools:
+        if not hasattr(tool, 'name'):
+            continue
+            
+        # Skip CORE tools (update_smcp_tool, remove_smcp_tool, etc.)
+        if hasattr(tool, 'tool_executor_type') and tool.tool_executor_type == ToolExecutorType.CORE:
+            continue
+        
+        # Skip observe tools
+        if hasattr(tool, 'type') and tool.type == SMCPToolType.OBSERVE:
+            continue
+            
+        # Skip special utility tools
+        # NOTE: goto is intentionally NOT skipped here. If code uses goto(url),
+        # it should fail validation since we can't verify that the dynamic URL
+        # will satisfy preconditions for subsequent tool calls.
+        if tool.name in ('ask_human', 'ask_human_cli', 'ai_exec', 'ai_eval', 'get_url'):
+            continue
+        
+        # Check if all preconditions are satisfied
+        # Use 'pre' attribute (not 'preconditions') to match CFG validation
+        pre = getattr(tool, 'pre', None) or {}
+        if not pre:
+            # No preconditions - always callable
+            logger.debug(f"  {tool.name}: NO PRECONDITIONS (always callable)")
+            callable_tools.append(tool.name)
+            continue
+        
+        # Check each precondition
+        all_satisfied = True
+        for key, pattern in pre.items():
+            state_value = current_state.get(key)
+            matches = matches_pattern(state_value, pattern, {})
+            logger.debug(f"  {tool.name}: precondition {key}={pattern}, state has {key}={state_value}, matches={matches}")
+            if not matches:
+                all_satisfied = False
+                break
+        
+        if all_satisfied:
+            logger.debug(f"  {tool.name}: ALL PRECONDITIONS SATISFIED")
+            callable_tools.append(tool.name)
+    
+    logger.debug(f"Callable tools result: {callable_tools}")
+    return callable_tools
+
+
+def enhance_validation_error(
+    error_msg: str,
+    current_state: Dict[str, Any],
+    tools: List[Any],
+    has_ask_human: bool = False
+) -> str:
+    """
+    Enhance validation error with suggestions for which tools to call.
+    
+    Args:
+        error_msg: Original validation error message
+        current_state: Current abstract state
+        tools: List of tool objects (Agent.tools)
+        has_ask_human: Whether ask_human tool is available
+        
+    Returns:
+        Enhanced error message with suggestions
+    """
+    # Find tools that can be called from current state
+    callable_tools = find_callable_tools(current_state, tools)
+    
+    # Build suggestion
+    if callable_tools:
+        tools_str = ", ".join(callable_tools)
+        if has_ask_human:
+            suggestion = f"Try calling {tools_str}, ask_human, or ai_exec first"
+        else:
+            suggestion = f"Try calling {tools_str} or ai_exec first"
+    else:
+        # No tools satisfy preconditions - ONLY suggest ask_human/ai_exec
+        # Do NOT list tools that don't match preconditions
+        if has_ask_human:
+            suggestion = "No tool's precondition satisfies the current state. Use ask_human or ai_exec"
+        else:
+            suggestion = "No tool's precondition satisfies the current state. Use ai_exec"
+    
+    # Debug: log what we found
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"Callable tools from state {current_state}: {callable_tools}")
+    
+    return f"{error_msg}. {suggestion}"
+
+
 def check_tool_ordering(
     blocks: Dict[int, BasicBlock],
     start_block: BasicBlock,
@@ -81,6 +190,8 @@ def check_tool_ordering(
     other tools to be called first (to get valid input values), those tools
     have been called earlier in the execution path.
     
+    Recursively validates tool ordering inside user-defined functions.
+    
     Args:
         blocks: Dictionary of basic blocks
         start_block: Starting block
@@ -90,11 +201,26 @@ def check_tool_ordering(
     Returns:
         Tuple of (is_valid, error_message)
     """
+    # Build mapping from function names to their body entry blocks
+    func_name_to_body_block: Dict[str, int] = {}
+    for bid, block in blocks.items():
+        if block.stmts:
+            func_idx = 0
+            for stmt in block.stmts:
+                if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # Each function's body is the corresponding successor in block.next
+                    if func_idx < len(block.next):
+                        func_name_to_body_block[stmt.name] = block.next[func_idx]
+                        func_idx += 1
+    
     # Track paths we've explored (block_id -> visit_count)
     visit_counts: Dict[int, int] = {}
     max_loop_iterations = 2
+    # Sentinel value to indicate state is unknown (after ai_exec/ask_human)
+    # This is different from empty state {} which means "no state has been set yet"
+    STATE_UNKNOWN = object()
     
-    def traverse(block: BasicBlock, state: Dict[str, Any], path: List[str], tools_called: Set[str]) -> Tuple[bool, Optional[str]]:
+    def traverse(block: BasicBlock, state: Dict[str, Any], path: List[str], tools_called: Set[str], state_is_unknown: bool = False) -> Tuple[bool, Optional[str]]:
         """Recursively traverse CFG and validate tool ordering."""
         # Prevent infinite loops
         visit_counts[block.bid] = visit_counts.get(block.bid, 0) + 1
@@ -103,10 +229,32 @@ def check_tool_ordering(
         
         # Check tool calls in this block
         for func_name, call_node, comp_depth in block.calls:
-            # Special handling for ai_exec - resets state
-            if func_name == "ai_exec":
-                state = {}  # Reset state after ai_exec
-                path.append(f"ai_exec(...) [state reset]")
+            # Special handling for ai_exec and ask_human variants - resets state
+            if func_name in ("ai_exec", "ask_human", "ask_human_cli"):
+                # After an AI-assisted subtask or a human-in-the-loop interaction,
+                # the abstract state is effectively reset because inputs/assumptions
+                # may change. Allow subsequent tools to run without prior preconditions.
+                state = {}  # Reset state after ai_exec/ask_human
+                state_is_unknown = True  # Mark that we don't know the state anymore
+                path.append(f"{func_name}(... ) [state reset]")
+                continue
+            
+            # Check if this is a user-defined function that needs validation
+            if func_name in func_name_to_body_block:
+                # Recursively validate the user-defined function's body
+                func_body_bid = func_name_to_body_block[func_name]
+                func_body_block = blocks.get(func_body_bid)
+                if func_body_block:
+                    # Validate the function body with current state and tools_called
+                    # Pass the ACTUAL state and tools_called (not copies) so that
+                    # tool calls inside the function update the outer scope's state
+                    func_path = path + [f"{func_name}() [entering]"]
+                    # Note: We pass state and tools_called directly (not copies) because
+                    # tools inside the function modify the global STATE, so changes should propagate
+                    valid, error = traverse(func_body_block, state, func_path, tools_called, state_is_unknown)
+                    if not valid:
+                        return False, error
+                path.append(f"{func_name}() [user-defined]")
                 continue
             
             # Check if this is a known tool
@@ -165,8 +313,10 @@ def check_tool_ordering(
                             return False, error_msg
             
             # Check preconditions
+            # SPECIAL CASE: If state_is_unknown (after ask_human/ai_exec), skip precondition checks
+            # because the state is unknown (wildcard) - human could have changed anything
             pre = tool.get('pre', {})
-            if pre:
+            if pre and not state_is_unknown:  # Check preconditions unless state is unknown
                 for key, pattern in pre.items():
                     if not matches_pattern(state.get(key), pattern, params):
                         error_msg = (
@@ -193,6 +343,10 @@ def check_tool_ordering(
                         state[key] = pattern
                     # pattern == "*" means leave as is (any non-null value)
             
+            # After a tool sets postconditions, we know the state again
+            if post:
+                state_is_unknown = False
+            
             # Add to path and tools_called tracking
             path.append(func_name)
             tools_called.add(func_name)
@@ -209,14 +363,14 @@ def check_tool_ordering(
             next_path = path.copy()
             next_tools_called = tools_called.copy()
             
-            valid, error = traverse(next_block, next_state, next_path, next_tools_called)
+            valid, error = traverse(next_block, next_state, next_path, next_tools_called, state_is_unknown)
             if not valid:
                 return False, error
         
         return True, None
     
-    # Start traversal with empty tools_called set
-    valid, error = traverse(start_block, deepcopy(initial_state), [], set())
+    # Start traversal with empty tools_called set, state is NOT unknown initially
+    valid, error = traverse(start_block, deepcopy(initial_state), [], set(), state_is_unknown=False)
     
     # Reset visit counts
     visit_counts.clear()
@@ -459,13 +613,24 @@ def check_missing_imports(tree: ast.AST) -> Optional[str]:
             if node.module:
                 imported_modules.add(node.module.split('.')[0])
     
-    # Common stdlib modules that are often used without importing
-    COMMON_MODULES = {
-        're', 'json', 'os', 'sys', 'math', 'random', 'datetime', 'time',
-        'pathlib', 'collections', 'itertools', 'functools', 'operator',
-        'string', 'decimal', 'copy', 'pickle', 'sqlite3', 'csv',
-        'logging', 'warnings', 'traceback', 'inspect', 'gc', 'weakref'
+    # Modules automatically provided by the executor namespace (from coderun.py)
+    # These are imported in create_python_executor and don't need import statements
+    EXECUTOR_PROVIDED = {
+        're', 'json', 'asyncio', 'math', 'statistics', 'typing'
     }
+    
+    # Common Python stdlib modules (lenient - don't flag these)
+    COMMON_STDLIB = {
+        'os', 'sys', 'random', 'datetime', 'time', 'copy', 'functools',
+        'pathlib', 'collections', 'itertools', 'operator', 'string', 
+        'decimal', 'pickle', 'sqlite3', 'csv', 'logging', 'warnings',
+        'traceback', 'inspect', 'gc', 'weakref', 'urllib', 'http',
+        'tempfile', 'shutil', 'glob', 'fnmatch', 'gzip', 'zipfile',
+        'hashlib', 'hmac', 'secrets', 'uuid', 'base64', 'binascii'
+    }
+    
+    # All modules we're lenient about (executor-provided + common stdlib)
+    ALLOWED_WITHOUT_IMPORT = EXECUTOR_PROVIDED | COMMON_STDLIB
     
     # Find attribute access on potential module names
     for node in ast.walk(tree):
@@ -473,8 +638,22 @@ def check_missing_imports(tree: ast.AST) -> Optional[str]:
             # Check if accessing attribute on a Name node (e.g., re.search)
             if isinstance(node.value, ast.Name):
                 module_name = node.value.id
-                if module_name in COMMON_MODULES and module_name not in imported_modules:
+                
+                # Heuristic: skip if it looks like a variable name (snake_case with multiple underscores)
+                # Module names are typically lowercase without underscores (re, json, os)
+                # or single-word (math, sys, etc.)
+                if '_' in module_name:
+                    # Skip - likely a variable like restaurants_result, filter_result, etc.
+                    continue
+                
+                # Only flag if:
+                # 1. Not in allowed list (executor-provided or stdlib)
+                # 2. Not explicitly imported
+                # This catches things like pandas.DataFrame, requests.get, etc.
+                if module_name not in ALLOWED_WITHOUT_IMPORT and module_name not in imported_modules:
                     return f"Missing import: '{module_name}' is used but not imported (found '{module_name}.{node.attr}')"
+
+
     
     return None
 
@@ -490,10 +669,13 @@ def check_code_candidate(
     
     Performs:
     1. Syntax validation
-    2. Missing import detection
+    2. Forbidden STATE.update detection
     3. Optional basedpyright type checking (if definition_code provided)
     4. CFG construction
     5. Tool ordering validation via CFG traversal with precondition/postcondition checking
+    
+    Note: Import checking is NOT performed because the executor provides common modules
+    (re, json, asyncio, math, statistics, typing) in its namespace automatically.
     
     Args:
         code: Generated Python code
@@ -510,17 +692,21 @@ def check_code_candidate(
     except SyntaxError as e:
         return False, f"Syntax error at line {e.lineno}: {e.msg}"
     
-    # 2. Check for missing imports (common stdlib modules)
-    # This catches cases like using 're.search' without 'import re'
-    # BUT: Only check the generated code if we don't have definition_code
-    # If we have definition_code, the missing import check happens during type checking
-    # against the full code (definition + generated)
-    if definition_code is None:
-        missing_import_error = check_missing_imports(tree)
-        if missing_import_error:
-            return False, missing_import_error
+    # 2. Check for forbidden STATE.update calls
+    # Users should not manually update STATE - tools do it automatically
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            # Check for STATE.update(...) pattern
+            if isinstance(node.func, ast.Attribute):
+                if isinstance(node.func.value, ast.Name) and node.func.value.id == 'STATE' and node.func.attr == 'update':
+                    return False, "Do not update STATE in your code, instead you may call the given functions which update STATE automatically"
     
-    # 3. Optional basedpyright type checking if we have definition code
+    # 3. Missing import check DISABLED
+    # The executor provides common modules (re, json, asyncio, math, statistics, typing)
+    # in its namespace, so code doesn't need explicit imports for these.
+    # Type checking below will catch any actual missing imports.
+    
+    # 4. Optional basedpyright type checking if we have definition code
     if definition_code is not None:
         # Wrap user code in async function to allow await statements
         # Use Any return type since generated code may return different types
@@ -566,7 +752,7 @@ async def _user_generated_code() -> Any:
                 
                 tools_by_name[tool.name] = tool_info
             
-            # 3. Validate tool ordering
+            # 5. Validate tool ordering
             if initial_state is None:
                 initial_state = {}
             

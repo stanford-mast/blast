@@ -373,6 +373,64 @@ def flatten_main_block(code: str) -> Tuple[str, bool]:
         return code, False
 
 
+def strip_tool_redefinitions(code: str, tool_names: Set[str]) -> Tuple[str, bool]:
+    """
+    Remove function definitions that shadow SMCP tool names.
+    
+    LLMs sometimes redefine the tools with their own implementations using ai_exec.
+    This causes issues with cost estimation and validation since we can't analyze
+    the internal implementation. This function strips those redefinitions so the
+    actual tool calls are analyzed instead.
+    
+    Args:
+        code: Python code to transform
+        tool_names: Set of tool function names that should not be redefined
+        
+    Returns:
+        Tuple of (transformed_code, was_modified)
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, False
+    
+    modified = False
+    
+    class ToolRedefinitionStripper(ast.NodeTransformer):
+        def __init__(self):
+            self.modified = False
+            self.stripped_functions: List[str] = []
+        
+        def visit_Module(self, node):
+            """Remove function definitions at module level that shadow tools"""
+            new_body = []
+            for stmt in node.body:
+                if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if stmt.name in tool_names:
+                        self.modified = True
+                        self.stripped_functions.append(stmt.name)
+                        logger.info(f"Stripped tool redefinition: {stmt.name}")
+                        continue  # Skip this function definition
+                new_body.append(stmt)
+            node.body = new_body
+            return self.generic_visit(node)
+        
+        def visit_ClassDef(self, node):
+            """Skip class definitions (Pydantic models are OK)"""
+            return node  # Keep classes, don't recurse into them
+    
+    stripper = ToolRedefinitionStripper()
+    new_tree = stripper.visit(tree)
+    
+    if stripper.modified:
+        ast.fix_missing_locations(new_tree)
+        new_code = ast.unparse(new_tree)
+        logger.info(f"Stripped {len(stripper.stripped_functions)} tool redefinitions: {stripper.stripped_functions}")
+        return new_code, True
+    else:
+        return code, False
+
+
 def fix_tool_ordering(code: str, tool_info: dict) -> Tuple[str, bool]:
     """
     TODO: Fix broken tool ordering by inserting missing tool calls.
@@ -415,11 +473,13 @@ def apply_code_fixes(
     """
     # Build set of async function names from tools
     async_functions = {'ai_eval', 'ai_exec', 'goto', 'get_url'}
+    tool_names = set()
     
     if tools:
         from .models import ToolExecutorType
         for tool in tools:
             async_functions.add(tool.name)
+            tool_names.add(tool.name)
     
     original_code = code
     total_modified = False
@@ -428,6 +488,12 @@ def apply_code_fixes(
     # Do this FIRST so subsequent passes can process the flattened code
     code, modified = flatten_main_block(code)
     total_modified = total_modified or modified
+    
+    # Pass 0.5: Strip function definitions that shadow SMCP tool names
+    # LLMs sometimes redefine tools with their own ai_exec implementations
+    if tool_names:
+        code, modified = strip_tool_redefinitions(code, tool_names)
+        total_modified = total_modified or modified
     
     # Pass 1: Transform ai_eval f-strings to explicit variable passing
     code, modified = transform_ai_eval_fstrings(code)
@@ -445,4 +511,4 @@ def apply_code_fixes(
     return code, total_modified
 
 
-__all__ = ["fix_missing_awaits", "fix_tool_ordering", "transform_ai_eval_fstrings", "flatten_main_block", "apply_code_fixes"]
+__all__ = ["fix_missing_awaits", "fix_tool_ordering", "transform_ai_eval_fstrings", "flatten_main_block", "strip_tool_redefinitions", "apply_code_fixes"]

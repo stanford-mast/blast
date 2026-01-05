@@ -88,3 +88,6 @@ cdp-use/
 
 smcp-registries/
 blast-profiles/
+
+uv.lock
+nohup.out

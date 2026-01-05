@@ -8,6 +8,7 @@ Does NOT provide sandboxing - only use with trusted code generation.
 import ast
 import asyncio
 import logging
+import traceback
 from typing import Any, Dict, Callable, Optional
 from dataclasses import dataclass
 
@@ -127,11 +128,16 @@ class LocalPythonExecutor:
             result_locals.pop('__exec_wrapper', None)
             self.state.update(result_locals)
             
-            # Find the result - use last assigned variable
-            result = None
-            if result_locals:
-                # Get last value (dict preserves insertion order in Python 3.7+)
-                result = list(result_locals.values())[-1]
+            # Find the result - prefer 'result' variable if it exists, otherwise use last expression
+            # This ensures that code like `result = await ai_eval(...)` uses the ai_eval output,
+            # not whatever expression was evaluated last
+            if 'result' in self.state:
+                result = self.state['result']
+            else:
+                result = None
+                if result_locals:
+                    # Get last value (dict preserves insertion order in Python 3.7+)
+                    result = list(result_locals.values())[-1]
             
             logs = "\n".join(self.print_buffer)
             
@@ -149,7 +155,9 @@ class LocalPythonExecutor:
         except Exception as e:
             logs = "\n".join(self.print_buffer)
             error_msg = f"{type(e).__name__}: {e}"
+            tb_str = traceback.format_exc()
             logger.error(f"✗ CODE EXECUTION ERROR: {error_msg}")
+            logger.error(f"Traceback:\n{tb_str}")
             logger.error(f"Logs:\n{logs}")
             logger.error(f"{'='*80}")
             

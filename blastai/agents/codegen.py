@@ -15,8 +15,8 @@ from typing import Optional, List, Dict, Any, Union
 from browser_use.llm.base import BaseChatModel
 from browser_use.llm.messages import SystemMessage, AssistantMessage, UserMessage, BaseMessage
 
-from .models import ToolExecutorType, SMCPTool
-from .codecheck import check_code_candidate
+from .models import ToolExecutorType, SMCPTool, SMCPToolType
+from .codecheck import check_code_candidate, enhance_validation_error
 from .codecost import compute_code_cost
 from .schema_utils import snake_to_pascal, json_type_to_python, generate_nested_pydantic_classes
 from .codefix import apply_code_fixes
@@ -52,7 +52,7 @@ result = f"It is {x.items[0].field1} and {x.items[0].field2}" if x.items else "<
 E3: result with ai_eval
 ```python
 x = await tool_b(param="value")
-response = await ai_eval("Summary of {data}", data=x.content)
+response = await ai_eval("Human-readable summary of {data}", data=x.content)
 ```
 
 E4: multiple tool calls with ai_eval for matching user terms to options
@@ -72,12 +72,28 @@ x = await tool_e(123)
 results = [await tool_f(item_name=item.name) for item in x.items if item.value > 3]
 result = await ai_eval("Summary of {results}", results=results)
 ```
+
+{COMMENTED_OUT_AI_EXEC_EXAMPLE}
 """
 
-RULES = """
-- Do not generate comments
-- If using a user-provided term (e.g. a name to filter by/search for/pass to a tool), use ai_eval to determine which option it most closely matches.
+# TODO: Uncomment for production. Commented out for benchmarking to prevent LLMs from using ai_exec.
+COMMENTED_OUT_AI_EXEC_EXAMPLE = """
+E6: ai_exec for sub-tasks with optional structured output
+```python
+# Without output_schema (returns dict with .items property)
+x = await ai_exec("Complete the login form")
+
+# With output_schema (provide JSON schema, NOT a Python dict)
+schema = {"type": "object", "properties": {"success": {"type": "boolean"}}, "required": ["success"]}
+x = await ai_exec("Login to the application", output_schema=schema)
+if x.get("success"):
+    result = "Login successful"
+```
 """
+
+RULES_BASE = """# - Do not generate comments
+# - If using a user-provided term (e.g. a name to filter by/search for/pass to a tool), use ai_eval to determine which option it most closely matches.
+# - When calling ai_eval, always specify (1) the desired output format, default: "Markdown/text" unless task says a specific format (2) how descriptive, default: if evaluating intermediate output: "only", if evaluating final output: "very descriptive using full sentences"."""
 
 @dataclass
 class CodeCandidate:
@@ -109,12 +125,15 @@ class CodeGenerator:
     
     Includes tool definitions as executable Python code in the generation,
     using XML-based prompting similar to derive_synthesis_agent.
+    
+    Supports multiple LLM instances for parallel generation with different models.
     """
     
     def __init__(
         self,
         agent,
-        llm: BaseChatModel,
+        llm: Optional[BaseChatModel] = None,
+        llms: Optional[List[BaseChatModel]] = None,
         state_aware: bool = False,
         num_candidates: int = 1,
         max_iterations: int = 3,
@@ -129,9 +148,10 @@ class CodeGenerator:
         
         Args:
             agent: Agent instance with tools
-            llm: LLM for code generation
+            llm: Single LLM for code generation (deprecated - use llms instead)
+            llms: List of LLM instances for parallel generation. If None, uses single llm.
             state_aware: Whether to include state preconditions/postconditions
-            num_candidates: Number of candidates to generate in parallel (default 1)
+            num_candidates: Number of candidates when using single llm (ignored if llms provided)
             max_iterations: Maximum iterations per candidate generation (default 3)
             accept_cost_threshold: If set, immediately accept candidate below this cost (default None)
             min_candidates_for_comparison: Minimum candidates before comparison (default 1)
@@ -140,15 +160,25 @@ class CodeGenerator:
             debug_print_prompt: If True, print the full codegen prompt for first iteration (default False)
         """
         self.agent = agent
-        self.llm = llm
         self.state_aware = state_aware
-        self.num_candidates = num_candidates
         self.max_iterations = max_iterations
         self.accept_cost_threshold = accept_cost_threshold
         self.min_candidates_for_comparison = min_candidates_for_comparison
         self.compare_cost_threshold = compare_cost_threshold
         self.timezone = timezone
         self.debug_print_prompt = debug_print_prompt
+        
+        # Configure LLMs for parallel generation
+        if llms:
+            # Use provided list of LLMs (each may be different model)
+            self.llms = llms
+            self.num_candidates = len(llms)
+        elif llm:
+            # Use single LLM repeated num_candidates times (backwards compatible)
+            self.llms = [llm] * num_candidates
+            self.num_candidates = num_candidates
+        else:
+            raise ValueError("Must provide either llm or llms parameter")
         
         # Cache for definition code CFG (built once, reused across iterations)
         self._definition_code_cache: Optional[str] = None
@@ -211,6 +241,10 @@ class CodeGenerator:
                 smcp_tool = tool
                 assert isinstance(smcp_tool, SMCPTool)
                 
+                # Skip OBSERVE tools - they're called automatically, not by user code
+                if smcp_tool.type == SMCPToolType.OBSERVE:
+                    continue
+                
                 # Generate Pydantic model for input parameters if they exist
                 has_params = smcp_tool.input_schema and smcp_tool.input_schema.get("properties")
                 if has_params:
@@ -252,13 +286,26 @@ class CodeGenerator:
                     properties = smcp_tool.input_schema["properties"]
                     required = smcp_tool.input_schema.get("required", [])
                     params = []
-                    for param_name, param_schema in properties.items():
-                        param_type = json_type_to_python(param_schema.get("type", "str"))
-                        is_required = param_name in required
-                        if is_required:
+                    # Ensure required parameters come first in signature to avoid
+                    # "non-default argument follows default argument" syntax errors.
+                    # To make this robust against arbitrary ordering in the schema
+                    # and missing/None `required`, iterate properties in their
+                    # defined order and partition them into required vs optional.
+                    properties_items = list(properties.items())
+                    required_set = set(required or [])
+
+                    # First, add required params in the properties order
+                    for param_name, param_schema in properties_items:
+                        if param_name in required_set:
+                            param_type = json_type_to_python(param_schema.get("type", "str"))
                             params.append(f"{param_name}: {param_type}")
-                        else:
-                            params.append(f"{param_name}: Optional[{param_type}] = None")
+
+                    # Then add optional params (with defaults) in the properties order
+                    for param_name, param_schema in properties_items:
+                        if param_name in required_set:
+                            continue
+                        param_type = json_type_to_python(param_schema.get("type", "str"))
+                        params.append(f"{param_name}: Optional[{param_type}] = None")
                     
                     params_str = ", ".join(params)
                     lines.append(f"async def {smcp_tool.name}({params_str}) -> {return_type}:")
@@ -333,11 +380,18 @@ class CodeGenerator:
                     lines.append('async def remove_smcp_tool(name: str) -> Dict[str, Any]:')
                 elif tool.name == "list_smcp_tools":
                     lines.append('async def list_smcp_tools() -> Dict[str, Any]:')
+                elif tool.name in ("ask_human", "ask_human_cli"):
+                    lines.append(f'async def {tool.name}(question: str) -> str:')
                 else:
                     lines.append(f'async def {tool.name}(**kwargs) -> Dict[str, Any]:')
                 
                 lines.append(f'    """')
-                lines.append(f'    {tool.description}')
+                # Include the tool's description and explicit note about STATE handling
+                if tool.name in ("ask_human", "ask_human_cli"):
+                    # make it clear to generated code authors that STATE is updated by the runtime
+                    lines.append(f'    {tool.description} Updates STATE automatically.')
+                else:
+                    lines.append(f'    {tool.description}')
                 lines.append(f'    """')
                 lines.append(f'    # ... implementation omitted ...')
                 lines.append(f'    pass')
@@ -348,20 +402,29 @@ class CodeGenerator:
         lines.append('    """Get the current URL from the browser."""')
         lines.append('    raise NotImplementedError("Runtime implementation")')
         lines.append('')
-        lines.append('async def goto(url: str) -> Dict[str, Any]:')
-        lines.append('    """')
-        lines.append('    Navigate to a URL and update STATE via matching observe tool.')
-        lines.append('    Handles login/redirect detection automatically.')
-        lines.append('    """')
-        lines.append('    raise NotImplementedError("Runtime implementation")')
-        lines.append('')
-        lines.append('async def ai_exec(subtask: str, output_schema: Optional[Dict[str, Any]] = None) -> Any:')
-        lines.append('    """')
-        lines.append('    Execute an AI agent to complete a given subtask.')
-        lines.append('    Optionally provide output_schema for structured output.')
-        lines.append('    """')
-        lines.append('    raise NotImplementedError("Runtime implementation")')
-        lines.append('')
+        # NOTE: goto(url) is intentionally NOT exposed to codegen.
+        # Using goto(url) bypasses state machine validation since we can't statically verify
+        # that the dynamic URL will satisfy the preconditions for subsequent tool calls.
+        # LLMs should use the SMCP navigation tools (e.g., goto_restaurants_list) which have
+        # well-defined pre/post conditions that can be validated.
+        
+        # TODO: Uncomment ai_exec for production use. Currently commented out for benchmarking
+        # to avoid LLMs using it instead of proper SMCP navigation tools.
+        # lines.append('async def ai_exec(subtask: str, output_schema: Optional[Dict[str, Any]] = None) -> Any:')
+        # lines.append('    """')
+        # lines.append('    Execute an AI agent to complete a given subtask.')
+        # lines.append('    ')
+        # lines.append('    Args:')
+        # lines.append('        subtask: Description of the subtask for the AI agent to complete')
+        # lines.append('        output_schema: Optional JSON schema for structured output.')
+        # lines.append('                      If omitted, returns string result.')
+        # lines.append('    ')
+        # lines.append('    Returns:')
+        # lines.append('        - Pydantic model (if output_schema provided)')
+        # lines.append('        - String (if output_schema omitted)')
+        # lines.append('    """')
+        # lines.append('    raise NotImplementedError("Runtime implementation")')
+        # lines.append('')
         lines.append('async def ai_eval(expr: str, **kwargs) -> str:')
         lines.append('    """')
         lines.append('    Evaluate an expression by asking AI.')
@@ -370,6 +433,13 @@ class CodeGenerator:
         lines.append('    """')
         lines.append('    raise NotImplementedError("Runtime implementation")')
         lines.append('')
+        
+        # NOTE: The definition code does NOT include initial STATE or URL assertions
+        # Those are added separately in the prompt generation (see _generate_candidate)
+        # This keeps the definition code reusable across different initial states
+        
+        # NOTE: core tool stubs, including ask_human, are generated above in the core-tool loop.
+        # Do not add duplicate ask_human stubs here.
         
         return '\n'.join(lines)
     
@@ -507,6 +577,65 @@ class CodeGenerator:
             return fallback if fallback else None
         return None
     
+    def _generate_rules(self, initial_state: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Generate dynamic RULES based on current state.
+        
+        Checks if any tools' preconditions are satisfied by the current state.
+        If not, prompts to use ai_exec or ask_human.
+        
+        Args:
+            initial_state: Current abstract state
+            
+        Returns:
+            Formatted RULES string
+        """
+        rules = [RULES_BASE]
+        
+        # Check if we have state-aware tools and a current state
+        if self.state_aware and initial_state:
+            from .codecheck import find_callable_tools
+            
+            # Find which tools are currently callable
+            callable_tools = find_callable_tools(initial_state, self.agent.tools)
+            
+            # Check if ask_human is available
+            has_ask_human = any(
+                hasattr(t, 'name') and t.name in ('ask_human', 'ask_human_cli')
+                for t in self.agent.tools
+            )
+            
+            # If no tools are callable, mandate use of ai_exec/ask_human
+            if not callable_tools:
+                fallback_options = []
+                fallback_options.append("ai_exec")
+                if has_ask_human:
+                    fallback_options.append("ask_human")
+                rules.append(f"# - You must use {' or '.join(fallback_options)} given no tool's precondition satisfies the current state.")
+            else:
+                # Tools are available, so standard fallback rule
+                fallback_options = []
+                if has_ask_human:
+                    fallback_options.append("ask_human")
+                fallback_options.append("ai_exec")
+                if fallback_options:
+                    rules.append(f"# - Use {' or '.join(fallback_options)} if no tool's precondition is satisfied.")
+        else:
+            # Non-state-aware or no initial state - use standard rule
+            has_ask_human = any(
+                hasattr(t, 'name') and t.name in ('ask_human', 'ask_human_cli')
+                for t in self.agent.tools
+            )
+            fallback_options = []
+            if has_ask_human:
+                fallback_options.append("ask_human")
+            fallback_options.append("ai_exec")
+            if fallback_options:
+                rules.append(f"# - Use {' or '.join(fallback_options)} if no tool's precondition is satisfied.")
+        rules.append("# - Do not access or modify STATE directly. Do not call get_url()")
+        
+        return '\n'.join(rules)
+    
     async def generate_code(
         self,
         task: str,
@@ -541,8 +670,8 @@ class CodeGenerator:
         
         # Launch parallel candidate generation tasks
         tasks = [
-            self._generate_candidate(task, history, error, initial_state, current_url)
-            for _ in range(self.num_candidates)
+            self._generate_candidate(task, history, error, initial_state, current_url, candidate_num=i)
+            for i in range(self.num_candidates)
         ]
         
         # Collect valid candidates as they complete
@@ -553,9 +682,16 @@ class CodeGenerator:
             candidate = await completed_task
             
             if candidate and candidate.is_valid:
-                # Check for immediate acceptance
+                # Check for immediate acceptance based on cost threshold
                 if self.accept_cost_threshold is not None and candidate.rank <= self.accept_cost_threshold:
                     logger.info(f"Immediately accepting candidate with cost {candidate.rank} (below threshold {self.accept_cost_threshold})")
+                    logger.info(f"✓ SELECTED CODE TO EXECUTE:\n```python\n{candidate.code}\n```\n{'='*80}")
+                    return candidate.code
+                
+                # If no cost threshold configured, use first valid candidate (fast convergence)
+                if self.accept_cost_threshold is None and self.compare_cost_threshold is None:
+                    logger.info(f"Using first valid candidate (cost: {candidate.rank})")
+                    logger.info(f"✓ SELECTED CODE TO EXECUTE:\n```python\n{candidate.code}\n```\n{'='*80}")
                     return candidate.code
                 
                 valid_candidates.append(candidate)
@@ -567,6 +703,7 @@ class CodeGenerator:
                     if len(below_threshold) >= self.min_candidates_for_comparison:
                         logger.info(f"Early comparison: {len(below_threshold)} candidates below threshold {self.compare_cost_threshold}")
                         best = min(below_threshold, key=lambda c: c.rank)
+                        logger.info(f"✓ SELECTED CODE TO EXECUTE (cost: {best.rank}):\n```python\n{best.code}\n```\n{'='*80}")
                         return best.code
         
         # All candidates completed - select best
@@ -576,6 +713,7 @@ class CodeGenerator:
         
         best = min(valid_candidates, key=lambda c: c.rank)
         logger.info(f"Selected best candidate with cost {best.rank} from {len(valid_candidates)} valid candidates")
+        logger.info(f"✓ SELECTED CODE TO EXECUTE:\n```python\n{best.code}\n```\n{'='*80}")
         return best.code
 
     # Public wrapper to expose a single candidate with iteration metadata
@@ -602,7 +740,8 @@ class CodeGenerator:
         history: List[BaseMessage],
         initial_error: Optional[str] = None,
         initial_state: Optional[Dict[str, Any]] = None,
-        current_url: Optional[str] = None
+        current_url: Optional[str] = None,
+        candidate_num: int = 0
     ) -> Optional[CodeCandidate]:
         """
         Generate a single code candidate with iterative refinement.
@@ -617,12 +756,13 @@ class CodeGenerator:
         Args:
             task: Task description
             history: Conversation history from AgentExecutor (previous code execution attempts)
-            initial_error: Optional error from previous attempt
+            initial_error: Optional error from previous attempt to retry
             initial_state: Optional initial STATE values to include in generated code
             current_url: Optional current URL to provide context to code generator
+            candidate_num: Candidate number for logging (0 = log input, others = skip input logging)
         
         Returns:
-            CodeCandidate with detailed timing breakdown
+            CodeCandidate with code, validity, cost, and timing metrics
         """
         candidate_start_time = time.time()
         total_llm_time = 0.0
@@ -673,47 +813,69 @@ If an error is reported, fix the previously generated code accordingly.
             # Build prompt with XML tags
             prompt_parts = []
             
-            # Add current date/time context at the top
-            from datetime import datetime
-            import zoneinfo
-            try:
-                tz = zoneinfo.ZoneInfo(self.timezone)
-                now = datetime.now(tz)
-                # Format: "Monday, November 4, 2025 3:30:00 PM PST"
-                day_of_week = now.strftime("%A")
-                date_part = now.strftime("%B %d, %Y")
-                time_part = now.strftime("%I:%M:%S %p")  # 12-hour format with AM/PM
-                tz_abbr = now.strftime("%Z")
-                timestamp_str = f"{day_of_week}, {date_part} {time_part} {tz_abbr}"
-                prompt_parts.append(f"Now is {timestamp_str}.")
-                prompt_parts.append("")
-            except Exception as e:
-                logger.warning(f"Failed to get current time for timezone {self.timezone}: {e}")
-            
             if error:
                 prompt_parts.append(error)
             else:
+                # Compute current date/time FIRST (NOT prefixed with #)
+                from datetime import datetime
+                import zoneinfo
+                timestamp_str = None
+                try:
+                    tz = zoneinfo.ZoneInfo(self.timezone)
+                    now = datetime.now(tz)
+                    # Format: "Monday, November 4, 2025 3:30:00 PM PST"
+                    day_of_week = now.strftime("%A")
+                    date_part = now.strftime("%B %d, %Y")
+                    time_part = now.strftime("%I:%M:%S %p")  # 12-hour format with AM/PM
+                    tz_abbr = now.strftime("%Z")
+                    timestamp_str = f"{day_of_week}, {date_part} {time_part} {tz_abbr}"
+                except Exception as e:
+                    logger.warning(f"Failed to get current time for timezone {self.timezone}: {e}")
+                
+                # TIMESTAMP AT TOP (before code block, NO # prefix)
+                if timestamp_str:
+                    prompt_parts.append(f"Now is {timestamp_str}")
+                    prompt_parts.append("")
+                
+                # Add system prompt (agent description) ABOVE code block (NOT inside it)
+                # The agent.description comes from build_complete_system_prompt
+                # Do NOT comment it out - it's the actual system prompt
+                if self.agent.description:
+                    prompt_parts.append(self.agent.description)
+                    prompt_parts.append("")
+                
                 prompt_parts.append("```python")
                 prompt_parts.append(definition_code)
                 prompt_parts.append("")
                 
                 # Initialize STATE with initial values if provided (only if state_aware)
                 if self.state_aware and initial_state:
-                    prompt_parts.append("# Initialize STATE with current values")
+                    prompt_parts.append("# INITIAL STATE. DO NOT ACCESS OR MODIFY.")
                     state_init = ", ".join([f'"{k}": {repr(v)}' for k, v in initial_state.items()])
                     prompt_parts.append(f"STATE.update({{{state_init}}})")
                     prompt_parts.append("")
                 
-                # Show that we've already navigated to current URL
+                # Show that we've already navigated to current URL using an assertion
+                # NOTE: We use get_url() assertion instead of goto() to avoid exposing
+                # the raw goto function to the LLM, which would generate unverifiable code
                 if current_url:
-                    prompt_parts.append(f'await goto("{current_url}")')
+                    prompt_parts.append(f'# Already on the page:')
+                    prompt_parts.append(f'assert await get_url() == "{current_url}"')
                     prompt_parts.append("")
                 
-                prompt_parts.append("# RULES")
-                prompt_parts.append(RULES)
+                prompt_parts.append("# RULES:")
+                # Generate dynamic RULES based on current state
+                rules = self._generate_rules(initial_state)
+                prompt_parts.append(rules)
+                
+                # Format the user task - each line on separate line, commented
                 prompt_parts.append("")
-                prompt_parts.append("# TASK: " + task)
-                prompt_parts.append("# YOUR CODE HERE")
+                prompt_parts.append("# TASK: Create a response for the following input from the user:")
+                for line in task.split('\n'):
+                    if line.strip():
+                        prompt_parts.append(f"# {line}")
+                prompt_parts.append("#")
+                prompt_parts.append("# RESPOND WITH ONLY YOUR CODE AFTER THIS USING ABOVE DEFINITIONS")
                 # Note: We deliberately leave the code block open - the LLM will close it
             
             prompt = '\n'.join(prompt_parts)
@@ -736,11 +898,16 @@ If an error is reported, fix the previously generated code accordingly.
             
             # Generate code
             try:
-                logger.info(f"\n{'='*80}\nCODEGEN ITERATION {iteration + 1}/{self.max_iterations}\n{'='*80}")
-                logger.info(f"LLM INPUT (last message):\n{prompt}\n{'-'*80}")
+                # Select LLM for this candidate
+                llm = self.llms[candidate_num] if candidate_num < len(self.llms) else self.llms[0]
+                
+                # Only log input for first candidate (candidate_num == 0)
+                if candidate_num == 0:
+                    logger.info(f"\n{'='*80}\nCODEGEN ITERATION {iteration + 1}/{self.max_iterations}\n{'='*80}")
+                    logger.info(f"LLM INPUT (last message):\n{prompt}\n{'-'*80}")
                 
                 # Call LLM with streaming and detailed timing
-                completion, streaming_timing = await stream_llm_call(self.llm, messages)
+                completion, streaming_timing = await stream_llm_call(llm, messages)
                 total_llm_time += streaming_timing.total_seconds
                 
                 # Convert StreamingTiming to LLMTiming for compatibility
@@ -752,12 +919,14 @@ If an error is reported, fix the previously generated code accordingly.
                 )
                 llm_timings.append(llm_timing)
                 
-                # Log with detailed timing breakdown
-                # Handle None values gracefully in format strings
-                ttft_str = f"TTFT={streaming_timing.time_to_first_token:.2f}s, " if streaming_timing.time_to_first_token is not None else ""
-                gen_time = streaming_timing.generation_seconds if streaming_timing.generation_seconds is not None else 0.0
-                speed_str = f", {streaming_timing.tokens_per_second:.1f} tok/s" if streaming_timing.tokens_per_second is not None else ""
-                logger.info(f"LLM OUTPUT (took {streaming_timing.total_seconds:.2f}s, {ttft_str}Gen={gen_time:.2f}s{speed_str}):\n{completion}\n{'-'*80}")
+                # Only log LLM output for first candidate (candidate_num == 0)
+                if candidate_num == 0:
+                    # Log with detailed timing breakdown
+                    # Handle None values gracefully in format strings
+                    ttft_str = f"TTFT={streaming_timing.time_to_first_token:.2f}s, " if streaming_timing.time_to_first_token is not None else ""
+                    gen_time = streaming_timing.generation_seconds if streaming_timing.generation_seconds is not None else 0.0
+                    speed_str = f", {streaming_timing.tokens_per_second:.1f} tok/s" if streaming_timing.tokens_per_second is not None else ""
+                    logger.info(f"LLM OUTPUT (took {streaming_timing.total_seconds:.2f}s, {ttft_str}Gen={gen_time:.2f}s{speed_str}):\n{completion}\n{'-'*80}")
                 
                 # Extract code from response
                 code = self._extract_code_from_response(completion)
@@ -785,13 +954,32 @@ If an error is reported, fix the previously generated code accordingly.
                 validation_elapsed = time.time() - validation_start
                 total_validation_time += validation_elapsed
                 
+                # Enhance validation error with suggestions if it failed
+                if not is_valid and validation_error:
+                    # Check if ask_human is available
+                    has_ask_human = any(
+                        hasattr(t, 'name') and t.name in ('ask_human', 'ask_human_cli')
+                        for t in self.agent.tools
+                    )
+                    
+                    # Enhance the error message with suggestions
+                    validation_error = enhance_validation_error(
+                        validation_error,
+                        initial_state or {},
+                        self.agent.tools,
+                        has_ask_human
+                    )
+                
                 if is_valid:
                     # Compute cost
                     cost = self._compute_candidate_cost(code)
                     total_time = time.time() - candidate_start_time
-                    logger.info(f"✓ VALID CODE GENERATED (cost: {cost}):\n```python\n{code}\n```\n{'='*80}")
-                    logger.info(f"Timing breakdown: Total={total_time:.2f}s, LLM={total_llm_time:.2f}s ({total_llm_time/total_time*100:.1f}%), Validation={total_validation_time:.2f}s ({total_validation_time/total_time*100:.1f}%), Fix={total_fix_time:.2f}s")
-                    logger.info(f"Iteration stats: {total_iterations} total, {failed_iterations} failed ({failed_iterations/total_iterations*100:.1f}% failure rate)")
+                    # Don't log the valid code here - it will be logged when selected in generate_code()
+                    # Only log timing breakdown for successful candidates
+                    if candidate_num == 0:
+                        logger.info(f"✓ VALID CODE GENERATED (cost: {cost})")
+                        logger.info(f"Timing breakdown: Total={total_time:.2f}s, LLM={total_llm_time:.2f}s ({total_llm_time/total_time*100:.1f}%), Validation={total_validation_time:.2f}s ({total_validation_time/total_time*100:.1f}%), Fix={total_fix_time:.2f}s")
+                        logger.info(f"Iteration stats: {total_iterations} total, {failed_iterations} failed ({failed_iterations/total_iterations*100:.1f}% failure rate)")
                     return CodeCandidate(
                         code=code,
                         rank=cost,
