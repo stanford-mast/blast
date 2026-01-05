@@ -923,12 +923,12 @@ def compute_summary_statistics(
 
 
 @click.command()
-@click.option('--tasks', type=click.Path(exists=True), required=True, 
+@click.option('--tasks', type=click.Path(exists=True), required=True,
               help='Path to tasks YAML file (e.g., experiments/tasks/agisdk/agisdk.yaml)')
 @click.option('--ids', type=str, required=True,
-              help='Space-separated task IDs to evaluate (e.g., "dashdish-1 gomail-3")')
-@click.option('--results', type=click.Path(), default='experiments/results/rq_results.json',
-              help='Path to save summary results JSON')
+              help='Space-separated task IDs to evaluate (e.g., "dashdish-deepresearch1 gomail-3")')
+@click.option('--results-dir', type=click.Path(), default='experiments/results',
+              help='Directory to save results (default: experiments/results)')
 @click.option('--models', type=str, default=None,
               help='Space-separated list of models to test (e.g., "gpt-5.1 gemini-2.0-flash-lite"). If not provided, tests all default models.')
 @click.option('--actual-latency/--no-actual-latency', default=False,
@@ -947,15 +947,15 @@ def compute_summary_statistics(
               help='Maximum retry iterations for code generation (default: 1, no retries)')
 @click.option('--no-overwrite', is_flag=True, default=False,
               help='Use timestamped filenames to avoid overwriting existing results')
-def main(tasks: str, ids: str, results: str, models: Optional[str], actual_latency: bool, page_load: bool, runs: int, parallel: int, print_code: bool, print_prompt: bool, max_iterations: int, no_overwrite: bool):
+def main(tasks: str, ids: str, results_dir: str, models: Optional[str], actual_latency: bool, page_load: bool, runs: int, parallel: int, print_code: bool, print_prompt: bool, max_iterations: int, no_overwrite: bool):
     """
     Evaluate code generation performance across different configurations.
-    
+
     Example:
         python experiments/evaluate_codegen.py \\
             --tasks experiments/tasks/agisdk/agisdk.yaml \\
-            --ids "dashdish-1 gomail-3" \\
-            --results experiments/results/rq_results.json \\
+            --ids "dashdish-deepresearch1 gomail-3" \\
+            --results-dir experiments/results \\
             --actual-latency \\
             --page-load
     """
@@ -1021,34 +1021,34 @@ def main(tasks: str, ids: str, results: str, models: Optional[str], actual_laten
         # Generate timestamp suffix if no_overwrite is set
         from datetime import datetime
         timestamp_suffix = f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if no_overwrite else ""
-        
+
         # Load tasks
         tasks_file = Path(tasks)
         all_tasks = await load_task_definitions(tasks_file)
-        
+
         # Filter to requested IDs
         tasks_dict = {task['id']: task for task in all_tasks if task['id'] in task_ids}
-        
+
         if len(tasks_dict) != len(task_ids):
             found_ids = set(tasks_dict.keys())
             missing_ids = set(task_ids) - found_ids
             console.print(f"[red]Warning: Missing task IDs: {missing_ids}[/]")
-        
+
         # Results directory
-        results_dir = Path("experiments/results")
-        results_dir.mkdir(parents=True, exist_ok=True)
-        
+        results_path = Path(results_dir)
+        results_path.mkdir(parents=True, exist_ok=True)
+
         # Store all results for summary
         all_results = {}
-        
+
         # Evaluate each task
         for task_id in task_ids:
             if task_id not in tasks_dict:
                 console.print(f"[red]Skipping missing task: {task_id}[/]")
                 continue
-            
+
             task_def = tasks_dict[task_id]
-            
+
             codegen_results, page_load_results = await run_evaluation_for_task(
                 task_id=task_id,
                 task_def=task_def,
@@ -1056,29 +1056,29 @@ def main(tasks: str, ids: str, results: str, models: Optional[str], actual_laten
                 num_runs=runs,
                 measure_actual_latency=actual_latency,
                 measure_page_load=page_load,
-                results_dir=results_dir,
+                results_dir=results_path,
                 parallel=parallel,
                 print_code=print_code,
                 print_prompt=print_prompt
             )
-            
+
             # Save results with optional timestamp suffix
-            save_results_to_files(task_id, codegen_results, page_load_results, results_dir, suffix=timestamp_suffix)
-            
+            save_results_to_files(task_id, codegen_results, page_load_results, results_path, suffix=timestamp_suffix)
+
             # Store for summary
             all_results[task_id] = (codegen_results, page_load_results)
-        
+
         # Compute and save summary statistics
         console.print("\n[blue]Computing summary statistics...[/]")
         summary = compute_summary_statistics(all_results)
-        
-        results_file = Path(results)
-        results_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(results_file, 'w') as f:
+
+        # Save summary to results directory
+        summary_file = results_path / f"summary{timestamp_suffix}.json"
+
+        with open(summary_file, 'w') as f:
             json.dump(summary, f, indent=2)
-        
-        console.print(f"\n[green]✓ Summary saved to:[/] {results_file}")
+
+        console.print(f"\n[green]✓ Summary saved to:[/] {summary_file}")
         
         # Print summary table
         console.print("\n[bold]Summary Results:[/]\n")

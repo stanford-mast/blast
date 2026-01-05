@@ -583,16 +583,32 @@ plt.close()
 # NOTE: This figure requires e2e_detailed.json which contains timing breakdowns.
 # The data is collected via measure_e2e_detailed.py.
 
-# Try to load e2e detailed latency data
-e2e_detailed_path = results_dir / "dashdish-deepresearch1_e2e_detailed.json"
+# Try to load e2e detailed latency data from multiple tasks and aggregate
+# Load all *_e2e_detailed.json files in results directory
+e2e_files = list(results_dir.glob("*_e2e_detailed.json"))
 
-if e2e_detailed_path.exists():
+if e2e_files:
     print(f"\nGenerating Figure 5: Latency Breakdown (E2E Measurements)...")
-    
-    with open(e2e_detailed_path) as f:
-        e2e_data = json.load(f)
-    
-    # Collect all results we want to compare
+    print(f"Found {len(e2e_files)} E2E result files: {[f.name for f in e2e_files]}")
+
+    # Aggregate results across all tasks
+    # Structure: {config_name: [result1, result2, ...]} for all matching configs
+    aggregated_results = defaultdict(list)
+
+    for e2e_file in e2e_files:
+        with open(e2e_file) as f:
+            e2e_data = json.load(f)
+
+        task_id = e2e_data.get('task_id', e2e_file.stem.replace('_e2e_detailed', ''))
+        e2e_results = e2e_data.get('results', [])
+
+        # Collect results for each configuration
+        for r in e2e_results:
+            config_name = r.get('name', '')
+            if config_name:
+                aggregated_results[config_name].append(r)
+
+    # Target configurations we want to plot
     # Order: Cost-Optimal, Cost-Worst, Browser-Use (+ tool synthesis), Browser-Use
     target_names = [
         'gemini-2.5-flash-best',
@@ -600,17 +616,49 @@ if e2e_detailed_path.exists():
         'loop-tools-baseline',
         'loop-baseline',
     ]
-    
-    e2e_results = e2e_data.get('results', [])
+
+    # Average timing across tasks and trials for each configuration
     selected_results = []
     config_names = []
-    
+
     for target in target_names:
-        for r in e2e_results:
-            if r.get('name', '') == target:
-                selected_results.append(r)
-                config_names.append(target)
-                break
+        if target in aggregated_results and aggregated_results[target]:
+            # Average across all tasks
+            all_task_results = aggregated_results[target]
+
+            # Aggregate avg_timing fields
+            planning_seconds = []
+            execution_seconds = []
+            llm_total_seconds = []
+            llm_prefill_seconds = []
+            llm_decode_seconds = []
+            correctness_pcts = []
+
+            for r in all_task_results:
+                avg_t = r.get('avg_timing', {})
+                planning_seconds.append(avg_t.get('planning_seconds', 0))
+                execution_seconds.append(avg_t.get('execution_seconds', 0))
+                llm_total_seconds.append(avg_t.get('llm_total_seconds', 0))
+                llm_prefill_seconds.append(avg_t.get('llm_prefill_seconds', 0))
+                llm_decode_seconds.append(avg_t.get('llm_decode_seconds', 0))
+                correctness_pcts.append(r.get('avg_correctness_pct', 0))
+
+            # Compute averages
+            avg_result = {
+                'name': target,
+                'avg_timing': {
+                    'planning_seconds': sum(planning_seconds) / len(planning_seconds) if planning_seconds else 0,
+                    'execution_seconds': sum(execution_seconds) / len(execution_seconds) if execution_seconds else 0,
+                    'llm_total_seconds': sum(llm_total_seconds) / len(llm_total_seconds) if llm_total_seconds else 0,
+                    'llm_prefill_seconds': sum(llm_prefill_seconds) / len(llm_prefill_seconds) if llm_prefill_seconds else 0,
+                    'llm_decode_seconds': sum(llm_decode_seconds) / len(llm_decode_seconds) if llm_decode_seconds else 0,
+                },
+                'avg_correctness_pct': sum(correctness_pcts) / len(correctness_pcts) if correctness_pcts else 0,
+                'num_tasks': len(all_task_results),
+            }
+
+            selected_results.append(avg_result)
+            config_names.append(target)
     
     if selected_results:
         # Create 2-subplot layout: absolute latency + percentage breakdown
@@ -726,9 +774,11 @@ if e2e_detailed_path.exists():
         for name, acc in zip(strategy_names, correctness_pcts):
             latex_table += f"{name} & {acc*100:.0f}\\% \\\\\n"
         
+        num_tasks = selected_results[0].get('num_tasks', 1) if selected_results else 1
+
         latex_table += r"""\bottomrule
 \end{tabular}
-\caption{Correctness rates for each execution strategy on the DashDish DeepResearch task.}
+\caption{Correctness rates for each execution strategy, averaged across """ + f"{num_tasks} task{'s' if num_tasks != 1 else ''} and multiple trials" + r""".}
 \label{table:fig5_correctness}
 \end{table}
 """
@@ -742,10 +792,11 @@ if e2e_detailed_path.exists():
         plt.close()
     else:
         print("No results found matching the expected e2e configurations")
-        print(f"Available configurations: {[r.get('name') for r in e2e_results]}")
+        if aggregated_results:
+            print(f"Available configurations: {list(aggregated_results.keys())}")
 else:
-    print(f"Note: E2E detailed latency data not found at {e2e_detailed_path}")
-    print("      Run: python experiments/measure_e2e_detailed.py ... to generate Figure 5 data")
+    print(f"Note: E2E detailed latency data not found in {results_dir}")
+    print("      Run: python experiments/measure_e2e_detailed.py --ids '<task-ids>' ... to generate Figure 5 data")
 
 # ============================================================================
 # FIGURE 6: ACCURACY VS LATENCY (ALL EXPERIMENTS - SCATTER PLOT)

@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from blastai.agents.models import Agent
 from blastai.agents.executor import AgentExecutor
 from blastai.agents.timing_tracker import TimingTracker
-from experiments.tasks.dashdish_deepresearch1 import validator
+from experiments.tasks.registry import get_validator
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -139,13 +139,19 @@ async def execute_with_timing(
     task_goal: str,
     initial_url: str,
     user_id: str,
-    timing_tracker: TimingTracker
+    timing_tracker: TimingTracker,
+    task_id: str
 ) -> Tuple[Optional[str], Optional[str], float]:
     """
     Execute a test config and track timing.
-    
+
     Returns: (result, error, correctness_pct)
     """
+    # Get validator for this task
+    validator = get_validator(task_id)
+    if validator is None:
+        logger.error(f"No validator found for task: {task_id}")
+        return None, f"No validator for task {task_id}", 0.0
     os.environ.setdefault("BROWSER_DISABLE_GPU", "true")
     
     timing_tracker.reset()
@@ -314,16 +320,17 @@ async def run_test(
     task_goal: str,
     initial_url: str,
     user_id_base: str,
+    task_id: str,
     num_trials: int = 1
 ) -> Dict[str, Any]:
     """Run a test configuration multiple times and collect results."""
-    
+
     console.print(f"\n[cyan]Testing: {config.name}[/]")
-    
+
     results = []
     for trial in range(num_trials):
         console.print(f"  Trial {trial+1}/{num_trials}...", end=" ")
-        
+
         timing_tracker = TimingTracker()
         result, error, correctness_pct = await execute_with_timing(
             config,
@@ -331,7 +338,8 @@ async def run_test(
             task_goal,
             initial_url,
             f"{user_id_base}-{config.name}-{trial}",
-            timing_tracker
+            timing_tracker,
+            task_id
         )
         
         timing = timing_tracker.get_timing()
@@ -388,194 +396,242 @@ async def run_test(
 
 
 @click.command()
-@click.option('--tasks', type=click.Path(exists=True), required=True)
-@click.option('--id', 'task_id', type=str, required=True)
-@click.option('--results-dir', type=click.Path(), default='experiments/results')
-@click.option('--md-file', type=str, required=True)
-@click.option('--json-file', type=str, default=None, help='JSON file with generation latencies')
-@click.option('--models', type=str, default='gemini-2.5-flash,gemini-2.5-pro')
-@click.option('--num-trials', type=int, default=1)
-@click.option('--test-best/--no-test-best', default=True)
-@click.option('--test-worst/--no-test-worst', default=True)
-@click.option('--test-loop/--no-test-loop', default=True)
-@click.option('--test-loop-tools/--no-test-loop-tools', default=True)
-@click.option('--test-retry/--no-test-retry', default=False)
-def main(tasks: str, task_id: str, results_dir: str, md_file: str, json_file: Optional[str],
-         models: str, num_trials: int, test_best: bool, test_worst: bool, test_loop: bool,
+@click.option('--tasks', type=click.Path(exists=True), required=True,
+              help='Path to tasks YAML file')
+@click.option('--ids', type=str, required=True,
+              help='Space-separated task IDs to measure (e.g., "dashdish-deepresearch1 gomail-10")')
+@click.option('--results-dir', type=click.Path(), default='experiments/results',
+              help='Directory containing evaluation results and where E2E results will be saved')
+@click.option('--models', type=str, default='gemini-2.5-flash,gemini-2.5-pro',
+              help='Comma-separated list of models to test')
+@click.option('--num-trials', type=int, default=1,
+              help='Number of trials per configuration')
+@click.option('--test-best/--no-test-best', default=True,
+              help='Test best-cost candidate')
+@click.option('--test-worst/--no-test-worst', default=True,
+              help='Test worst-cost candidate')
+@click.option('--test-loop/--no-test-loop', default=True,
+              help='Test baseline loop mode (no tools)')
+@click.option('--test-loop-tools/--no-test-loop-tools', default=True,
+              help='Test loop mode with tools')
+@click.option('--test-retry/--no-test-retry', default=False,
+              help='Test serial retry mode')
+def main(tasks: str, ids: str, results_dir: str, models: str, num_trials: int,
+         test_best: bool, test_worst: bool, test_loop: bool,
          test_loop_tools: bool, test_retry: bool):
-    """Run detailed E2E evaluation with timing breakdowns."""
+    """
+    Run detailed E2E evaluation with timing breakdowns for multiple tasks.
+
+    Example:
+        python experiments/measure_e2e_detailed.py \\
+            --tasks experiments/tasks/agisdk/agisdk.yaml \\
+            --ids "dashdish-deepresearch1 gomail-10" \\
+            --results-dir experiments/results \\
+            --models "gemini-2.5-flash,gemini-2.5-pro" \\
+            --num-trials 3
+    """
     
     # Setup logging EARLY with enable_standalone_mode to ensure browser-use logs are visible
     # This respects BLASTAI_LOG_LEVEL env var, defaults to DEBUG for full visibility
     from blastai.logging_setup import enable_standalone_mode
     log_level = os.getenv('BLASTAI_LOG_LEVEL', 'INFO')
     enable_standalone_mode(browser_use_log_level=log_level)
-    
+
     logger.info(f"Logging configured with BLASTAI_LOG_LEVEL={log_level}")
     logger.info(f"BROWSER_USE_SETUP_LOGGING={os.environ.get('BROWSER_USE_SETUP_LOGGING')}")
-    
+
     os.environ['HEADLESS'] = 'false'
-    
-    # Load task
-    task_def = load_task_def(Path(tasks), task_id)
-    initial_url = task_def.get('initial_url', '')
-    user_id_base = task_def.get('user_id', f"e2e-{task_id}")
-    task_goal = task_def.get('goal', '')
-    smcp_registry = task_def.get('smcp_registry')
-    
-    # Load agent with tools
-    if smcp_registry and Path(smcp_registry).exists():
-        agent_with_tools = Agent.from_smcp_registry(smcp_registry)
-        console.print(f"[green]Loaded {len(agent_with_tools.tools)} SMCP tools[/]")
-    else:
-        agent_with_tools = Agent(description='', tools=[])
-    
-    agent_no_tools = Agent(description='', tools=[])
-    
-    # Parse markdown for candidates
-    md_path = Path(results_dir) / md_file
-    runs = parse_markdown_runs(md_path)
-    console.print(f"[green]Parsed {len(runs)} runs[/]")
-    
-    # Load planning times if JSON provided
-    planning_times = {}
-    if json_file:
-        json_path = Path(results_dir) / json_file
+
+    # Parse task IDs
+    task_ids = ids.split()
+    results_path = Path(results_dir)
+    results_path.mkdir(parents=True, exist_ok=True)
+
+    console.print(Panel(
+        f"[bold]E2E Latency Measurement[/]\\n\\n"
+        f"Tasks: {', '.join(task_ids)}\\n"
+        f"Models: {models}\\n"
+        f"Trials: {num_trials}",
+        title="Configuration",
+        border_style="blue"
+    ))
+
+    # Process each task
+    for task_id in task_ids:
+        console.print(f"\n[bold cyan]Processing task: {task_id}[/]")
+
+        # Load task definition
+        task_def = load_task_def(Path(tasks), task_id)
+        initial_url = task_def.get('initial_url', '')
+        user_id_base = task_def.get('user_id', f"e2e-{task_id}")
+        task_goal = task_def.get('goal', '')
+        smcp_registry = task_def.get('smcp_registry')
+
+        # Load agent with tools
+        if smcp_registry and Path(smcp_registry).exists():
+            agent_with_tools = Agent.from_smcp_registry(smcp_registry)
+            console.print(f"[green]Loaded {len(agent_with_tools.tools)} SMCP tools[/]")
+        else:
+            agent_with_tools = Agent(description='', tools=[])
+
+        agent_no_tools = Agent(description='', tools=[])
+
+        # Parse markdown for candidates
+        md_file = f"{task_id}.md"
+        md_path = results_path / md_file
+        if not md_path.exists():
+            console.print(f"[yellow]Warning: Markdown file not found: {md_path}[/]")
+            console.print(f"[yellow]Skipping task {task_id}[/]")
+            continue
+
+        runs = parse_markdown_runs(md_path)
+        console.print(f"[green]Parsed {len(runs)} runs from {md_file}[/]")
+
+        # Load planning times from JSON
+        planning_times = {}
+        json_file = f"{task_id}.json"
+        json_path = results_path / json_file
         if json_path.exists():
             planning_times = load_planning_times(json_path)
             console.print(f"[green]Loaded planning times for {len(planning_times)} runs[/]")
         else:
-            console.print(f"[yellow]Warning: JSON file {json_path} not found[/]")
-    
-    # Build test configs
-    model_list = [m.strip() for m in models.split(',')]
-    configs = []
-    
-    for model in model_list:
-        # Find best and worst by cost (passing runs only)
-        # When costs are tied, use planning latency as tiebreaker
-        best_run, worst_run = None, None
-        best_cost, worst_cost = float('inf'), 0
-        best_planning = 0.0
-        worst_planning = float('inf')
-        
-        for run_id, (run_model, code, passed, cost, planning_latency) in runs.items():
-            if run_model == model and passed:
-                # Best: lowest cost, with planning latency as tiebreaker
-                if cost < best_cost or (cost == best_cost and planning_latency < best_planning):
-                    best_cost = cost
-                    best_planning = planning_latency
-                    best_run = (run_id, code)
-                # Worst: highest cost, with planning latency as tiebreaker (prefer higher planning if tied)
-                if cost > worst_cost or (cost == worst_cost and planning_latency < worst_planning):
-                    worst_cost = cost
-                    worst_planning = planning_latency
-                    worst_run = (run_id, code)
-        
-        if test_best and best_run:
-            # Look up planning time from planning_times dict if available
-            best_planning_from_json = planning_times.get(best_run[0], best_planning)
-            config = TestConfig(
-                name=f"{model.replace('/', '-')}-best",
-                mode="code",
-                model=model,
-                code=best_run[1],
-                run_id=best_run[0],
-                planning_time=best_planning_from_json,
-            )
-            logger.info(f"Best config for {model}: run_id={best_run[0]}, cost={best_cost:.2f}s, planning_time={best_planning_from_json:.3f}s")
-            console.print(f"[dim]Best config for {model}: run_id={best_run[0]}, cost={best_cost:.2f}s, planning_time={best_planning_from_json:.3f}s[/]")
-            configs.append(config)
-        
-        if test_worst and worst_run:
-            # Look up planning time from planning_times dict if available
-            worst_planning_from_json = planning_times.get(worst_run[0], worst_planning)
-            config = TestConfig(
-                name=f"{model.replace('/', '-')}-worst",
-                mode="code",
-                model=model,
-                code=worst_run[1],
-                run_id=worst_run[0],
-                planning_time=worst_planning_from_json,
-            )
-            logger.info(f"Worst config for {model}: run_id={worst_run[0]}, cost={worst_cost:.2f}s, planning_time={worst_planning_from_json:.3f}s")
-            configs.append(config)
-        # Retry serial mode: run code-generation with up to 3 iterations and treat
-        # as a distinct configuration that exercises the serial retry behaviour.
-        if test_retry:
+            console.print(f"[yellow]Warning: JSON file not found: {json_path}[/]")
+
+        # Build test configs
+        model_list = [m.strip() for m in models.split(',')]
+        configs = []
+
+        for model in model_list:
+            # Find best and worst by cost (passing runs only)
+            # When costs are tied, use planning latency as tiebreaker
+            best_run, worst_run = None, None
+            best_cost, worst_cost = float('inf'), 0
+            best_planning = 0.0
+            worst_planning = float('inf')
+
+            for run_id, (run_model, code, passed, cost, planning_latency) in runs.items():
+                if run_model == model and passed:
+                    # Best: lowest cost, with planning latency as tiebreaker
+                    if cost < best_cost or (cost == best_cost and planning_latency < best_planning):
+                        best_cost = cost
+                        best_planning = planning_latency
+                        best_run = (run_id, code)
+                    # Worst: highest cost, with planning latency as tiebreaker (prefer higher planning if tied)
+                    if cost > worst_cost or (cost == worst_cost and planning_latency < worst_planning):
+                        worst_cost = cost
+                        worst_planning = planning_latency
+                        worst_run = (run_id, code)
+
+            if test_best and best_run:
+                # Look up planning time from planning_times dict if available
+                best_planning_from_json = planning_times.get(best_run[0], best_planning)
+                config = TestConfig(
+                    name=f"{model.replace('/', '-')}-best",
+                    mode="code",
+                    model=model,
+                    code=best_run[1],
+                    run_id=best_run[0],
+                    planning_time=best_planning_from_json,
+                )
+                logger.info(f"Best config for {model}: run_id={best_run[0]}, cost={best_cost:.2f}s, planning_time={best_planning_from_json:.3f}s")
+                console.print(f"[dim]Best config for {model}: run_id={best_run[0]}, cost={best_cost:.2f}s, planning_time={best_planning_from_json:.3f}s[/]")
+                configs.append(config)
+
+            if test_worst and worst_run:
+                # Look up planning time from planning_times dict if available
+                worst_planning_from_json = planning_times.get(worst_run[0], worst_planning)
+                config = TestConfig(
+                    name=f"{model.replace('/', '-')}-worst",
+                    mode="code",
+                    model=model,
+                    code=worst_run[1],
+                    run_id=worst_run[0],
+                    planning_time=worst_planning_from_json,
+                )
+                logger.info(f"Worst config for {model}: run_id={worst_run[0]}, cost={worst_cost:.2f}s, planning_time={worst_planning_from_json:.3f}s")
+                configs.append(config)
+            # Retry serial mode: run code-generation with up to 3 iterations and treat
+            # as a distinct configuration that exercises the serial retry behaviour.
+            if test_retry:
+                configs.append(TestConfig(
+                    name=f"{model.replace('/', '-')}-serial-retry",
+                    mode="code",
+                    model=model,
+                    code=None,
+                    use_tools=True,
+                    max_iterations=3,
+                ))
+
+        # Baselines
+        if test_loop:
             configs.append(TestConfig(
-                name=f"{model.replace('/', '-')}-serial-retry",
-                mode="code",
-                model=model,
-                code=None,
+                name="loop-baseline",
+                mode="loop",
+                use_tools=False,
+            ))
+
+        if test_loop_tools:
+            configs.append(TestConfig(
+                name="loop-tools-baseline",
+                mode="loop",
                 use_tools=True,
-                max_iterations=3,
             ))
-    
-    # Baselines
-    if test_loop:
-        configs.append(TestConfig(
-            name="loop-baseline",
-            mode="loop",
-            use_tools=False,
-        ))
-    
-    if test_loop_tools:
-        configs.append(TestConfig(
-            name="loop-tools-baseline",
-            mode="loop",
-            use_tools=True,
-        ))
-    
-    console.print(f"\n[bold]Running {len(configs)} configurations, {num_trials} trials each[/]")
-    
-    # Run all tests with error handling
-    all_results = []
-    for config in configs:
-        agent = agent_with_tools if config.use_tools else agent_no_tools
-        try:
-            result = asyncio.run(run_test(
-                config, agent, task_goal, initial_url, user_id_base, num_trials
-            ))
-            all_results.append(result)
-        except Exception as e:
-            console.print(f"[red]✗ {config.name}: FAILED[/]")
-            console.print(f"  [red]{str(e)[:100]}[/]")
-            # Still add a result record with error
-            all_results.append({
-                'name': config.name,
-                'mode': config.mode,
-                'model': config.model,
-                'num_trials': num_trials,
-                'results': [],
-                'avg_timing': {},
-                'avg_correctness_pct': 0.0,
-                'normalized_timing': {},
-                'error': str(e)[:200],
-            })
-    
-    # Save results
-    output = {
-        'task_id': task_id,
-        'num_trials': num_trials,
-        'results': all_results,
-    }
-    
-    out_path = Path(results_dir) / f"{task_id}_e2e_detailed.json"
-    out_path.write_text(json.dumps(output, indent=2))
-    console.print(f"\n[green]✓ Saved results to {out_path}[/]")
-    
-    # Print summary
-    console.print("\n[bold]Summary (Normalized Timing):[/]")
-    for r in all_results:
-        norm = r['normalized_timing']
-        avg_t = r['avg_timing']
-        console.print(f"\n  {r['name']}:")
-        console.print(f"    Total: {avg_t['total_seconds']:.1f}s")
-        console.print(f"    Planning: {norm['planning_pct']*100:.1f}% ({avg_t['planning_seconds']:.1f}s)")
-        console.print(f"    LLM: {norm['llm_pct']*100:.1f}% ({avg_t['llm_total_seconds']:.1f}s)")
-        console.print(f"    Action: {norm['action_pct']*100:.1f}% ({avg_t['execution_seconds'] - avg_t['llm_total_seconds']:.1f}s)")
-        console.print(f"    Correctness: {r['avg_correctness_pct']*100:.0f}%")
+
+        console.print(f"\n[bold]Running {len(configs)} configurations, {num_trials} trials each[/]")
+
+        # Run all tests with error handling
+        all_results = []
+        for config in configs:
+            agent = agent_with_tools if config.use_tools else agent_no_tools
+            try:
+                result = asyncio.run(run_test(
+                    config, agent, task_goal, initial_url, user_id_base, task_id, num_trials
+                ))
+                all_results.append(result)
+            except Exception as e:
+                console.print(f"[red]✗ {config.name}: FAILED[/]")
+                console.print(f"  [red]{str(e)[:100]}[/]")
+                # Still add a result record with error
+                all_results.append({
+                    'name': config.name,
+                    'mode': config.mode,
+                    'model': config.model,
+                    'num_trials': num_trials,
+                    'results': [],
+                    'avg_timing': {},
+                    'avg_correctness_pct': 0.0,
+                    'normalized_timing': {},
+                    'error': str(e)[:200],
+                })
+
+        # Save results for this task
+        output = {
+            'task_id': task_id,
+            'num_trials': num_trials,
+            'results': all_results,
+        }
+
+        out_path = results_path / f"{task_id}_e2e_detailed.json"
+        out_path.write_text(json.dumps(output, indent=2))
+        console.print(f"\n[green]✓ Saved results to {out_path}[/]")
+
+        # Print summary for this task
+        console.print(f"\n[bold]Summary for {task_id} (Normalized Timing):[/]")
+        for r in all_results:
+            norm = r.get('normalized_timing', {})
+            avg_t = r.get('avg_timing', {})
+            if not avg_t:
+                continue
+            console.print(f"\n  {r['name']}:")
+            console.print(f"    Total: {avg_t.get('total_seconds', 0):.1f}s")
+            console.print(f"    Planning: {norm.get('planning_pct', 0)*100:.1f}% ({avg_t.get('planning_seconds', 0):.1f}s)")
+            console.print(f"    LLM: {norm.get('llm_pct', 0)*100:.1f}% ({avg_t.get('llm_total_seconds', 0):.1f}s)")
+            exec_s = avg_t.get('execution_seconds', 0)
+            llm_s = avg_t.get('llm_total_seconds', 0)
+            console.print(f"    Action: {norm.get('action_pct', 0)*100:.1f}% ({exec_s - llm_s:.1f}s)")
+            console.print(f"    Correctness: {r.get('avg_correctness_pct', 0)*100:.0f}%")
+
+    console.print(f"\n[green]✓ E2E measurement complete for {len(task_ids)} tasks![/]")
 
 
 if __name__ == '__main__':
