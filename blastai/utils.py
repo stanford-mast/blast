@@ -63,6 +63,10 @@ def init_model(model_name: str, **kwargs: Any) -> BaseChatModel:
     elif provider == "azure":
         return ChatAzureOpenAI(model=model_name, **kwargs)
     elif provider == "google" or (not provider and model_name.startswith("gemini")):
+        # Set thinking_budget=0 to disable thinking mode for Gemini models
+        # Exception: gemini-2.5-pro cannot disable thinking (minimum 128 tokens)
+        if 'thinking_budget' not in kwargs and 'gemini-2.5-pro' not in model_name.lower():
+            kwargs['thinking_budget'] = 0
         return ChatGoogle(model=model_name, **kwargs)
     elif provider == "groq" or (not provider and model_name.startswith("llama") or model_name.startswith("mixtral")):
         return ChatGroq(model=model_name, **kwargs)

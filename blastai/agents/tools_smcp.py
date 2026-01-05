@@ -116,7 +116,12 @@ def add_smcp_tool(agent_executor, tool: SMCPTool):
     logger.info(f"Successfully registered SMCP tool: {tool.name}")
 
 
-async def execute_smcp_tool(agent_executor, tool: SMCPTool, inputs: Dict[str, Any]) -> Dict[str, Any]:
+async def execute_smcp_tool(
+    agent_executor, 
+    tool: SMCPTool, 
+    inputs: Dict[str, Any],
+    use_fast_timeout: bool = False
+) -> Dict[str, Any]:
     """
     Execute an SMCP tool with is_ready -> execute -> is_completed phases.
     
@@ -126,6 +131,7 @@ async def execute_smcp_tool(agent_executor, tool: SMCPTool, inputs: Dict[str, An
         agent_executor: The AgentExecutor instance
         tool: The SMCP tool to execute
         inputs: Input parameters matching the tool's input schema
+        use_fast_timeout: If True, use 1s timeout for is_ready (for fast precondition failure)
         
     Returns:
         Output matching the tool's output schema
@@ -179,10 +185,18 @@ async def execute_smcp_tool(agent_executor, tool: SMCPTool, inputs: Dict[str, An
         logger.info(f"Running is_ready phase for {tool.name}")
         inputs_json = json.dumps(inputs)
         
-        # Calculate delay between attempts based on agent's timeout
-        # 30 attempts spread over is_ready_timeout_ms
-        max_attempts = 30
-        total_timeout_ms = agent_executor.agent.is_ready_timeout_ms
+        # Adjust timeout and attempts based on execution mode or fast timeout flag
+        # Loop mode OR first tool after fallback: fast failure (1s timeout, 3 attempts)
+        # Code mode: full timeout (30s or configured, 30 attempts)
+        if use_fast_timeout or (hasattr(agent_executor, 'current_mode') and agent_executor.current_mode == "loop"):
+            max_attempts = 3
+            total_timeout_ms = 1000  # 1 second for fast failure
+            if use_fast_timeout:
+                logger.info(f"Using fast timeout (1s) for is_ready on {tool.name} (first tool after fallback)")
+        else:
+            max_attempts = 30
+            total_timeout_ms = agent_executor.agent.is_ready_timeout_ms
+        
         delay_ms = total_timeout_ms // max_attempts
         
         is_ready_code = f"""
@@ -219,7 +233,37 @@ async def execute_smcp_tool(agent_executor, tool: SMCPTool, inputs: Dict[str, An
         result = await evaluate_js(is_ready_code)
         if not result.get('success'):
             reason = result.get('reason', 'Unknown reason')
-            error_msg = f"is_ready failed after {result.get('attempts', 0)} attempts over {total_timeout_ms}ms. Last reason: {reason}"
+            
+            # Context-specific suggestions based on tool and error
+            suggestions = []
+            if 'get_restaurant_details' in tool.name.lower() and 'not found' in reason.lower():
+                suggestions = [
+                    "You must navigate to a restaurant's detail page first using goto_restaurant_detail(restaurantName='...')",
+                    "Then you can call get_restaurant_details() to extract the data",
+                    "Or use click actions to manually navigate to the restaurant page"
+                ]
+            elif 'goto_restaurant_detail' in tool.name.lower() and 'not found' in reason.lower():
+                suggestions = [
+                    "Make sure you're on the restaurants list page (use goto_restaurants_list() first)",
+                    "Or try clicking on the restaurant name directly from the list",
+                    "The restaurant name must match exactly what appears in the list"
+                ]
+            else:
+                suggestions = [
+                    "click on interactive elements to navigate",
+                    "scroll to find relevant content",
+                    "extract data from the current page",
+                    "navigate back or to a different page",
+                    "use input/search to find what you need"
+                ]
+            
+            suggestion_text = "\\n".join(f"  - {s}" for s in suggestions)
+            error_msg = (
+                f"Tool '{tool.name}' is_ready failed after {result.get('attempts', 0)} attempts over {total_timeout_ms}ms. "
+                f"Last reason: {reason}\\n"
+                f"Suggestion: Try alternative approaches:\\n"
+                f"{suggestion_text}"
+            )
             logger.error(error_msg)
             raise RuntimeError(error_msg)
         logger.info(f"is_ready passed after {result.get('attempts')} attempts")
@@ -286,12 +330,23 @@ async def execute_smcp_tool(agent_executor, tool: SMCPTool, inputs: Dict[str, An
         logger.info(f"Running is_completed phase for {tool.name}")
         output_json = json.dumps(output)
         inputs_json = json.dumps(inputs)
+        
+        # Adjust timeout and attempts based on execution mode
+        # Loop mode: fast failure (1.5s total, 3 attempts)
+        # Code mode: full timeout (15s total, 30 attempts)
+        if hasattr(agent_executor, 'current_mode') and agent_executor.current_mode == "loop":
+            max_attempts = 3
+            delay_ms = 500  # 3 * 500ms = 1.5s total
+        else:
+            max_attempts = 30
+            delay_ms = 500  # 30 * 500ms = 15s total
+        
         is_completed_code = f"""
 (async function() {{
     const inputs = {inputs_json};
     const output = {output_json};
-    const maxAttempts = 30;
-    const delayMs = 500;
+    const maxAttempts = {max_attempts};
+    const delayMs = {delay_ms};
     let attempts = 0;
     let lastReason = null;
     

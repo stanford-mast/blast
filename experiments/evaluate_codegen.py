@@ -55,11 +55,13 @@ class CodegenConfig:
     """Configuration for a single codegen run."""
     model: str
     with_protocol: bool
+    max_iterations: int = 1  # Number of retry iterations (1 = no retries)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "model": self.model,
-            "with_protocol": self.with_protocol
+            "with_protocol": self.with_protocol,
+            "max_iterations": self.max_iterations
         }
 
 
@@ -84,7 +86,6 @@ class CodegenResult:
     """Results from a single codegen run."""
     config: CodegenConfig
     generation_latency: float  # Time to generate code in seconds
-    generation_cost: float  # Actual LLM cost in USD
     estimated_cost: float  # Estimated cost from codecost module in seconds
     codecheck: CodecheckResult
     actual_latency: Optional[float] = None  # Actual execution time if run
@@ -95,7 +96,6 @@ class CodegenResult:
         return {
             "config": self.config.to_dict(),
             "generation_latency": self.generation_latency,
-            "generation_cost": self.generation_cost,
             "estimated_cost": self.estimated_cost,
             "codecheck": {
                 "overall_pass": self.codecheck.overall_pass,
@@ -124,8 +124,11 @@ class PageLoadResult:
 async def load_task_definitions(tasks_file: Path) -> List[Dict[str, Any]]:
     """Load task definitions from YAML file."""
     with open(tasks_file) as f:
-        tasks = yaml.safe_load(f)
-    return tasks
+        data = yaml.safe_load(f)
+    # Handle both formats: direct list or {'tasks': [...]}
+    if isinstance(data, dict) and 'tasks' in data:
+        return data['tasks']
+    return data
 
 
 async def create_agent_for_task(task: Dict[str, Any]) -> Agent:
@@ -149,13 +152,14 @@ async def generate_code_with_timing(
     config: CodegenConfig,
     codegen_llm: BaseChatModel,
     timezone: str = "America/Los_Angeles",
-    debug_print_prompt: bool = False
+    debug_print_prompt: bool = False,
+    task_def: Optional[Dict[str, Any]] = None
 ) -> Tuple[str, float, float, object, object]:
     """
-    Generate code for a task and measure timing and cost.
+    Generate code for a task and measure timing.
     
     Returns:
-        Tuple of (generated_code, generation_time_seconds, generation_cost_usd, candidate, code_generator)
+        Tuple of (generated_code, generation_time_seconds, unused_cost, candidate, code_generator)
     """
     from blastai.agents.codegen import CodeGenerator
     from browser_use.llm.messages import UserMessage
@@ -166,7 +170,7 @@ async def generate_code_with_timing(
         llm=codegen_llm,
         num_candidates=1,  # Generate single candidate
         state_aware=config.with_protocol,
-        max_iterations=1,  # Force single iteration per user's simplification
+        max_iterations=config.max_iterations,  # Use max_iterations from config
         timezone=timezone,
         debug_print_prompt=debug_print_prompt
     )
@@ -176,8 +180,13 @@ async def generate_code_with_timing(
     
     # Generate code using the generate_code method
     # This requires history (list of BaseMessage) and initial state
-    initial_state = {}  # Empty initial state for evaluation
-    current_url = ""
+    # NOTE: For benchmark evaluation, we know the initial state from the task definition:
+    # - The browser starts at initial_url (home page)
+    # - STATE starts with page="home" (or whatever the initial page is)
+    # - This allows proper static validation of tool preconditions
+    # TODO: Remove these deterministic assumptions for production where initial state is unknown
+    initial_state = {"page": "home"}  # Initial state for evaluation - starts on home page
+    current_url = task_def.get("initial_url", "")  # Get initial URL from task config
     history = []  # Empty history for initial generation
     
     # Call private _generate_candidate to retain iteration metadata
@@ -193,16 +202,14 @@ async def generate_code_with_timing(
     
     generation_time = time.time() - start_time
     
-    # For cost tracking, we need to parse the LLM usage
-    # The CodeGenerator doesn't directly expose this, so we'll estimate
-    # based on the model's pricing and approximate token counts
+    # Safety check: clamp negative times to 0.0 (should never happen, but guards against edge cases)
+    # Negative times would indicate clock skew or timing bugs in dependencies
+    if generation_time < 0:
+        logger.warning(f"Negative generation time detected: {generation_time:.4f}s - clamping to 0.0")
+        generation_time = 0.0
     
-    # Estimate cost based on model and code length
-    # This is a rough approximation - real implementation would need token tracking
-    generation_cost = estimate_cost_from_model(config.model, generated_code or "", generation_time)
-    
-    # Return a simple object with timing info for compatibility
-    return generated_code or "", generation_time, generation_cost, candidate, code_generator
+    # Return generated code, timing, and metadata
+    return generated_code or "", generation_time, 0.0, candidate, code_generator
 
 
 def estimate_cost_from_model(model: str, code: str, generation_time: float) -> float:
@@ -221,8 +228,15 @@ def estimate_cost_from_model(model: str, code: str, generation_time: float) -> f
     pricing = {
         "gpt-4.1": {"input": 2.0, "output": 8.0},
         "gpt-4.1-mini": {"input": 0.4, "output": 1.6},
+        "gpt-5.1": {"input": 1.25, "output": 10.0},
+        "gpt-5-mini": {"input": 0.25, "output": 2.0},
+        "gpt-5-nano": {"input": 0.05, "output": 0.40},
         "meta-llama/llama-4-maverick-17b-128e-instruct": {"input": 0.15, "output": 0.15},  # Groq pricing
         "openai/gpt-oss-20b": {"input": 0.15, "output": 0.15},  # Groq pricing (approx)
+        "openai/gpt-oss-120b": {"input": 0.30, "output": 0.30},  # Groq pricing (approx)
+        "claude-sonnet-4-5-20250929": {"input": 3.0, "output": 15.0},  # Anthropic Claude 3.5 Sonnet pricing
+        "gemini-2.5-pro": {"input": 1.25, "output": 10.0},  # Google Gemini 2.5 Pro pricing
+        "gemini-2.0-flash-lite": {"input": 0.075, "output": 0.30},  # Google Gemini 2.0 Flash Lite pricing
     }
     
     if model in pricing:
@@ -257,6 +271,16 @@ async def validate_code(
             failure_details=[{"type": ftype, "message": reason}],
             error_message=reason
         )
+    
+    # Apply code fixes: strip tool redefinitions that shadow SMCP tools
+    # LLMs sometimes redefine tools with their own ai_exec implementations
+    from blastai.agents.codefix import strip_tool_redefinitions
+    tool_names = {tool.name for tool in getattr(agent, 'tools', [])}
+    if tool_names:
+        code, was_modified = strip_tool_redefinitions(code, tool_names)
+        if was_modified:
+            logger.info(f"Stripped tool redefinitions from generated code")
+    
     failure_types: List[str] = []
     failure_details: List[Dict[str, str]] = []
     syntax_ok = True
@@ -286,8 +310,44 @@ async def validate_code(
                     failure_details.append({"type": "types", "message": ty_err or "Type checking failed"})
             except Exception as e:
                 logger.debug(f"Type checking exception ignored: {e}")
-    # 3. Ordering (only if syntax passed)
+    # 3. Check for illegal STATE/get_url access (only if syntax passed)
+    # TODO: Remove this check for production use where initial state is unknown
+    # For benchmark evaluation, we forbid direct STATE access/modification since:
+    # - Initial state is deterministically known (page="home", url=initial_url)
+    # - Tools should be used instead of manipulating STATE
+    # - get_url() shouldn't be called (initial URL is known via assertion in prompt)
     if syntax_ok:
+        try:
+            tree = ast.parse(code)
+            # Check for STATE access/modification
+            for node in ast.walk(tree):
+                # Check for STATE dictionary access: STATE["key"], STATE.get(...), STATE.update(...)
+                if isinstance(node, ast.Subscript):
+                    if isinstance(node.value, ast.Name) and node.value.id == 'STATE':
+                        msg = "Code illegally accesses STATE directly. Use tools instead of manipulating STATE."
+                        failure_types.append("state-access")
+                        failure_details.append({"type": "state-access", "message": msg})
+                        break
+                # Check for STATE method calls
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Attribute):
+                        if isinstance(node.func.value, ast.Name) and node.func.value.id == 'STATE':
+                            msg = "Code illegally modifies STATE directly. Use tools instead of manipulating STATE."
+                            failure_types.append("state-access")
+                            failure_details.append({"type": "state-access", "message": msg})
+                            break
+                    # Check for get_url() calls
+                    if isinstance(node.func, ast.Name) and node.func.id == 'get_url':
+                        msg = "Code illegally calls get_url(). Initial URL is known via assertion in prompt."
+                        failure_types.append("state-access")
+                        failure_details.append({"type": "state-access", "message": msg})
+                        break
+        except Exception as e:
+            logger.debug(f"STATE access checking exception ignored: {e}")
+    
+    # 4. Ordering (only if syntax passed and no state-access violations)
+    state_access_ok = "state-access" not in failure_types
+    if syntax_ok and state_access_ok:
         try:
             from blastai.agents.codecheck import CFGBuilder, check_tool_ordering
             tree = ast.parse(code)
@@ -309,7 +369,10 @@ async def validate_code(
                         if isinstance(p_schema, dict) and 'pattern' in p_schema:
                             info['param_patterns'][p_name] = p_schema['pattern']
                 tools_by_name[tool.name] = info
-            valid_ordering, ordering_err = check_tool_ordering(blocks, start_block, {}, tools_by_name)
+            # Pass initial_state for proper precondition checking
+            # TODO: Remove for production - use {} for unknown initial state
+            initial_state_for_validation = {"page": "home"}
+            valid_ordering, ordering_err = check_tool_ordering(blocks, start_block, initial_state_for_validation, tools_by_name)
             if not valid_ordering:
                 ordering_ok = False
                 otype = classify_failure(ordering_err)
@@ -319,7 +382,7 @@ async def validate_code(
                 failure_details.append({"type": otype, "message": ordering_err})
         except Exception as e:
             logger.debug(f"Ordering validation exception ignored: {e}")
-    overall_pass = syntax_ok and types_ok and ordering_ok
+    overall_pass = syntax_ok and types_ok and state_access_ok and ordering_ok
     return CodecheckResult(
         overall_pass=overall_pass,
         failure_types=failure_types,
@@ -341,6 +404,8 @@ def classify_failure(msg: Optional[str]) -> str:
         return "pre-tools"
     if "precondition" in l or "tool ordering" in l or "ordering" in l:
         return "ordering"
+    if "state access" in l or "get_url" in l:
+        return "state-access"
     return "unknown"
 
 
@@ -572,12 +637,13 @@ async def run_evaluation_for_task(
                     # Generate code
                     # Print prompt only for first run (run_num == 0) and first config
                     debug_prompt = print_prompt and run_num == 0
-                    generated_code, gen_time, gen_cost, candidate, code_generator = await generate_code_with_timing(
+                    generated_code, gen_time, _, candidate, code_generator = await generate_code_with_timing(
                         agent=agent,
                         task=task_goal,
                         config=config,
                         codegen_llm=codegen_llm,
-                        debug_print_prompt=debug_prompt
+                        debug_print_prompt=debug_prompt,
+                        task_def=task_def
                     )
                     
                     # Handle failed generation
@@ -592,7 +658,6 @@ async def run_evaluation_for_task(
                         result = CodegenResult(
                             config=config,
                             generation_latency=gen_time,
-                            generation_cost=gen_cost,
                             estimated_cost=0.0,
                             codecheck=failed_codecheck,
                             generated_code="",
@@ -601,9 +666,18 @@ async def run_evaluation_for_task(
                         console.print(f"  Run {run_num + 1}/{num_runs}... ✗ (generation failed)")
                         return result
                     
-                    # Estimate cost using codecost module
+                    # Strip tool redefinitions before cost estimation
+                    # LLMs sometimes redefine tools with their own ai_exec implementations
+                    from blastai.agents.codefix import strip_tool_redefinitions
+                    tool_names = {tool.name for tool in agent.tools}
+                    code_for_analysis = generated_code
+                    if tool_names:
+                        code_for_analysis, _ = strip_tool_redefinitions(generated_code, tool_names)
+                    
+                    # Estimate cost using codecost module (without stripping user-defined functions)
+                    # The CFG builder properly handles user-defined functions via two-pass analysis
                     try:
-                        estimated_cost = compute_code_cost(generated_code, agent.tools)
+                        estimated_cost = compute_code_cost(code_for_analysis, agent.tools)
                     except Exception as e:
                         logger.warning(f"Failed to compute code cost: {e}")
                         estimated_cost = 0.0
@@ -620,7 +694,6 @@ async def run_evaluation_for_task(
                     result = CodegenResult(
                         config=config,
                         generation_latency=gen_time,
-                        generation_cost=gen_cost,
                         estimated_cost=estimated_cost,
                         codecheck=codecheck_result,
                         generated_code=generated_code
@@ -689,16 +762,23 @@ def save_results_to_files(
     task_id: str,
     codegen_results: List[CodegenResult],
     page_load_results: List[PageLoadResult],
-    results_dir: Path
+    results_dir: Path,
+    suffix: str = ""
 ):
     """
     Save results to JSON and Markdown files.
+    
+    Args:
+        suffix: Optional suffix to add to filenames (e.g., timestamp)
     """
     # Create results directory
     results_dir.mkdir(parents=True, exist_ok=True)
     
+    # Build filename with optional suffix
+    base_name = f"{task_id}{suffix}" if suffix else task_id
+    
     # Save JSON file
-    json_file = results_dir / f"{task_id}.json"
+    json_file = results_dir / f"{base_name}.json"
     all_results = []
     
     # Add codegen results
@@ -713,7 +793,7 @@ def save_results_to_files(
         json.dump(all_results, f, indent=2)
     
     # Save Markdown file with generated code
-    md_file = results_dir / f"{task_id}.md"
+    md_file = results_dir / f"{base_name}.md"
     with open(md_file, 'w') as f:
         f.write(f"# Generated Code for Task: {task_id}\n\n")
         
@@ -724,7 +804,6 @@ def save_results_to_files(
             f.write(f"- With Protocol: `{result.config.with_protocol}`\n\n")
             f.write(f"**Metrics:**\n")
             f.write(f"- Generation Latency: {result.generation_latency:.3f}s\n")
-            f.write(f"- Generation Cost: ${result.generation_cost:.6f}\n")
             f.write(f"- Estimated Cost: {result.estimated_cost:.2f}s\n")
             f.write(f"- Overall Pass: {'✓' if result.codecheck.overall_pass else '✗'}\n")
             if result.codecheck.failure_types:
@@ -772,7 +851,7 @@ def compute_summary_statistics(
         
         # Calculate averages
         avg_gen_latency = statistics.mean(r.generation_latency for r in results)
-        avg_gen_cost = statistics.mean(r.generation_cost for r in results)
+        # generation_cost removed - use estimated_cost instead
         avg_est_cost = statistics.mean(r.estimated_cost for r in results)
         
         # Variance metrics
@@ -790,6 +869,13 @@ def compute_summary_statistics(
         num_failed_runs = sum(1 for r in results if not r.codecheck.overall_pass)
         failure_rates_among_failures = {k: (v / num_failed_runs) if num_failed_runs else 0.0 for k, v in failure_counts.items()}
         
+        # Metrics among passing candidates only
+        passing_results = [r for r in results if r.codecheck.overall_pass]
+        avg_est_cost_passing = statistics.mean(r.estimated_cost for r in passing_results) if passing_results else None
+        min_gen_latency_passing = min((r.generation_latency for r in passing_results), default=None)
+        min_est_cost_passing = min((r.estimated_cost for r in passing_results), default=None)
+        max_est_cost_passing = max((r.estimated_cost for r in passing_results), default=None)
+        
         # Actual latency (only for runs that measured it)
         actual_latencies = [r.actual_latency for r in results if r.actual_latency is not None]
         avg_actual_latency = statistics.mean(actual_latencies) if actual_latencies else None
@@ -804,13 +890,18 @@ def compute_summary_statistics(
             "num_generation_failures": generation_failed_count,
             "avg_generation_latency": avg_gen_latency,
             "var_generation_latency": var_gen_latency,
-            "avg_generation_cost": avg_gen_cost,
             "avg_estimated_cost": avg_est_cost,
             "var_estimated_cost": var_est_cost,
             "overall_pass_rate": overall_pass_rate,
             "failure_rates": failure_rates,
             "failure_rates_among_failures": failure_rates_among_failures,
             "avg_actual_latency": avg_actual_latency,
+            # Metrics among passing candidates only
+            "num_passing": len(passing_results),
+            "avg_est_cost_passing": avg_est_cost_passing,
+            "min_gen_latency_passing": min_gen_latency_passing,
+            "min_est_cost_passing": min_est_cost_passing,
+            "max_est_cost_passing": max_est_cost_passing,
         }
     
     # Add page load statistics
@@ -838,6 +929,8 @@ def compute_summary_statistics(
               help='Space-separated task IDs to evaluate (e.g., "dashdish-1 gomail-3")')
 @click.option('--results', type=click.Path(), default='experiments/results/rq_results.json',
               help='Path to save summary results JSON')
+@click.option('--models', type=str, default=None,
+              help='Space-separated list of models to test (e.g., "gpt-5.1 gemini-2.0-flash-lite"). If not provided, tests all default models.')
 @click.option('--actual-latency/--no-actual-latency', default=False,
               help='Measure actual execution latency (for highest/lowest cost)')
 @click.option('--page-load/--no-page-load', default=False,
@@ -850,7 +943,11 @@ def compute_summary_statistics(
               help='Print generated code for each run (default: False)')
 @click.option('--print-prompt/--no-print-prompt', default=False,
               help='Print codegen prompt for first run (default: False)')
-def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bool, runs: int, parallel: int, print_code: bool, print_prompt: bool):
+@click.option('--max-iterations', type=int, default=1,
+              help='Maximum retry iterations for code generation (default: 1, no retries)')
+@click.option('--no-overwrite', is_flag=True, default=False,
+              help='Use timestamped filenames to avoid overwriting existing results')
+def main(tasks: str, ids: str, results: str, models: Optional[str], actual_latency: bool, page_load: bool, runs: int, parallel: int, print_code: bool, print_prompt: bool, max_iterations: int, no_overwrite: bool):
     """
     Evaluate code generation performance across different configurations.
     
@@ -875,15 +972,33 @@ def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bo
     task_ids = ids.split()
     
     # Define configs to test
-    configs = [
-        CodegenConfig(model="claude-sonnet-4-5-20250929", with_protocol=True),
-        CodegenConfig(model="claude-sonnet-4-5-20250929", with_protocol=False),
-        # CodegenConfig(model="meta-llama/llama-4-maverick-17b-128e-instruct", with_protocol=True),  # temporarily disabled
-        # CodegenConfig(model="meta-llama/llama-4-maverick-17b-128e-instruct", with_protocol=False), # temporarily disabled
-        # Swap in Groq's OpenAI-compatible gpt-oss model
-        CodegenConfig(model="openai/gpt-oss-20b", with_protocol=True),
-        CodegenConfig(model="openai/gpt-oss-20b", with_protocol=False),
-    ]
+    # If models are specified, use only those models
+    # Otherwise, use the default set
+    if models:
+        model_list = models.split()
+        configs = []
+        for model in model_list:
+            configs.append(CodegenConfig(model=model, with_protocol=True, max_iterations=max_iterations))
+            configs.append(CodegenConfig(model=model, with_protocol=False, max_iterations=max_iterations))
+    else:
+        # Default configs - Testing various OpenAI models with/without protocol
+        # gpt-5.1: $1.25 input, $10.00 output
+        # gpt-5-mini: $0.25 input, $2.00 output
+        # openai/gpt-oss-120b: Open-source on Groq ($0.30/M tokens)
+        # gemini-2.5-pro: Google's best model
+        # gemini-2.0-flash-lite: Google's fast/cheap model
+        configs = [
+            CodegenConfig(model="gpt-5.1", with_protocol=True, max_iterations=max_iterations),
+            CodegenConfig(model="gpt-5.1", with_protocol=False, max_iterations=max_iterations),
+            CodegenConfig(model="gpt-5-mini", with_protocol=True, max_iterations=max_iterations),
+            CodegenConfig(model="gpt-5-mini", with_protocol=False, max_iterations=max_iterations),
+            CodegenConfig(model="openai/gpt-oss-120b", with_protocol=True, max_iterations=max_iterations),
+            CodegenConfig(model="openai/gpt-oss-120b", with_protocol=False, max_iterations=max_iterations),
+            CodegenConfig(model="gemini-2.5-pro", with_protocol=True, max_iterations=max_iterations),
+            CodegenConfig(model="gemini-2.5-pro", with_protocol=False, max_iterations=max_iterations),
+            CodegenConfig(model="gemini-2.0-flash-lite", with_protocol=True, max_iterations=max_iterations),
+            CodegenConfig(model="gemini-2.0-flash-lite", with_protocol=False, max_iterations=max_iterations),
+        ]
     
     # Clamp parallel to reasonable range
     parallel = max(1, min(parallel, 8))
@@ -895,6 +1010,7 @@ def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bo
         f"Configs: {len(configs)}\n"
         f"Runs per config: {runs}\n"
         f"Parallel runs: {parallel}\n"
+        f"Max iterations: {max_iterations}\n"
         f"Measure actual latency: {actual_latency}\n"
         f"Measure page load: {page_load}",
         title="Configuration",
@@ -902,6 +1018,10 @@ def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bo
     ))
     
     async def run_all_evaluations():
+        # Generate timestamp suffix if no_overwrite is set
+        from datetime import datetime
+        timestamp_suffix = f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if no_overwrite else ""
+        
         # Load tasks
         tasks_file = Path(tasks)
         all_tasks = await load_task_definitions(tasks_file)
@@ -942,8 +1062,8 @@ def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bo
                 print_prompt=print_prompt
             )
             
-            # Save results
-            save_results_to_files(task_id, codegen_results, page_load_results, results_dir)
+            # Save results with optional timestamp suffix
+            save_results_to_files(task_id, codegen_results, page_load_results, results_dir, suffix=timestamp_suffix)
             
             # Store for summary
             all_results[task_id] = (codegen_results, page_load_results)
@@ -969,6 +1089,16 @@ def main(tasks: str, ids: str, results: str, actual_latency: bool, page_load: bo
             console.print(f"  Avg Generation Latency: {metrics['avg_generation_latency']:.3f}s (var: {metrics['var_generation_latency']:.6f})")
             console.print(f"  Avg Estimated Cost: {metrics['avg_estimated_cost']:.2f}s (var: {metrics['var_estimated_cost']:.6f})")
             console.print(f"  Overall Pass Rate: {metrics['overall_pass_rate']:.1%}")
+            # Show metrics among passing candidates
+            num_passing = metrics.get('num_passing', 0)
+            if num_passing > 0:
+                console.print(f"  [green]Among {num_passing} Passing:[/]")
+                if metrics.get('avg_est_cost_passing') is not None:
+                    console.print(f"    Avg Estimated Cost: {metrics['avg_est_cost_passing']:.2f}s")
+                if metrics.get('min_gen_latency_passing') is not None:
+                    console.print(f"    Min Generation Latency: {metrics['min_gen_latency_passing']:.3f}s")
+                if metrics.get('min_est_cost_passing') is not None and metrics.get('max_est_cost_passing') is not None:
+                    console.print(f"    Est Cost Range: {metrics['min_est_cost_passing']:.2f}s - {metrics['max_est_cost_passing']:.2f}s")
             if 'failure_rates' in metrics and metrics['failure_rates']:
                 fr_str = ", ".join(f"{k}:{v:.1%}" for k,v in metrics['failure_rates'].items())
                 console.print(f"  Failure Rates (per run): {fr_str}")

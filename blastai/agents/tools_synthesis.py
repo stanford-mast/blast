@@ -544,42 +544,69 @@ Do NOT include dependencies for simple strings, numbers, or booleans that user p
         
         list_smcp_tools.__name__ = "list_smcp_tools"
     
-    elif tool.name == "ask_human_cli":
-        @agent_executor.tools.action(description="Ask for human assistance when stuck, unauthenticated, or task is ambiguous")
-        async def ask_human_cli_action(prompt: str) -> ActionResult:
-            """
-            Ask for human assistance via CLI stdin.
-            
-            Use this when:
-            - Stuck on authentication or credentials
-            - CAPTCHA or 2FA required
-            - Task turned out to be ambiguous
-            - Need human input for unclear situations
-            
-            Args:
-                prompt: Question or request for the human
-                
-            Returns:
-                Human's response
-            """
-            try:
-                # Import the actual implementation
-                from .tools_hitl import ask_human_cli
-                
-                response = await ask_human_cli(prompt)
-                
-                return ActionResult(
-                    is_done=False,
-                    extracted_content=f"Human responded: {response}",
-                    include_in_memory=True
+    elif tool.name in ("ask_human_cli", "ask_human"):
+        # Prefer DBOS-backed human-in-the-loop when available (AgentExecutor provides ask_human_callback)
+        try:
+            if getattr(agent_executor, 'ask_human_callback', None):
+                from .tools_hitl import create_ask_human_tool
+
+                # Create DBOS-backed ask_human callable using the callback
+                # The callback has cycle_id and user_email in its closure from agent_workflow
+                dbos_ask = create_ask_human_tool(
+                    agent_executor.ask_human_callback
                 )
-            except Exception as e:
-                logger.error(f"ask_human_cli failed: {e}")
-                import traceback
-                traceback.print_exc()
-                return ActionResult(error=f"Failed to get human input: {str(e)}")
-        
-        ask_human_cli_action.__name__ = "ask_human_cli"
+
+                @agent_executor.tools.action(description="Ask for human assistance")
+                async def ask_human_action(prompt: str) -> ActionResult:
+                    try:
+                        response = await dbos_ask(prompt)
+                        return ActionResult(
+                            is_done=False,
+                            extracted_content=f"Human responded: {response}",
+                            include_in_memory=True
+                        )
+                    except Exception as e:
+                        logger.error(f"DBOS ask_human failed: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        return ActionResult(error=f"Failed to get human input: {str(e)}")
+
+                ask_human_action.__name__ = tool.name
+            else:
+                # Fallback to CLI-based ask_human (for CLI-only context without DBOS)
+                logger.warning(f"No ask_human_callback available - falling back to CLI-based ask_human_cli")
+                @agent_executor.tools.action(description="Ask for human assistance when stuck, unauthenticated, or task is ambiguous")
+                async def ask_human_action(prompt: str) -> ActionResult:
+                    try:
+                        # Import the actual implementation
+                        from .tools_hitl import ask_human_cli
+                        response = await ask_human_cli(prompt)
+                        return ActionResult(
+                            is_done=False,
+                            extracted_content=f"Human responded: {response}",
+                            include_in_memory=True
+                        )
+                    except Exception as e:
+                        logger.error(f"ask_human failed: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        return ActionResult(error=f"Failed to get human input: {str(e)}")
+
+                ask_human_action.__name__ = tool.name
+        except Exception as e:
+            logger.error(f"Failed to register {tool.name} tool: {e}")
+            # As a last resort, register the CLI variant to avoid missing tool
+            @agent_executor.tools.action(description="Ask for human assistance (fallback CLI)")
+            async def ask_human_action(prompt: str) -> ActionResult:
+                try:
+                    from .tools_hitl import ask_human_cli
+                    response = await ask_human_cli(prompt)
+                    return ActionResult(is_done=False, extracted_content=f"Human responded: {response}", include_in_memory=True)
+                except Exception as e2:
+                    logger.error(f"Fallback {tool.name} failed: {e2}")
+                    return ActionResult(error=f"Failed to get human input: {str(e2)}")
+
+            ask_human_action.__name__ = tool.name
     
     elif tool.name == "ask_html":
         @agent_executor.tools.action(description="Ask a question about the page HTML to get guidance on selectors, structure, or data attributes for creating SMCP tools")

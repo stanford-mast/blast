@@ -98,7 +98,21 @@ async def stream_llm_call(
         total_tokens=total_tokens,
         total_characters=len(response.completion)
     )
-    
+    # Record timing to global tracker if present (best-effort)
+    try:
+        from blastai.agents.timing_tracker import get_current_tracker
+        tracker = get_current_tracker()
+        if tracker is not None:
+            logger.info(f"Recorded LLM call to tracker: {timing.total_seconds:.3f}s")
+            tracker.record_llm_call(
+                total_seconds=timing.total_seconds,
+                prefill_seconds=timing.time_to_first_token,
+                decode_seconds=timing.generation_seconds,
+                tokens=timing.total_tokens
+            )
+    except Exception as e:
+        logger.warning(f"Failed to record LLM call: {e}")
+
     return response.completion, timing
 
 
@@ -201,7 +215,20 @@ async def _stream_openai_compatible(
     ttft_str = f"{first_token_time:.2f}s" if first_token_time else "N/A"
     speed_str = f"{tokens_per_sec:.1f} tok/s" if tokens_per_sec else "N/A"
     logger.debug(f"{provider_name} streaming complete: TTFT={ttft_str}, Gen={generation_time:.2f}s, Speed={speed_str}")
-    
+    # Record timing to global tracker if present (best-effort)
+    try:
+        from blastai.agents.timing_tracker import get_current_tracker
+        tracker = get_current_tracker()
+        if tracker is not None:
+            tracker.record_llm_call(
+                total_seconds=timing.total_seconds,
+                prefill_seconds=timing.time_to_first_token,
+                decode_seconds=timing.generation_seconds,
+                tokens=timing.total_tokens
+            )
+    except Exception:
+        pass
+
     return completion, timing
 
 

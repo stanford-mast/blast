@@ -10,3 +10,7 @@
 [submodule "smolagents"]
 	path = smolagents
 	url = https://github.com/huggingface/smolagents.git
+[submodule "blast-scheduler"]
+	path = blast-scheduler
+	url = https://github.com/ronyw7/blast-scheduler
+	branch = rw-v2

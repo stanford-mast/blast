@@ -25,7 +25,8 @@ class CFGBuilder(ast.NodeVisitor):
         self.edges: Dict[Tuple[int, int], Optional[ast.AST]] = {}
         self.curr_block: Optional[BasicBlock] = None
         self.start_block: Optional[BasicBlock] = None
-        self.loop_stack: List[BasicBlock] = []
+        self.loop_stack: List[BasicBlock] = []  # Stack of after_loop blocks (for break)
+        self.loop_guard_stack: List[BasicBlock] = []  # Stack of loop guard blocks (for continue)
         self.in_comprehension = False
         self.comprehension_depth = 0  # Track nesting of comprehensions
         
@@ -196,7 +197,8 @@ class CFGBuilder(ast.NodeVisitor):
         self.add_edge(self.curr_block.bid, after_loop.bid)
         
         body_block = self.add_edge(self.curr_block.bid, self.new_block().bid)
-        self.loop_stack.append(after_loop)
+        self.loop_stack.append(after_loop)  # For break
+        self.loop_guard_stack.append(loop_block)  # For continue
         self.curr_block = body_block
         
         for stmt in node.body:
@@ -215,6 +217,7 @@ class CFGBuilder(ast.NodeVisitor):
                 self.add_edge(self.curr_block.bid, after_loop.bid)
         
         self.loop_stack.pop()
+        self.loop_guard_stack.pop()
         self.curr_block = after_loop
     
     def visit_While(self, node: ast.While):
@@ -231,7 +234,8 @@ class CFGBuilder(ast.NodeVisitor):
         self.add_edge(self.curr_block.bid, after_loop.bid)
         
         body_block = self.add_edge(self.curr_block.bid, self.new_block().bid, node.test)
-        self.loop_stack.append(after_loop)
+        self.loop_stack.append(after_loop)  # For break
+        self.loop_guard_stack.append(loop_block)  # For continue
         self.curr_block = body_block
         
         for stmt in node.body:
@@ -250,6 +254,7 @@ class CFGBuilder(ast.NodeVisitor):
                 self.add_edge(self.curr_block.bid, after_loop.bid)
         
         self.loop_stack.pop()
+        self.loop_guard_stack.pop()
         self.curr_block = after_loop
     
     def visit_Try(self, node: ast.Try):
@@ -312,8 +317,9 @@ class CFGBuilder(ast.NodeVisitor):
         self.curr_block = self.new_block()
     
     def visit_Continue(self, node: ast.Continue):
-        """Visit continue statement."""
-        # Continue jumps back to loop guard (not implemented fully)
+        """Visit continue statement - jumps back to loop guard."""
+        if self.loop_guard_stack:
+            self.add_edge(self.curr_block.bid, self.loop_guard_stack[-1].bid)
         self.curr_block = self.new_block()
     
     def visit_ListComp(self, node: ast.ListComp):
@@ -384,6 +390,60 @@ class CFGBuilder(ast.NodeVisitor):
         
         self.comprehension_depth -= num_generators
         self.in_comprehension = old_comp
+    
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        """Visit function definition - descend into body to build CFG.
+        
+        We always save/restore the current block so that after visiting a function
+        body (which may end with Return, creating a dead-end block), we can continue
+        processing subsequent statements or function definitions in the same block.
+        """
+        # Add the function definition to current block
+        self.add_stmt(self.curr_block, node)
+        
+        # Save current block before visiting function body
+        saved_block = self.curr_block
+        
+        # Create a new block for this function's body
+        func_entry = self.new_block()
+        self.add_edge(saved_block.bid, func_entry.bid)
+        self.curr_block = func_entry
+        
+        # Visit all statements in the function body
+        for stmt in node.body:
+            self.visit(stmt)
+        
+        # Restore to saved block so subsequent function definitions are reachable
+        self.curr_block = saved_block
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        """Visit async function definition - descend into body to build CFG.
+        
+        We always save/restore the current block so that after visiting a function
+        body (which may end with Return, creating a dead-end block), we can continue
+        processing subsequent statements or function definitions in the same block.
+        
+        This is critical for code with multiple top-level async functions - each
+        function body is processed independently, and they all share the same
+        containing block.
+        """
+        # Add the function definition to current block  
+        self.add_stmt(self.curr_block, node)
+        
+        # Save current block before visiting function body
+        saved_block = self.curr_block
+        
+        # Create a new block for this function's body
+        func_entry = self.new_block()
+        self.add_edge(saved_block.bid, func_entry.bid)
+        self.curr_block = func_entry
+        
+        # Visit all statements in the function body
+        for stmt in node.body:
+            self.visit(stmt)
+        
+        # Restore to saved block so subsequent function definitions are reachable
+        self.curr_block = saved_block
     
     def get_function_name(self, node: ast.AST) -> Optional[str]:
         """Extract function name from call node."""
