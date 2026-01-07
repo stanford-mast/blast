@@ -181,7 +181,7 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
         """
         # Build task context string
         if initial_url:
-            context_task_description = f"{task_description}\n\nThis task is being launched from {initial_url}"
+            context_task_description = f"{task_description}\n\nThis task is being launched from {initial_url}. Do not navigate away from this initial URL"
         else:
             context_task_description = task_description
 
@@ -204,7 +204,7 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
                 guidance_parts.append(
                     f'Execute immediately: launch_subtask(task="{task_description}", optional_initial_search_or_url={initial_url}, num_copies={num_copies}) '
                     "--> then get_first_subtask_result with the returned subtask IDs"
-                    " Do not attempt to complete the task yourself - delegate it to subtasks. Unless polling for subtask results repeatedly fails, in which case you can attempt to complete the task yourself."
+                    " Do not attempt to complete the task yourself - you MUST delegate it to subtasks. Unless polling for subtask results repeatedly fails, in which case you can attempt to complete the task yourself."
                 )
 
             if parallelism.get("task", False):
