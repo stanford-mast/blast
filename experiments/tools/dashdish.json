@@ -1,0 +1,704 @@
+{
+  "description": "",
+  "tools": [
+    {
+      "name": "search_store",
+      "title": "Search Store",
+      "description": "Searches for a specific store on DashDish by entering the store name into the search input and submitting the form.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "store_name": {
+            "type": "string",
+            "description": "The name of the store to search for."
+          }
+        },
+        "required": [
+          "store_name"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query that was submitted."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('input[placeholder=\"Search DashDish\"]') ? true : [false, 'Search bar not visible'];",
+      "is_completed": "return true;",
+      "execute": "const input = document.querySelector('input[placeholder=\"Search DashDish\"]'); if (!input) throw new Error('Search input not found'); const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; nativeInputValueSetter.call(input, inputs.store_name); input.dispatchEvent(new Event('input', { bubbles: true })); const form = input.closest('form'); if (form) { form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); } else { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })); } return { query: inputs.store_name };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "home"
+      },
+      "post": {
+        "page_type": "home"
+      },
+      "type": "setFilter",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_store",
+      "title": "Goto Store",
+      "description": "Navigates to a specific store by clicking on its card element based on the provided store name. If currently on a store page, navigates home first.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "store_name": {
+            "type": "string",
+            "description": "The name of the store to find and click."
+          }
+        },
+        "required": [
+          "store_name"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "store_name": {
+            "type": "string",
+            "description": "The exact text content of the store card that was clicked."
+          }
+        },
+        "required": [
+          "store_name"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "if (location.pathname.includes('/store/')) { return true; } const cards = Array.from(document.querySelectorAll('h6')).filter(el => el.textContent.trim().toLowerCase().includes(inputs.store_name.toLowerCase())); return cards.length > 0 ? true : [false, 'Store card not found'];",
+      "is_completed": "return (location.pathname.includes('/store/') || document.querySelector('[data-testid=\"store-page\"]')) ? true : [false, 'Still on home page'];",
+      "execute": "if (location.pathname.includes('/store/')) { const homeLink = document.querySelector('a[href=\"/\"]') || document.querySelector('header a'); if (homeLink) { homeLink.click(); } else { window.location.href = '/'; } await new Promise(r => setTimeout(r, 1500)); } const cards = Array.from(document.querySelectorAll('h6')).filter(el => el.textContent.trim().toLowerCase().includes(inputs.store_name.toLowerCase())); if (cards.length === 0) throw new Error('Store not found'); cards[0].click(); return { store_name: cards[0].textContent.trim() };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "home|store|other"
+      },
+      "post": {
+        "page_type": "store",
+        "selected_store": "$store_name",
+        "filtered_by": ""
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "observe_dashdish",
+      "title": "Observe Dashdish",
+      "description": "Observes the current state of the DashDish application, including page type, active filter, selected store, and cart count.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "page_type": {
+            "type": "string",
+            "enum": [
+              "store",
+              "home",
+              "other"
+            ],
+            "description": "The current page type: 'home' (main page, possibly filtered), 'store' (viewing a store), or 'other'."
+          },
+          "selected_store": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name of the currently viewed store, if on a store page."
+          },
+          "filtered_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The active category/search filter, if any."
+          },
+          "cart_count": {
+            "type": "integer",
+            "description": "The number of items currently in the shopping cart."
+          }
+        },
+        "required": [
+          "page_type",
+          "selected_store",
+          "filtered_by",
+          "cart_count"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "return true;",
+      "execute": "const storeNameEl = document.querySelector('h3.MuiTypography-h3'); const storeName = storeNameEl ? storeNameEl.textContent.trim() : null; const pageType = location.pathname.includes('/store/') ? 'store' : ((location.pathname === '/' || location.pathname.includes('/categories')) ? 'home' : 'other'); let filteredBy = null; if (location.pathname.includes('/categories')) { const categoryHeader = document.querySelector('h4.MuiTypography-h4'); filteredBy = categoryHeader ? categoryHeader.textContent.trim() : null; } else { const searchInput = document.querySelector('input[placeholder=\"Search DashDish\"]'); filteredBy = searchInput?.value || null; } const cartCountEl = document.querySelector('.MuiBadge-badge'); const cartCount = cartCountEl ? parseInt(cartCountEl.textContent) : 0; return { page_type: pageType, selected_store: storeName, filtered_by: filteredBy, cart_count: cartCount };",
+      "pre_path": "*vercel.app*",
+      "pre": {},
+      "post": {},
+      "type": "observe",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_menu_items",
+      "title": "List Menu Items",
+      "description": "Lists all menu items and their prices from the full menu section of the page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "The name of the menu item"
+                },
+                "price": {
+                  "type": "string",
+                  "description": "The price of the menu item"
+                }
+              },
+              "required": [
+                "name",
+                "price"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('#full-menu-section') ? true : [false, 'Not on a store page or Full Menu section not found'];",
+      "is_completed": "return Array.isArray(output.items) && output.items.length > 0 ? true : [false, 'No menu items found'];",
+      "execute": "const items = Array.from(document.querySelectorAll('#full-menu-section .MuiCard-root')).map(el => { const name = el.querySelector('h6.MuiTypography-subtitle2')?.textContent?.trim(); const price = el.querySelector('.MuiStack-root p.MuiTypography-body2')?.textContent?.trim(); return {name, price}; }).filter(item => item.name); return {items};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "store"
+      },
+      "post": {
+        "page_type": "store"
+      },
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "get_store_details",
+      "title": "Get Store Details",
+      "description": "Extracts detailed information about a store, including its name, rating, review count, and estimated pickup time.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the store."
+          },
+          "rating": {
+            "type": "number",
+            "description": "The numerical rating of the store."
+          },
+          "review_count": {
+            "type": "integer",
+            "description": "The total number of reviews for the store."
+          },
+          "pickup_time": {
+            "type": "string",
+            "description": "The estimated time or status for order pickup."
+          }
+        },
+        "required": [
+          "name",
+          "rating",
+          "review_count",
+          "pickup_time"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return !!document.querySelector('h3.MuiTypography-h3') ? true : [false, 'Store name element not found'];",
+      "is_completed": "return (typeof output.name === 'string' && typeof output.rating === 'number') ? true : [false, 'Invalid output format'];",
+      "execute": "const storeName = document.querySelector('h3.MuiTypography-h3')?.innerText || '';\nconst ratingValue = parseFloat(document.querySelector('.css-1blxmo9')?.innerText || '0');\nconst reviewCountRaw = document.querySelector('.css-ph0okg')?.innerText || '';\nconst review_count = parseInt(reviewCountRaw.replace(/[^0-9]/g, '') || '0');\nconst pickupContainer = Array.from(document.querySelectorAll('.MuiStack-root.css-2k05wz')).find(el => el.innerText.includes('Pickup'));\nconst pickup_time = pickupContainer?.querySelector('span.MuiTypography-caption')?.innerText || '';\nreturn { name: storeName, rating: ratingValue, review_count: review_count, pickup_time: pickup_time };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "store"
+      },
+      "post": {
+        "page_type": "store"
+      },
+      "type": "getFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_categories",
+      "title": "List Categories",
+      "description": "Lists all categories available on the home page. Includes carousel filters (e.g., 'Ramen', 'Breakfast'), section headers (e.g., 'Best near you', 'Costume party ready'), and sidebar menu items (e.g., 'Grocery', 'Retail', 'Alcohol'). Use goto_category() to filter by any of these.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "The display name of the category."
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return (document.querySelector('.slick-slider') || document.querySelectorAll('h6.MuiTypography-h6').length > 0) ? true : [false, 'No categories found'];",
+      "is_completed": "return true;",
+      "execute": "const items = []; const slider = document.querySelector('.slick-slider'); if (slider) { Array.from(slider.querySelectorAll('.slick-slide:not(.slick-cloned)')).forEach(el => { const nameEl = el.querySelector('.MuiTypography-root'); if (nameEl) items.push({ name: nameEl.textContent.trim() }); }); } const headers = document.querySelectorAll('h6.MuiTypography-h6'); headers.forEach(h => { const name = h.textContent.trim(); if (name && !items.some(i => i.name === name)) items.push({ name }); }); const sidebarItems = document.querySelectorAll('.MuiListItemButton-root'); sidebarItems.forEach(el => { const name = el.textContent.trim(); if (name && name !== 'Home' && !items.some(i => i.name === name)) items.push({ name }); }); return { items: items.filter(i => i.name) };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "home"
+      },
+      "post": {
+        "page_type": "home"
+      },
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_category",
+      "title": "Goto Category",
+      "description": "Filters stores by category. Works with section headers, sidebar menu items, and carousel filters. Tries section 'See all' first, then sidebar click, then search. After calling this, use list_stores() to get filtered stores.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "category_name": {
+            "type": "string",
+            "description": "The name of the category to filter by."
+          }
+        },
+        "required": [
+          "category_name"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the category filter was applied successfully."
+          },
+          "category_name": {
+            "type": "string",
+            "description": "The name of the category that was applied."
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "section",
+              "sidebar",
+              "search"
+            ],
+            "description": "How the filter was applied: 'section' (clicked See all), 'sidebar' (clicked sidebar menu), or 'search' (used search box)."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "return (location.pathname.includes('/categories') || document.querySelector('input[placeholder=\"Search DashDish\"]')?.value) ? true : [false, 'Filter not applied yet'];",
+      "execute": "const headers = Array.from(document.querySelectorAll('h6')); const targetHeader = headers.find(h => h.textContent.trim().toLowerCase().includes(inputs.category_name.toLowerCase())); if (targetHeader) { const sectionRow = targetHeader.closest('.MuiStack-root'); const seeAllButton = sectionRow ? Array.from(sectionRow.querySelectorAll('button')).find(b => b.textContent.includes('See all')) : null; if (seeAllButton) { seeAllButton.click(); return { success: true, category_name: targetHeader.textContent.trim(), method: 'section' }; } } const sidebarItems = Array.from(document.querySelectorAll('.MuiListItemButton-root')); const sidebarMatch = sidebarItems.find(el => el.textContent.trim().toLowerCase().includes(inputs.category_name.toLowerCase())); if (sidebarMatch) { sidebarMatch.click(); return { success: true, category_name: sidebarMatch.textContent.trim(), method: 'sidebar' }; } const input = document.querySelector('input[placeholder=\"Search DashDish\"]'); if (input) { const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; nativeInputValueSetter.call(input, inputs.category_name); input.dispatchEvent(new Event('input', { bubbles: true })); const form = input.closest('form'); if (form) { form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); } return { success: true, category_name: inputs.category_name, method: 'search' }; } return { success: false };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "home"
+      },
+      "post": {
+        "page_type": "home",
+        "filtered_by": "$category_name"
+      },
+      "type": "gotoItem",
+      "pre_tools": {
+        "category_name": [
+          "list_categories"
+        ]
+      }
+    },
+    {
+      "name": "list_stores",
+      "title": "List Stores",
+      "description": "Lists all visible stores on the home page. Use after search_store() to see filtered results, or after goto_category() to see category stores, or on the home page to see all stores.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "The name of the store"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelectorAll('h6.MuiTypography-subtitle1').length > 0 ? true : [false, 'No store cards found on page'];",
+      "is_completed": "return Array.isArray(output.items) ? true : [false, 'Output items is not an array'];",
+      "execute": "const stores = Array.from(document.querySelectorAll('h6.MuiTypography-subtitle1')).map(el => ({ name: el.textContent.trim() })).filter(item => item.name); return { items: stores };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "home"
+      },
+      "post": {
+        "page_type": "home"
+      },
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "get_store_reviews",
+      "title": "Get Store Reviews",
+      "description": "Retrieves a list of customer reviews from the store page, including reviewer names, star ratings, and review text.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "The maximum number of reviews to retrieve (defaults to 10)."
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "reviewer": {
+                  "type": "string",
+                  "description": "The name of the person who wrote the review."
+                },
+                "rating": {
+                  "type": "number",
+                  "description": "The numerical star rating based on the number of star icons found."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "The full text content of the review."
+                }
+              },
+              "required": [
+                "reviewer",
+                "rating",
+                "text"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return !!document.querySelector('#reviews-section') ? true : [false, 'Reviews section not found'];",
+      "is_completed": "return Array.isArray(output.items) ? true : [false, 'Output is not an array'];",
+      "execute": "const reviewCards = Array.from(document.querySelectorAll('#reviews-section .slick-slide:not(.slick-cloned) .MuiCard-root.css-1nj8tgd')); const items = reviewCards.slice(0, inputs.limit || 10).map(card => { const nameEl = card.querySelector('.MuiTypography-subtitle2'); const textEl = card.querySelector('.MuiTypography-body2'); const stars = card.querySelectorAll('svg').length; return { reviewer: nameEl ? nameEl.textContent.trim() : 'Anonymous', rating: stars, text: textEl ? textEl.textContent.trim() : '' }; }); return { items };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "store"
+      },
+      "post": {
+        "page_type": "store"
+      },
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "get_item_details",
+      "title": "Get Item Details",
+      "description": "Finds a menu item by name, opens its detail modal, and extracts the name, price, description, and available customization options.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "item_name": {
+            "type": "string",
+            "description": "The exact or partial name of the menu item to look for."
+          }
+        },
+        "required": [
+          "item_name"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the item found in the modal."
+          },
+          "price": {
+            "type": "string",
+            "description": "The price of the item, typically extracted from the add-to-cart button."
+          },
+          "description": {
+            "type": "string",
+            "description": "The description text for the menu item."
+          },
+          "customizations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sectionName": {
+                  "type": "string",
+                  "description": "The name of the customization group (e.g., 'Choose your size')."
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The list of specific choices available within this customization section."
+                }
+              },
+              "required": [
+                "sectionName",
+                "options"
+              ]
+            }
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the item or modal could not be found."
+          }
+        },
+        "required": []
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return !!Array.from(document.querySelectorAll('#full-menu-section h6, #full-menu-section .MuiTypography-root')).find(el => el.textContent.toLowerCase().includes(inputs.item_name.toLowerCase())) ? true : [false, 'Item not found on menu'];",
+      "is_completed": "return !document.querySelector('.MuiModal-root[role=\"presentation\"], .MuiDialog-root') ? true : [false, 'Modal not closed after extraction'];",
+      "execute": "const cards = Array.from(document.querySelectorAll('#full-menu-section .MuiCard-root')); const item = cards.find(el => el.textContent.toLowerCase().includes(inputs.item_name.toLowerCase())); if (!item) return { error: 'Item not found' }; item.scrollIntoView({ block: 'center' }); await new Promise(r => setTimeout(r, 300)); const btn = item.querySelector('button') || item; btn.click(); let modal = null; for (let i = 0; i < 15; i++) { await new Promise(r => setTimeout(r, 300)); modal = document.querySelector('.MuiModal-root, [role=\"dialog\"], .MuiDialog-root'); if (modal) break; } if (!modal) return { error: 'Modal not found after retry' }; const name = modal.querySelector('h2, h3, .MuiTypography-h5, .MuiTypography-h6')?.innerText; const buttonText = modal.querySelector('button[type=\"submit\"], button.MuiButton-containedPrimary')?.innerText; const price = buttonText?.match(/\\$\\d+\\.\\d+/)?.[0]; const description = modal.querySelector('.MuiTypography-body1, .MuiTypography-body2, p')?.innerText; const customizations = []; const sections = modal.querySelectorAll('h6.MuiTypography-subtitle1, fieldset'); sections.forEach(section => { const sectionName = section.innerText; const options = []; let nextEl = section.nextElementSibling; while (nextEl && !nextEl.classList.contains('MuiDivider-root') && !nextEl.tagName.startsWith('H')) { const labels = nextEl.querySelectorAll('.MuiFormControlLabel-label, label'); labels.forEach(l => options.push(l.innerText.trim())); nextEl = nextEl.nextElementSibling; } customizations.push({ sectionName, options }); }); const closeBtn = modal.querySelector('button[aria-label=\"Close\"], .close-modal, svg[data-testid=\"CloseIcon\"]'); if (closeBtn) { const clickable = closeBtn.closest('button') || closeBtn.parentElement || closeBtn; clickable.dispatchEvent(new MouseEvent('click', { bubbles: true })); } await new Promise(r => setTimeout(r, 300)); return { name, price, description, customizations };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "store"
+      },
+      "post": {
+        "page_type": "store"
+      },
+      "type": "getFields",
+      "pre_tools": {
+        "item_name": [
+          "list_menu_items"
+        ]
+      }
+    },
+    {
+      "name": "back_to_home",
+      "title": "Back To Home",
+      "description": "Navigates back to the home page from any page by clicking the Home menu item or the site logo.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "link",
+              "logo"
+            ],
+            "description": "The element type used to perform the navigation."
+          }
+        },
+        "required": [
+          "method"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return (Array.from(document.querySelectorAll('.MuiListItemButton-root, [role=\"button\"]')).some(el => el.textContent.trim() === 'Home') || !!document.querySelector('img[alt=\"Dashdish\"]')) ? true : [false, 'Navigation elements not found'];",
+      "is_completed": "return location.pathname === '/' || document.querySelector('input[placeholder*=\"Search DashDish\"]') ? true : [false, 'Still not on home page'];",
+      "execute": "const navLinks = document.querySelectorAll('.MuiListItemButton-root, [role=\"button\"]'); const homeLink = Array.from(navLinks).find(el => el.textContent.trim() === 'Home'); if (homeLink) { homeLink.click(); return { method: 'link' }; } const logo = document.querySelector('img[alt=\"Dashdish\"]'); if (logo) { logo.click(); return { method: 'logo' }; } throw new Error('Home navigation element not found');",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "*"
+      },
+      "post": {
+        "page_type": "home",
+        "selected_store": "",
+        "filtered_by": ""
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "add_to_cart",
+      "title": "Add To Cart",
+      "description": "Adds a specific item to the shopping cart with optional customizations and special instructions.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "item_name": {
+            "type": "string",
+            "description": "The name of the item to add to the cart."
+          },
+          "customizations": {
+            "type": "string",
+            "description": "A comma-separated list of customizations in 'Key: Value' format (e.g., 'Size: Large, Special Instructions: No onions')."
+          }
+        },
+        "required": [
+          "item_name"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates if the item was successfully added to the cart."
+          },
+          "item_added": {
+            "type": "string",
+            "description": "The name of the item that was added."
+          },
+          "cart_count": {
+            "type": "integer",
+            "description": "The updated number of items in the cart."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the operation failed."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.body.textContent.includes('Full Menu') ? true : [false, 'Not on a store page'];",
+      "is_completed": "return output.success === true ? true : [false, output.error];",
+      "execute": "const { item_name, customizations } = inputs;\n\n// 1. Find and click the item card to open modal (same approach as get_item_details)\nlet modal = document.querySelector('.MuiModal-root, [role=\"dialog\"], .MuiDialog-root');\nif (!modal) {\n  const cards = Array.from(document.querySelectorAll('#full-menu-section .MuiCard-root'));\n  const itemCard = cards.find(card => card.textContent.toLowerCase().includes(item_name.toLowerCase()));\n  if (!itemCard) return { success: false, error: 'Item not found: ' + item_name };\n  \n  itemCard.scrollIntoView({ block: 'center' });\n  await new Promise(r => setTimeout(r, 300));\n  const btn = itemCard.querySelector('button') || itemCard;\n  btn.click();\n  \n  // Retry loop waiting for modal (same as get_item_details)\n  for (let i = 0; i < 15; i++) {\n    await new Promise(r => setTimeout(r, 300));\n    modal = document.querySelector('.MuiModal-root, [role=\"dialog\"], .MuiDialog-root');\n    if (modal) break;\n  }\n}\n\nif (!modal) return { success: false, error: 'Could not open modal for ' + item_name };\n\n// 2. Apply Customizations\nif (customizations) {\n  const parts = customizations.split(',').map(p => p.trim());\n  for (const part of parts) {\n    const [key, ...valParts] = part.split(':').map(s => s.trim());\n    const value = valParts.join(':');\n    if (key.toLowerCase() === 'special instructions') {\n      const textarea = modal.querySelector('textarea');\n      if (textarea) {\n        textarea.focus();\n        textarea.value = value;\n        textarea.dispatchEvent(new Event('input', { bubbles: true }));\n      }\n    } else {\n      const labels = Array.from(modal.querySelectorAll('label, .MuiFormControlLabel-label'));\n      const target = labels.find(l => l.textContent.toLowerCase().includes(value.toLowerCase()));\n      if (target) target.click();\n    }\n  }\n}\n\n// 3. Click Add to Cart button in modal\nconst addBtn = Array.from(modal.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('add to cart'));\nif (addBtn) {\n  addBtn.click();\n  await new Promise(r => setTimeout(r, 1500));\n}\n\nconst cartButton = document.querySelector('header button.MuiButton-containedPrimary, .MuiBadge-badge');\nconst cart_count = cartButton ? parseInt(cartButton.innerText.trim()) || 0 : 0;\n\nreturn { success: true, item_added: item_name, cart_count };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "store"
+      },
+      "post": {
+        "page_type": "store"
+      },
+      "type": "setFields",
+      "pre_tools": {
+        "item_name": [
+          "list_menu_items"
+        ],
+        "customizations": [
+          "get_item_details"
+        ]
+      }
+    },
+    {
+      "name": "checkout",
+      "title": "Checkout",
+      "description": "Automates the checkout process by navigating to the checkout page or clicking the place order button depending on the current page state.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates if the navigation or order placement action was successful."
+          },
+          "status": {
+            "type": "string",
+            "description": "A description of the action taken, such as 'Order Placed' or 'Navigated to Checkout'."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the button could not be found or the action failed."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return (window.location.pathname.includes('/checkout') || document.querySelector('header button.MuiButton-containedPrimary')) ? true : [false, 'Not on checkout or store page'];",
+      "is_completed": "return output.success === true ? true : [false, output.error];",
+      "execute": "const isCheckoutPage = window.location.pathname.includes('/checkout');\n\nif (isCheckoutPage) {\n  const placeOrderBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Place Order'));\n  if (placeOrderBtn) {\n    placeOrderBtn.click();\n    await new Promise(r => setTimeout(r, 2000));\n    return { success: true, status: 'Order Placed' };\n  }\n  return { success: false, error: 'Place Order button not found' };\n} else {\n  // Assume we are on store page and need to open cart\n  let checkoutBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Checkout'));\n  if (!checkoutBtn) {\n    const cartBtn = document.querySelector('header button.MuiButton-containedPrimary');\n    if (cartBtn) cartBtn.click();\n    await new Promise(r => setTimeout(r, 1000));\n    checkoutBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Checkout'));\n  }\n  \n  if (checkoutBtn) {\n    checkoutBtn.click();\n    await new Promise(r => setTimeout(r, 2000));\n    return { success: true, status: 'Navigated to Checkout' };\n  }\n  return { success: false, error: 'Checkout button not found' };\n}",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "store|checkout"
+      },
+      "post": {
+        "page_type": "checkout|order_confirmation"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    }
+  ],
+  "is_ready_timeout_ms": 30000
+}
