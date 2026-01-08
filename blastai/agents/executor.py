@@ -111,6 +111,7 @@ class AgentExecutor:
         cycle_id: Optional[int] = None,
         summarizer_llm: Optional[BaseChatModel] = None,
         timing_tracker: Optional["TimingTracker"] = None,
+        use_vision: bool = False,
     ):
         """
         Initialize AgentExecutor.
@@ -165,6 +166,7 @@ class AgentExecutor:
         self.output_model_schema = output_model_schema
         self.timing_tracker = timing_tracker  # Add timing tracker
         self.tools = Tools()
+        self.use_vision = use_vision
 
         # Callbacks for DBOS workflow integration
         self.send_message_callback = send_message_callback
@@ -237,7 +239,8 @@ class AgentExecutor:
         # Get viewport/window size from environment
         width = int(os.getenv("BROWSER_WIDTH", "1280"))
         height = int(os.getenv("BROWSER_HEIGHT", "720"))
-        headless = os.getenv("HEADLESS", "false").lower() == "true"
+        # headless = os.getenv("HEADLESS", "false").lower() == "true"
+        headless = True
 
         # Build Chrome args ensuring GPU disabled (alignment with page load measurement path)
         args = ["--disable-gpu", "--disable-gpu-sandbox"]
@@ -463,6 +466,7 @@ class AgentExecutor:
                     initial_actions=initial_actions,  # Agent will execute navigation before task
                     output_model_schema=self.output_model_schema,  # Pass structured output schema
                     step_timeout=3600,  # 1 hour timeout - hooks handle stop checking via check_stop_callback
+                    use_vision=self.use_vision,
                 )
             else:
                 # Reuse existing agent with new task
