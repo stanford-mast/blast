@@ -106,6 +106,7 @@
             "enum": [
               "store",
               "home",
+              "checkout",
               "other"
             ],
             "description": "The current page type: 'home' (main page, possibly filtered), 'store' (viewing a store), or 'other'."
@@ -140,7 +141,7 @@
       "lang": "js",
       "is_ready": "return true;",
       "is_completed": "return true;",
-      "execute": "const storeNameEl = document.querySelector('h3.MuiTypography-h3'); const storeName = storeNameEl ? storeNameEl.textContent.trim() : null; const pageType = location.pathname.includes('/store/') ? 'store' : ((location.pathname === '/' || location.pathname.includes('/categories')) ? 'home' : 'other'); let filteredBy = null; if (location.pathname.includes('/categories')) { const categoryHeader = document.querySelector('h4.MuiTypography-h4'); filteredBy = categoryHeader ? categoryHeader.textContent.trim() : null; } else { const searchInput = document.querySelector('input[placeholder=\"Search DashDish\"]'); filteredBy = searchInput?.value || null; } const cartCountEl = document.querySelector('.MuiBadge-badge'); const cartCount = cartCountEl ? parseInt(cartCountEl.textContent) : 0; return { page_type: pageType, selected_store: storeName, filtered_by: filteredBy, cart_count: cartCount };",
+      "execute": "const storeNameEl = document.querySelector('h3.MuiTypography-h3'); const storeName = storeNameEl ? storeNameEl.textContent.trim() : null; let pageType = 'other'; if (location.pathname.includes('/checkout')) { pageType = 'checkout'; } else if (location.pathname.includes('/store/')) { pageType = 'store'; } else if (location.pathname === '/' || location.pathname.includes('/categories')) { pageType = 'home'; } let filteredBy = null; if (location.pathname.includes('/categories')) { const categoryHeader = document.querySelector('h4.MuiTypography-h4'); filteredBy = categoryHeader ? categoryHeader.textContent.trim() : null; } else { const searchInput = document.querySelector('input[placeholder=\"Search DashDish\"]'); filteredBy = searchInput?.value || null; } const cartBtn = document.querySelector('header button.MuiButton-containedPrimary'); const cartCount = cartBtn ? parseInt(cartBtn.textContent.replace(/[^0-9]/g, '')) || 0 : 0; return { page_type: pageType, selected_store: storeName, filtered_by: filteredBy, cart_count: cartCount };",
       "pre_path": "*vercel.app*",
       "pre": {},
       "post": {},
