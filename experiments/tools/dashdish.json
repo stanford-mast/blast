@@ -699,7 +699,7 @@
     {
       "name": "place_order",
       "title": "Place Order",
-      "description": "Clicks the 'Place Order' button on the page and confirms if the order was successfully placed.",
+      "description": "Clicks the 'Place Order' button on a webpage and checks if the order was successfully confirmed.",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -709,15 +709,21 @@
         "type": "object",
         "properties": {
           "success": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Indicates if the order was placed and confirmed successfully."
           },
           "status": {
             "type": "string",
-            "description": "Order status message (present only if success is true)"
+            "description": "Status message if the order was confirmed.",
+            "enum": [
+              "Order Confirmed"
+            ],
+            "nullable": true
           },
           "error": {
             "type": "string",
-            "description": "Error message (present only if success is false)"
+            "description": "Error message if the order could not be placed or confirmed.",
+            "nullable": true
           }
         },
         "required": [
@@ -726,9 +732,9 @@
       },
       "tool_executor_type": "smcp",
       "lang": "js",
-      "is_ready": "return window.location.pathname.includes('/checkout') && Array.from(document.querySelectorAll('button')).some(b => b.textContent && b.textContent.trim().toLowerCase().includes('place order')) ? true : [false, 'Not on checkout page or Place Order button missing'];",
+      "is_ready": "return window.location.pathname.includes('/checkout') && Array.from(document.querySelectorAll('button')).some(b => b.textContent && b.textContent.trim().toLowerCase().startsWith('place order')) ? true : [false, 'Not on checkout page or Place Order button missing'];",
       "is_completed": "return output.success === true ? true : [false, output.error];",
-      "execute": "const placeOrderBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.trim().toLowerCase().includes('place order'));\nif (!placeOrderBtn) return {success: false, error: 'Place Order button not found'};\nplaceOrderBtn.click();\nawait new Promise(r => setTimeout(r, 5000));\nconst confirmationText = Array.from(document.querySelectorAll('h1,h2,h3,p,div')).find(el => el.textContent && /order (confirmed|placed|complete|successful)/i.test(el.textContent));\nif (confirmationText) {\n  return {success: true, status: 'Order Confirmed'};\n}\nreturn {success: false, error: 'Order confirmation not found after placing order'};",
+      "execute": "const btns = Array.from(document.querySelectorAll('button'));\nconst targetBtn = btns.find(b => b.textContent && b.textContent.trim().toLowerCase().startsWith('place order'));\nif (!targetBtn) return {success: false, error: 'Place Order button not found'};\ntargetBtn.click();\nawait new Promise(r => setTimeout(r, 5000));\nconst confirmationText = Array.from(document.querySelectorAll('h1,h2,h3,p,div')).find(el => el.textContent && /order (confirmed|placed|complete|successful)/i.test(el.textContent));\nif (confirmationText) {\n  return {success: true, status: 'Order Confirmed'};\n}\nreturn {success: false, error: 'Order confirmation not found after placing order'};",
       "pre_path": "*vercel.app*",
       "pre": {
         "page_type": "checkout"
