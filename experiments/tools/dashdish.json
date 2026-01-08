@@ -656,9 +656,9 @@
       }
     },
     {
-      "name": "checkout",
-      "title": "Checkout",
-      "description": "Automates the checkout process by navigating to the checkout page or clicking the place order button depending on the current page state.",
+      "name": "navigate_to_checkout",
+      "title": "Navigate To Checkout",
+      "description": "Navigates the user from the cart to the checkout page by clicking the appropriate buttons.",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -668,16 +668,13 @@
         "type": "object",
         "properties": {
           "success": {
-            "type": "boolean",
-            "description": "Indicates if the navigation or order placement action was successful."
+            "type": "boolean"
           },
           "status": {
-            "type": "string",
-            "description": "A description of the action taken, such as 'Order Placed' or 'Navigated to Checkout'."
+            "type": "string"
           },
           "error": {
-            "type": "string",
-            "description": "Error message if the button could not be found or the action failed."
+            "type": "string"
           }
         },
         "required": [
@@ -686,15 +683,58 @@
       },
       "tool_executor_type": "smcp",
       "lang": "js",
-      "is_ready": "return (window.location.pathname.includes('/checkout') || document.querySelector('header button.MuiButton-containedPrimary')) ? true : [false, 'Not on checkout or store page'];",
+      "is_ready": "return (!window.location.pathname.includes('/checkout') && document.querySelector('header button.MuiButton-containedPrimary')) ? true : [false, 'Not on store page or cart button missing'];",
       "is_completed": "return output.success === true ? true : [false, output.error];",
-      "execute": "const isCheckoutPage = window.location.pathname.includes('/checkout');\n\nif (isCheckoutPage) {\n  const placeOrderBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Place Order'));\n  if (placeOrderBtn) {\n    placeOrderBtn.click();\n    await new Promise(r => setTimeout(r, 2000));\n    return { success: true, status: 'Order Placed' };\n  }\n  return { success: false, error: 'Place Order button not found' };\n} else {\n  // Assume we are on store page and need to open cart\n  let checkoutBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Checkout'));\n  if (!checkoutBtn) {\n    const cartBtn = document.querySelector('header button.MuiButton-containedPrimary');\n    if (cartBtn) cartBtn.click();\n    await new Promise(r => setTimeout(r, 1000));\n    checkoutBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Checkout'));\n  }\n  \n  if (checkoutBtn) {\n    checkoutBtn.click();\n    await new Promise(r => setTimeout(r, 2000));\n    return { success: true, status: 'Navigated to Checkout' };\n  }\n  return { success: false, error: 'Checkout button not found' };\n}",
+      "execute": "const cartBtn = document.querySelector('header button.MuiButton-containedPrimary');\nif (cartBtn) cartBtn.click();\nawait new Promise(r => setTimeout(r, 1000));\nconst checkoutBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Checkout'));\nif (checkoutBtn) {\n  checkoutBtn.click();\n  await new Promise(r => setTimeout(r, 2000));\n  return { success: true, status: 'Navigated to Checkout' };\n}\nreturn { success: false, error: 'Checkout button not found' };",
       "pre_path": "*vercel.app*",
       "pre": {
-        "page_type": "store|checkout"
+        "page_type": "store"
       },
       "post": {
-        "page_type": "checkout|order_confirmation"
+        "page_type": "checkout"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "place_order",
+      "title": "Place Order",
+      "description": "Clicks the 'Place Order' button on the page and confirms if the order was successfully placed.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "description": "Order status message (present only if success is true)"
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message (present only if success is false)"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return window.location.pathname.includes('/checkout') && Array.from(document.querySelectorAll('button')).some(b => b.textContent && b.textContent.trim().toLowerCase().includes('place order')) ? true : [false, 'Not on checkout page or Place Order button missing'];",
+      "is_completed": "return output.success === true ? true : [false, output.error];",
+      "execute": "const placeOrderBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.trim().toLowerCase().includes('place order'));\nif (!placeOrderBtn) return {success: false, error: 'Place Order button not found'};\nplaceOrderBtn.click();\nawait new Promise(r => setTimeout(r, 5000));\nconst confirmationText = Array.from(document.querySelectorAll('h1,h2,h3,p,div')).find(el => el.textContent && /order (confirmed|placed|complete|successful)/i.test(el.textContent));\nif (confirmationText) {\n  return {success: true, status: 'Order Confirmed'};\n}\nreturn {success: false, error: 'Order confirmation not found after placing order'};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "checkout"
+      },
+      "post": {
+        "page_type": "order_confirmation"
       },
       "type": "setFields",
       "pre_tools": {}
