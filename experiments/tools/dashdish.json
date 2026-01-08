@@ -300,7 +300,7 @@
     {
       "name": "goto_category",
       "title": "Goto Category",
-      "description": "Filters stores by category. Works with section headers, sidebar menu items, and carousel filters. Tries section 'See all' first, then sidebar click, then search. After calling this, use list_stores() to get filtered stores.",
+      "description": "Updates current list of stores by filtering by category. Works with section headers, sidebar menu items, and carousel filters.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -361,7 +361,7 @@
     {
       "name": "list_stores",
       "title": "List Stores",
-      "description": "Lists all visible stores on the home page. Use after search_store() to see filtered results, or after goto_category() to see category stores, or on the home page to see all stores.",
+      "description": "Lists all currently visible stores on the home page.",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -530,9 +530,9 @@
       },
       "tool_executor_type": "smcp",
       "lang": "js",
-      "is_ready": "return !!Array.from(document.querySelectorAll('#full-menu-section h6, #full-menu-section .MuiTypography-root')).find(el => el.textContent.toLowerCase().includes(inputs.item_name.toLowerCase())) ? true : [false, 'Item not found on menu'];",
+      "is_ready": "const search = inputs.item_name.toLowerCase(); return !!Array.from(document.querySelectorAll('#full-menu-section h6, #full-menu-section .MuiTypography-root')).find(el => { const menu = el.textContent.toLowerCase(); return menu.includes(search) || search.includes(menu); }) ? true : [false, 'Item not found on menu'];",
       "is_completed": "return !document.querySelector('.MuiModal-root[role=\"presentation\"], .MuiDialog-root') ? true : [false, 'Modal not closed after extraction'];",
-      "execute": "const cards = Array.from(document.querySelectorAll('#full-menu-section .MuiCard-root')); const item = cards.find(el => el.textContent.toLowerCase().includes(inputs.item_name.toLowerCase())); if (!item) return { error: 'Item not found' }; item.scrollIntoView({ block: 'center' }); await new Promise(r => setTimeout(r, 300)); const btn = item.querySelector('button') || item; btn.click(); let modal = null; for (let i = 0; i < 15; i++) { await new Promise(r => setTimeout(r, 300)); modal = document.querySelector('.MuiModal-root, [role=\"dialog\"], .MuiDialog-root'); if (modal) break; } if (!modal) return { error: 'Modal not found after retry' }; const name = modal.querySelector('h2, h3, .MuiTypography-h5, .MuiTypography-h6')?.innerText; const buttonText = modal.querySelector('button[type=\"submit\"], button.MuiButton-containedPrimary')?.innerText; const price = buttonText?.match(/\\$\\d+\\.\\d+/)?.[0]; const description = modal.querySelector('.MuiTypography-body1, .MuiTypography-body2, p')?.innerText; const customizations = []; const sections = modal.querySelectorAll('h6.MuiTypography-subtitle1, fieldset'); sections.forEach(section => { const sectionName = section.innerText; const options = []; let nextEl = section.nextElementSibling; while (nextEl && !nextEl.classList.contains('MuiDivider-root') && !nextEl.tagName.startsWith('H')) { const labels = nextEl.querySelectorAll('.MuiFormControlLabel-label, label'); labels.forEach(l => options.push(l.innerText.trim())); nextEl = nextEl.nextElementSibling; } customizations.push({ sectionName, options }); }); const closeBtn = modal.querySelector('button[aria-label=\"Close\"], .close-modal, svg[data-testid=\"CloseIcon\"]'); if (closeBtn) { const clickable = closeBtn.closest('button') || closeBtn.parentElement || closeBtn; clickable.dispatchEvent(new MouseEvent('click', { bubbles: true })); } await new Promise(r => setTimeout(r, 300)); return { name, price, description, customizations };",
+      "execute": "const search = inputs.item_name.toLowerCase(); const cards = Array.from(document.querySelectorAll('#full-menu-section .MuiCard-root')); const item = cards.find(el => { const menu = el.textContent.toLowerCase(); return menu.includes(search) || search.includes(menu); }); if (!item) return { error: 'Item not found' }; item.scrollIntoView({ block: 'center' }); await new Promise(r => setTimeout(r, 300)); const btn = item.querySelector('button') || item; btn.click(); let modal = null; for (let i = 0; i < 15; i++) { await new Promise(r => setTimeout(r, 300)); modal = document.querySelector('.MuiModal-root, [role=\"dialog\"], .MuiDialog-root'); if (modal) break; } if (!modal) return { error: 'Modal not found after retry' }; const name = modal.querySelector('h2, h3, .MuiTypography-h5, .MuiTypography-h6')?.innerText; const buttonText = modal.querySelector('button[type=\"submit\"], button.MuiButton-containedPrimary')?.innerText; const price = buttonText?.match(/\\$\\d+\\.\\d+/)?.[0]; const description = modal.querySelector('.MuiTypography-body1, .MuiTypography-body2, p')?.innerText; const customizations = []; const sections = modal.querySelectorAll('h6.MuiTypography-subtitle1, fieldset'); sections.forEach(section => { const sectionName = section.innerText; const options = []; let nextEl = section.nextElementSibling; while (nextEl && !nextEl.classList.contains('MuiDivider-root') && !nextEl.tagName.startsWith('H')) { const labels = nextEl.querySelectorAll('.MuiFormControlLabel-label, label'); labels.forEach(l => options.push(l.innerText.trim())); nextEl = nextEl.nextElementSibling; } customizations.push({ sectionName, options }); }); const closeBtn = modal.querySelector('button[aria-label=\"Close\"], .close-modal, svg[data-testid=\"CloseIcon\"]'); if (closeBtn) { const clickable = closeBtn.closest('button') || closeBtn.parentElement || closeBtn; clickable.dispatchEvent(new MouseEvent('click', { bubbles: true })); } await new Promise(r => setTimeout(r, 300)); return { name, price, description, customizations };",
       "pre_path": "*vercel.app*",
       "pre": {
         "page_type": "store"
