@@ -1069,7 +1069,7 @@ def compute_summary_statistics(
     "--parallel",
     type=int,
     default=1,
-    help="Number of parallel runs to execute simultaneously (default: 1, max: 32)",
+    help="Number of parallel runs to execute simultaneously (default: 1, max: 8)",
 )
 @click.option(
     "--print-code/--no-print-code",
@@ -1199,8 +1199,8 @@ def main(
             ),
         ]
 
-    # Clamp parallel to reasonable range (higher is fine for codegen since it's I/O bound)
-    parallel = max(1, min(parallel, 32))
+    # Clamp parallel to reasonable range
+    parallel = max(1, min(parallel, 8))
 
     console.print(
         Panel(
