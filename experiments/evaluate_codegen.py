@@ -234,54 +234,6 @@ async def generate_code_with_timing(
     return generated_code or "", generation_time, 0.0, candidate, code_generator
 
 
-def estimate_cost_from_model(model: str, code: str, generation_time: float) -> float:
-    """
-    Estimate LLM cost based on model, generated code length, and time.
-
-    This is a rough approximation. Real implementation should track actual token usage.
-    """
-    # Rough token estimates
-    # Assume prompt is ~2000 tokens (task + definitions + examples)
-    # Assume code output is ~500 tokens on average
-    prompt_tokens = 2000 + len(code.split()) * 0.5  # Rough estimate
-    output_tokens = len(code.split()) * 1.3  # Rough estimate (1.3 tokens per word)
-
-    # Pricing per million tokens (from pricing_openai_api.json and typical API pricing)
-    pricing = {
-        "gpt-4.1": {"input": 2.0, "output": 8.0},
-        "gpt-4.1-mini": {"input": 0.4, "output": 1.6},
-        "gpt-5.1": {"input": 1.25, "output": 10.0},
-        "gpt-5-mini": {"input": 0.25, "output": 2.0},
-        "gpt-5-nano": {"input": 0.05, "output": 0.40},
-        "meta-llama/llama-4-maverick-17b-128e-instruct": {
-            "input": 0.15,
-            "output": 0.15,
-        },  # Groq pricing
-        "openai/gpt-oss-20b": {"input": 0.15, "output": 0.15},  # Groq pricing (approx)
-        "openai/gpt-oss-120b": {"input": 0.30, "output": 0.30},  # Groq pricing (approx)
-        "claude-sonnet-4-5-20250929": {
-            "input": 3.0,
-            "output": 15.0,
-        },  # Anthropic Claude 3.5 Sonnet pricing
-        "gemini-2.5-pro": {
-            "input": 1.25,
-            "output": 10.0,
-        },  # Google Gemini 2.5 Pro pricing
-        "gemini-2.0-flash-lite": {
-            "input": 0.075,
-            "output": 0.30,
-        },  # Google Gemini 2.0 Flash Lite pricing
-    }
-
-    if model in pricing:
-        input_cost = (prompt_tokens / 1_000_000) * pricing[model]["input"]
-        output_cost = (output_tokens / 1_000_000) * pricing[model]["output"]
-        return input_cost + output_cost
-    else:
-        # Default rough estimate
-        return 0.001 * generation_time  # $0.001 per second as fallback
-
-
 async def validate_code(
     code: str, agent: Agent, code_generator=None, candidate: Optional[object] = None
 ) -> CodecheckResult:
@@ -700,7 +652,7 @@ async def run_evaluation_for_task(
                 try:
                     # Create LLM for this config
                     codegen_llm = LLMFactory.create_llm(
-                        model_name=config.model, temperature=0.0
+                        model_name=config.model, temperature=0.5
                     )
 
                     # Generate code
@@ -1117,7 +1069,7 @@ def compute_summary_statistics(
     "--parallel",
     type=int,
     default=1,
-    help="Number of parallel runs to execute simultaneously (default: 1, max: 8)",
+    help="Number of parallel runs to execute simultaneously (default: 1, max: 32)",
 )
 @click.option(
     "--print-code/--no-print-code",
@@ -1247,8 +1199,8 @@ def main(
             ),
         ]
 
-    # Clamp parallel to reasonable range
-    parallel = max(1, min(parallel, 8))
+    # Clamp parallel to reasonable range (higher is fine for codegen since it's I/O bound)
+    parallel = max(1, min(parallel, 32))
 
     console.print(
         Panel(
