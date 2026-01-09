@@ -93,6 +93,15 @@ await tool_c()
 x = await tool_e(123)
 results = [await tool_f(item_name=item.name) for item in x.items if item.value > 3]
 result = await ai_eval("Summary of {results}", results=results)
+
+E7: when appropriate, use information from previous tool calls to refine the next tool call
+Bad: calling list_tool() but then hardcoding names:
+Right: store results and filter dynamically
+```python
+tools = await list_tools()
+tools = [t for t in tools if "keyword" in t.name.lower()]
+details = await get_tool_details(tool_id=tools[0].id)
+result = details.info
 ```
 
 {COMMENTED_OUT_AI_EXEC_EXAMPLE}

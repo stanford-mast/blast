@@ -1,41 +1,52 @@
+# DashDish task definitions
 tasks:
 - id: dashdish-deepresearch1
+  eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
   goal: 'Find the top 10 restaurants sorted by number of reviews (most reviews first), and for each restaurant find the cheapest and most expensive menu items (output a list of restaurant objects with name, num_reviews, cheapest_item, most_expensive_item)'
   smcp_registry: experiments/tools/dashdish.json
-- id: dashdish-custom1
+- id: dashdish-custom-1
+  eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
-  goal: 'How much is a matcha croissant and a regular iced matcha latte from stonemill matcha? What about a ceremonial grade matcha latte and a mochi set?'
+  goal: 'How much is a matcha croissant and a regular iced matcha latte from stonemill matcha? What about a ceremonial matcha latte and a mochi set?'
   smcp_registry: experiments/tools/dashdish.json
-- id: dashdish-custom2
+- id: dashdish-custom-2
+  eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
   goal: "For each vendor under the 'Costume party ready' category, visit the store page and get the first three reviews."
   smcp_registry: experiments/tools/dashdish.json
-- id: dashdish-custom3
+- id: dashdish-custom-3
+  eval_type: script
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
   goal: 'Buy a taco from any store and make sure you place the order.'
   smcp_registry: experiments/tools/dashdish.json
-- id: dashdish-custom4
+- id: dashdish-custom-4
+  eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
   goal: 'Can Honey BBQ Wings from Wingstop be ordered with sauce on the side?'
   smcp_registry: experiments/tools/dashdish.json
-- id: dashdish-custom5
+- id: dashdish-custom-5
+  eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
   goal: 'How many restaurants are under the smoothies category?'
   smcp_registry: experiments/tools/dashdish.json
-- id: dashdish-custom6
+- id: dashdish-custom-6
+  eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
   goal: 'Visit the first five restaurants in "Best near you" and report how many of them have under 20 reviews?'
   smcp_registry: experiments/tools/dashdish.json
-- id: dashdish-custom7
+- id: dashdish-custom-7
+  eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
   goal: "What's the most expensive item from Petco?"
   smcp_registry: experiments/tools/dashdish.json
-- id: dashdish-custom8
+- id: dashdish-custom-8
+  eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
   goal: 'How long does it take to pick up an order from RT Rotisserie?'
   smcp_registry: experiments/tools/dashdish.json
-- id: dashdish-custom9
+- id: dashdish-custom-9
+  eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
-  goal: "Tell me which of Winstop, Man vs. Fries, McDonald's, Popeyes, and Ike's has the cheapest fries item and its price."
+  goal: "Tell me which of Wingstop, Man vs. Fries, McDonald's, Popeyes, and Ike's has the cheapest fries item and its price."
   smcp_registry: experiments/tools/dashdish.json

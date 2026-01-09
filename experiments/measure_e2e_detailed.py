@@ -20,10 +20,9 @@ import json
 import logging
 import os
 import re
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 # CRITICAL: Set BEFORE importing anything
 # 1. Enable browser-use logging BEFORE importing browser-use modules
@@ -42,10 +41,32 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from blastai.agents.executor import AgentExecutor
 from blastai.agents.models import Agent
 from blastai.agents.timing_tracker import TimingTracker
-from experiments.tasks.registry import get_validator
+from experiments.tasks.registry import get_unified_validator
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+def cleanup_browser_profile(user_id: str) -> None:
+    """
+    Delete the browser profile directory for a given user_id.
+
+    This ensures each test run starts with a clean browser state,
+    preventing leftover data (like previous orders) from affecting evaluations.
+    """
+    import shutil
+
+    profiles_root = Path(os.getenv("BLASTAI_PROFILES_DIR", "./blast-profiles"))
+    profile_dir = profiles_root / f"user-{user_id}"
+
+    if profile_dir.exists():
+        try:
+            shutil.rmtree(profile_dir)
+            logger.info(f"Cleaned up browser profile: {profile_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup browser profile {profile_dir}: {e}")
+    else:
+        logger.debug(f"No browser profile to cleanup: {profile_dir}")
 
 
 @dataclass
@@ -139,6 +160,45 @@ def load_planning_times(json_path: Path) -> Dict[int, float]:
         return {}
 
 
+async def fetch_finish_state(page, initial_url: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch the environment state from the /finish endpoint.
+
+    Args:
+        page: browser-use Page object (not raw Playwright page)
+        initial_url: Base URL of the task
+
+    Returns:
+        Parsed JSON state or None if fetch failed
+    """
+    from urllib.parse import urljoin
+
+    try:
+        finish_url = urljoin(initial_url, "finish")
+        logger.info(f"Fetching finish state from: {finish_url}")
+
+        # browser-use Page.goto() doesn't accept timeout, use asyncio.wait_for instead
+        await asyncio.wait_for(page.goto(finish_url), timeout=5.0)
+        await asyncio.sleep(2)  # Wait for page to load
+
+        pre_content = await page.evaluate(
+            "() => document.querySelector('pre')?.textContent || ''"
+        )
+
+        if pre_content:
+            return json.loads(pre_content)
+        else:
+            logger.warning("No pre element content found on finish page")
+            return None
+
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout fetching finish state from {initial_url}/finish")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to fetch finish state: {e}")
+        return None
+
+
 async def execute_with_timing(
     config: TestConfig,
     agent: Agent,
@@ -153,11 +213,8 @@ async def execute_with_timing(
 
     Returns: (result, error, correctness_pct)
     """
-    # Get validator for this task
-    validator = get_validator(task_id)
-    if validator is None:
-        logger.error(f"No validator found for task: {task_id}")
-        return None, f"No validator for task {task_id}", 0.0
+    # Get unified validator for this task
+    unified_validator = get_unified_validator()
     os.environ.setdefault("BROWSER_DISABLE_GPU", "true")
 
     timing_tracker.reset()
@@ -175,10 +232,10 @@ async def execute_with_timing(
         # Code mode with pre-generated code (no planning needed)
         from blastai.agents.llm_factory import LLMFactory
 
-        # Create LLM for ai_eval/ai_exec calls (temperature=0.5 like browser-use default)
+        # Create LLM for ai_eval/ai_exec calls
         exec_llm = None
         if config.model:
-            exec_llm = LLMFactory.create_llm(config.model, temperature=0.5)
+            exec_llm = LLMFactory.create_llm(config.model, temperature=0.0)
 
         executor = AgentExecutor(
             agent=agent,
@@ -220,12 +277,51 @@ async def execute_with_timing(
                     if result.error:
                         return None, result.error, 0.0
 
-                    # Validate with percentage
+                    # Fetch finish state for script-based validation
+                    final_state = None
+                    if unified_validator.get_eval_type(task_id) == "script":
+                        logger.info(
+                            f"Task {task_id} requires script eval - fetching /finish state"
+                        )
+                        page = await executor.browser.get_current_page()
+                        if page:
+                            final_state = await fetch_finish_state(page, initial_url)
+                            if final_state is None:
+                                logger.error(
+                                    f"Failed to fetch /finish state for script eval task {task_id}"
+                                )
+                            else:
+                                logger.info(
+                                    f"Successfully fetched /finish state for {task_id}"
+                                )
+                                # Debug: Save final_state to file for inspection
+                                debug_path = Path(
+                                    f"/tmp/{task_id}_final_state_debug.json"
+                                )
+                                debug_path.write_text(
+                                    json.dumps(final_state, indent=2, default=str)
+                                )
+                                logger.info(
+                                    f"Saved final_state to {debug_path} for debugging"
+                                )
+                        else:
+                            logger.error(
+                                f"No browser page available for script eval task {task_id}"
+                            )
+
+                    # Validate with unified validator
                     if result.output:
-                        validation = await validator.validate(
-                            str(result.output), return_pct=True
+                        validation = await unified_validator.validate(
+                            task_id=task_id,
+                            final_result=str(result.output),
+                            final_state=final_state,
+                            return_pct=True,
                         )
                         correctness_pct = validation.get("correctness_pct", 0.0)
+                        logger.info(
+                            f"Validation: eval_type={validation.get('eval_type')}, "
+                            f"correct={validation.get('correct')}, pct={correctness_pct:.0%}"
+                        )
                         return str(result.output), None, correctness_pct
                     else:
                         return None, "No output", 0.0
@@ -274,20 +370,48 @@ async def execute_with_timing(
                 result_text = str(result)
                 logger.info(f"Loop mode completed, result length: {len(result_text)}")
 
-                # Validate
-                validation = await validator.validate(result_text, return_pct=True)
+                # Fetch finish state for script-based validation
+                final_state = None
+                if unified_validator.get_eval_type(task_id) == "script":
+                    logger.info(
+                        f"Task {task_id} requires script eval - fetching /finish state"
+                    )
+                    page = await executor.browser.get_current_page()
+                    if page:
+                        final_state = await fetch_finish_state(page, initial_url)
+                        if final_state is None:
+                            logger.error(
+                                f"Failed to fetch /finish state for script eval task {task_id}"
+                            )
+                        else:
+                            logger.info(
+                                f"Successfully fetched /finish state for {task_id}"
+                            )
+                    else:
+                        logger.error(
+                            f"No browser page available for script eval task {task_id}"
+                        )
+
+                # Validate with unified validator
+                validation = await unified_validator.validate(
+                    task_id=task_id,
+                    final_result=result_text,
+                    final_state=final_state,
+                    return_pct=True,
+                )
                 correctness_pct = validation.get("correctness_pct", 0.0)
                 is_correct = validation.get("correct", False)
 
                 logger.info(
-                    f"Validation complete: correctness={correctness_pct:.0%}, correct={is_correct}"
+                    f"Validation complete: eval_type={validation.get('eval_type')}, "
+                    f"correctness={correctness_pct:.0%}, correct={is_correct}"
                 )
 
                 return result_text, None, correctness_pct
 
             except Exception as e:
                 timing_tracker.end_execution()
-                logger.exception(f"Loop mode execution failed")
+                logger.exception("Loop mode execution failed")
                 return None, str(e), 0.0
 
         finally:
@@ -339,8 +463,38 @@ async def execute_with_timing(
             # with timing via the passed timing_tracker (via set_current_tracker call)
             result = await executor.run(task_goal, mode="code", initial_url=initial_url)
 
-            validation = await validator.validate(str(result), return_pct=True)
+            # Fetch finish state for script-based validation
+            final_state = None
+            if unified_validator.get_eval_type(task_id) == "script":
+                logger.info(
+                    f"Task {task_id} requires script eval - fetching /finish state"
+                )
+                page = await executor.browser.get_current_page()
+                if page:
+                    final_state = await fetch_finish_state(page, initial_url)
+                    if final_state is None:
+                        logger.error(
+                            f"Failed to fetch /finish state for script eval task {task_id}"
+                        )
+                    else:
+                        logger.info(f"Successfully fetched /finish state for {task_id}")
+                else:
+                    logger.error(
+                        f"No browser page available for script eval task {task_id}"
+                    )
+
+            # Validate with unified validator
+            validation = await unified_validator.validate(
+                task_id=task_id,
+                final_result=str(result),
+                final_state=final_state,
+                return_pct=True,
+            )
             correctness_pct = validation.get("correctness_pct", 0.0)
+            logger.info(
+                f"Validation: eval_type={validation.get('eval_type')}, "
+                f"correct={validation.get('correct')}, pct={correctness_pct:.0%}"
+            )
 
             return str(result), None, correctness_pct
 
@@ -370,13 +524,17 @@ async def run_test(
     for trial in range(num_trials):
         console.print(f"  Trial {trial + 1}/{num_trials}...", end=" ")
 
+        # Clean up browser profile to ensure fresh state for each trial
+        user_id = f"{user_id_base}-{config.name}-{trial}"
+        cleanup_browser_profile(user_id)
+
         timing_tracker = TimingTracker()
         result, error, correctness_pct = await execute_with_timing(
             config,
             agent,
             task_goal,
             initial_url,
-            f"{user_id_base}-{config.name}-{trial}",
+            user_id,
             timing_tracker,
             task_id,
         )
