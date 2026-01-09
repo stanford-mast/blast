@@ -65,7 +65,19 @@ x = await tool_b(param="value")
 response = await ai_eval("Human-readable summary of {data}", data=x.content)
 ```
 
-E4: multiple tool calls with ai_eval for matching user terms to options
+E4: data collection with no ai_eval
+```python
+await tool_c()
+items = await tool_d()
+collected = {}
+for item in items.items:
+    await tool_e(name=item.name)
+    data = await tool_f()
+    collected[item.name] = data.info
+result = collected  # Return data directly
+```
+
+E5: multiple tool calls with ai_eval for matching user terms to options
 ```python
 await tool_c()
 x = await tool_d(id=123)
@@ -75,7 +87,7 @@ z = await tool_f(item_name=closest_name)
 result = await ai_eval("Response about {info}", info=z.info)
 ```
 
-E5: control flow with loops and conditionals
+E6: control flow with loops and conditionals
 ```python
 await tool_c()
 x = await tool_e(123)
@@ -88,7 +100,7 @@ result = await ai_eval("Summary of {results}", results=results)
 
 # TODO: Uncomment for production. Commented out for benchmarking to prevent LLMs from using ai_exec.
 COMMENTED_OUT_AI_EXEC_EXAMPLE = """
-E6: ai_exec for sub-tasks with optional structured output
+E7: ai_exec for sub-tasks with optional structured output
 ```python
 # Without output_schema (returns dict with .items property)
 x = await ai_exec("Complete the login form")

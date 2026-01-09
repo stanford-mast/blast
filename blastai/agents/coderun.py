@@ -996,14 +996,7 @@ async def {tool.name}():
 
         messages = [
             SystemMessage(
-                content="""You are a data extraction assistant. Your job is to extract and return EXACTLY what is requested.
-
-CRITICAL RULES:
-1. If the query asks for a SINGLE item (e.g., "Name of the store", "the item", "which one"), return ONLY ONE value - pick the first/best match
-2. Do NOT list multiple options unless explicitly asked for "all", "list", or plural form
-3. Return ONLY the raw value - no introductory text like "The answer is..." or "Here are..."
-4. Do NOT generate code or JSON unless explicitly requested
-"""
+                content="You are a helpful assistant. Do NOT generate code. Do NOT generate JSON unless explicitly requested. Prefer standard Markdown/text and using full sentences unless otherwise instructed. Try understanding the context, e.g., 1. if the request is for picking a single item, then only respond a single item. 2. If the request is for matching from a list, then return the best match. 3. If the input is a statement presenting data (e.g., 'Here are the results: {data}'), format and present ALL the data clearly - do not summarize or pick just one item. Respond with ONLY what is requested, or format all provided data if no specific request is given."
             ),
             UserMessage(content=prompt),
         ]
@@ -1029,6 +1022,24 @@ CRITICAL RULES:
 
         # Log output for debugging
         logger.info(f"ai_eval OUTPUT: {result}")
+
+        # Try to parse as JSON if output looks like a list or dict
+        # This handles cases where LLM returns "['item1', 'item2']" as a string
+        if result and (result.startswith("[") or result.startswith("{")):
+            try:
+                parsed = json.loads(result)
+                logger.info(f"ai_eval PARSED: {type(parsed).__name__}")
+                return parsed
+            except json.JSONDecodeError:
+                # Try Python literal eval for single-quoted strings
+                try:
+                    import ast
+
+                    parsed = ast.literal_eval(result)
+                    logger.info(f"ai_eval PARSED (ast): {type(parsed).__name__}")
+                    return parsed
+                except (ValueError, SyntaxError):
+                    pass  # Return as string if parsing fails
 
         return result
 
