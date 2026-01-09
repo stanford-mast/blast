@@ -173,8 +173,16 @@ async def execute_with_timing(
 
     if config.mode == "code" and config.code:
         # Code mode with pre-generated code (no planning needed)
+        from blastai.agents.llm_factory import LLMFactory
+
+        # Create LLM for ai_eval/ai_exec calls (temperature=0.5 like browser-use default)
+        exec_llm = None
+        if config.model:
+            exec_llm = LLMFactory.create_llm(config.model, temperature=0.5)
+
         executor = AgentExecutor(
             agent=agent,
+            llm=exec_llm,
             user_id=user_id,
             timezone=os.getenv("BLASTAI_TIMEZONE", "America/Los_Angeles"),
             stop_if_codegen_fails=True,
@@ -233,8 +241,16 @@ async def execute_with_timing(
 
     elif config.mode == "loop":
         # Loop mode
+        from blastai.agents.llm_factory import LLMFactory
+
+        # Create LLM with temperature=0.5 (same as browser-use default)
+        loop_llm = None
+        if config.model:
+            loop_llm = LLMFactory.create_llm(config.model, temperature=0.5)
+
         executor = AgentExecutor(
             agent=agent,
+            llm=loop_llm,
             user_id=user_id,
             timezone=os.getenv("BLASTAI_TIMEZONE", "America/Los_Angeles"),
             timing_tracker=timing_tracker,  # Pass tracker
@@ -283,6 +299,9 @@ async def execute_with_timing(
 
         executor = AgentExecutor(
             agent=agent,
+            llm=LLMFactory.create_llm(
+                config.model, temperature=0.5
+            ),  # For ai_eval/ai_exec
             user_id=user_id,
             timezone=os.getenv("BLASTAI_TIMEZONE", "America/Los_Angeles"),
             stop_if_codegen_fails=True,
@@ -449,8 +468,8 @@ async def run_test(
 @click.option(
     "--models",
     type=str,
-    default="gemini-2.5-flash,gemini-2.5-pro",
-    help="Comma-separated list of models to test",
+    default="gemini-2.5-flash gemini-2.5-pro gpt-4.1",
+    help="Space-separated list of models to test",
 )
 @click.option(
     "--num-trials", type=int, default=1, help="Number of trials per configuration"
@@ -474,6 +493,11 @@ async def run_test(
 @click.option(
     "--test-retry/--no-test-retry", default=False, help="Test serial retry mode"
 )
+@click.option(
+    "--no-overwrite/--overwrite",
+    default=True,
+    help="Use timestamped filenames to avoid overwriting existing results (default: no-overwrite)",
+)
 def main(
     tasks: str,
     ids: str,
@@ -485,6 +509,7 @@ def main(
     test_loop: bool,
     test_loop_tools: bool,
     test_retry: bool,
+    no_overwrite: bool,
 ):
     """
     Run detailed E2E evaluation with timing breakdowns for multiple tasks.
@@ -494,7 +519,7 @@ def main(
             --tasks experiments/tasks/agisdk/agisdk.yaml \\
             --ids "dashdish-deepresearch1 gomail-10" \\
             --results-dir experiments/results \\
-            --models "gemini-2.5-flash,gemini-2.5-pro" \\
+            --models "gemini-2.5-flash gemini-2.5-pro" \\
             --num-trials 3
     """
 
@@ -516,6 +541,13 @@ def main(
     task_ids = ids.split()
     results_path = Path(results_dir)
     results_path.mkdir(parents=True, exist_ok=True)
+
+    # Generate timestamp suffix if no_overwrite is set (default)
+    from datetime import datetime
+
+    timestamp_suffix = (
+        f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if no_overwrite else ""
+    )
 
     console.print(
         Panel(
@@ -572,7 +604,7 @@ def main(
             console.print(f"[yellow]Warning: JSON file not found: {json_path}[/]")
 
         # Build test configs
-        model_list = [m.strip() for m in models.split(",")]
+        model_list = models.split()
         configs = []
 
         for model in model_list:
@@ -656,24 +688,27 @@ def main(
                     )
                 )
 
-        # Baselines
-        if test_loop:
-            configs.append(
-                TestConfig(
-                    name="loop-baseline",
-                    mode="loop",
-                    use_tools=False,
+        # Baselines - iterate through models like code mode
+        for model in model_list:
+            if test_loop:
+                configs.append(
+                    TestConfig(
+                        name=f"{model.replace('/', '-')}-loop-baseline",
+                        mode="loop",
+                        model=model,
+                        use_tools=False,
+                    )
                 )
-            )
 
-        if test_loop_tools:
-            configs.append(
-                TestConfig(
-                    name="loop-tools-baseline",
-                    mode="loop",
-                    use_tools=True,
+            if test_loop_tools:
+                configs.append(
+                    TestConfig(
+                        name=f"{model.replace('/', '-')}-loop-tools-baseline",
+                        mode="loop",
+                        model=model,
+                        use_tools=True,
+                    )
                 )
-            )
 
         console.print(
             f"\n[bold]Running {len(configs)} configurations, {num_trials} trials each[/]"
@@ -721,7 +756,7 @@ def main(
             "results": all_results,
         }
 
-        out_path = results_path / f"{task_id}_e2e_detailed.json"
+        out_path = results_path / f"{task_id}{timestamp_suffix}_e2e_detailed.json"
         out_path.write_text(json.dumps(output, indent=2))
         console.print(f"\n[green]✓ Saved results to {out_path}[/]")
 
