@@ -451,6 +451,10 @@ class AgentExecutor:
                 task += "\nUse ask_human if stuck or unauthenticated or task turned out to be ambiguous."
                 logger.info("Added ask_human prompt injection")
 
+            # Add instruction to stay on the provided site
+            task += "\nIMPORTANT: Only use the website provided. Do not navigate to external sites or use search engines."
+            logger.info("Added stay-on-site instruction")
+
             logger.info(f"Final task for BrowserUseAgent: {task}")
 
             # Reuse existing browser-use agent if available, otherwise create new one
