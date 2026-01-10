@@ -2,52 +2,9 @@
   "description": "",
   "tools": [
     {
-      "name": "search_store",
-      "title": "Search Store",
-      "description": "Searches for a specific store on DashDish by entering the store name into the search input and submitting the form.",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "store_name": {
-            "type": "string",
-            "description": "The name of the store to search for."
-          }
-        },
-        "required": [
-          "store_name"
-        ]
-      },
-      "output_schema": {
-        "type": "object",
-        "properties": {
-          "query": {
-            "type": "string",
-            "description": "The search query that was submitted."
-          }
-        },
-        "required": [
-          "query"
-        ]
-      },
-      "tool_executor_type": "smcp",
-      "lang": "js",
-      "is_ready": "return document.querySelector('input[placeholder=\"Search DashDish\"]') ? true : [false, 'Search bar not visible'];",
-      "is_completed": "return true;",
-      "execute": "const input = document.querySelector('input[placeholder=\"Search DashDish\"]'); if (!input) throw new Error('Search input not found'); const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; nativeInputValueSetter.call(input, inputs.store_name); input.dispatchEvent(new Event('input', { bubbles: true })); const form = input.closest('form'); if (form) { form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); } else { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })); } return { query: inputs.store_name };",
-      "pre_path": "*vercel.app*",
-      "pre": {
-        "page_type": "home"
-      },
-      "post": {
-        "page_type": "home"
-      },
-      "type": "setFilter",
-      "pre_tools": {}
-    },
-    {
       "name": "goto_store",
       "title": "Goto Store",
-      "description": "Navigates to a specific store by clicking on its card element based on the provided store name. This tool must be called on the home page.",
+      "description": "Navigates to a store page by clicking on its card. Uses fuzzy matching on store name.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -254,7 +211,7 @@
     {
       "name": "list_categories",
       "title": "List Categories",
-      "description": "Lists all categories available on the home page. Includes carousel filters (e.g., 'Ramen', 'Breakfast'), section headers (e.g., 'Best near you', 'Costume party ready'), and sidebar menu items (e.g., 'Grocery', 'Retail', 'Alcohol'). Use goto_category() to filter by any of these.",
+      "description": "Lists all available categories on the home page, including carousel filters, section headers, and sidebar items.",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -299,9 +256,9 @@
       "pre_tools": {}
     },
     {
-      "name": "goto_category",
-      "title": "Goto Category",
-      "description": "Filters stores by category. Works with section headers, sidebar menu items, and carousel filters. Tries section 'See all' first, then sidebar click, then search. After calling this, use list_stores() to get filtered stores.",
+      "name": "filter_by_category",
+      "title": "Filter By Category",
+      "description": "Filters stores by category. Uses fuzzy matching on section headers, sidebar items, or falls back to search.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -352,17 +309,72 @@
         "page_type": "home",
         "filtered_by": "$category_name"
       },
-      "type": "gotoItem",
-      "pre_tools": {
-        "category_name": [
-          "list_categories"
-        ]
-      }
+      "type": "setFilter",
+      "pre_tools": {}
     },
     {
-      "name": "list_stores",
-      "title": "List Stores",
-      "description": "Lists all visible stores on the home page. Use after search_store() to see filtered results, or after goto_category() to see category stores, or on the home page to see all stores.",
+      "name": "filter_stores",
+      "title": "Filter Stores",
+      "description": "Filters stores by search query. Use when task mentions a specific store type or cuisine.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search term to filter stores (e.g., 'taco', 'pizza', 'sushi')."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "The name of the store"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          "query": {
+            "type": "string",
+            "description": "The search query that was applied."
+          }
+        },
+        "required": [
+          "items",
+          "query"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('input[placeholder=\"Search DashDish\"]') ? true : [false, 'Search bar not visible'];",
+      "is_completed": "return Array.isArray(output.items) ? true : [false, 'Output items is not an array'];",
+      "execute": "const input = document.querySelector('input[placeholder=\"Search DashDish\"]'); if (input) { const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; nativeInputValueSetter.call(input, inputs.query); input.dispatchEvent(new Event('input', { bubbles: true })); const form = input.closest('form'); if (form) { form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); } await new Promise(r => setTimeout(r, 500)); } const stores = Array.from(document.querySelectorAll('h6.MuiTypography-subtitle1')).map(el => ({ name: el.textContent.trim() })).filter(item => item.name); return { items: stores, query: inputs.query };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "home"
+      },
+      "post": {
+        "page_type": "home"
+      },
+      "type": "setFilter",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_all_stores",
+      "title": "List All Stores",
+      "description": "Lists all visible stores on the home page without filtering.",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -556,9 +568,9 @@
       }
     },
     {
-      "name": "back_to_home",
-      "title": "Back To Home",
-      "description": "Navigates back to the home page from any page by clicking the Home menu item or the site logo.",
+      "name": "goto_home",
+      "title": "Goto Home",
+      "description": "Navigates to the home page by clicking the Home link or site logo.",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -664,9 +676,9 @@
       }
     },
     {
-      "name": "navigate_to_checkout",
-      "title": "Navigate To Checkout",
-      "description": "Navigates the user from the cart to the checkout page by clicking the appropriate buttons.",
+      "name": "goto_checkout",
+      "title": "Goto Checkout",
+      "description": "Opens the cart drawer and navigates to the checkout page.",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -701,13 +713,17 @@
       "post": {
         "page_type": "checkout"
       },
-      "type": "setFields",
-      "pre_tools": {}
+      "type": "gotoItem",
+      "pre_tools": {
+        "_": [
+          "add_to_cart"
+        ]
+      }
     },
     {
       "name": "place_order",
       "title": "Place Order",
-      "description": "Clicks the 'Place Order' button on a webpage and checks if the order was successfully confirmed.",
+      "description": "Clicks the Place Order button and confirms the order was successful.",
       "input_schema": {
         "type": "object",
         "properties": {},
