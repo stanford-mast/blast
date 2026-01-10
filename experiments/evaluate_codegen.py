@@ -1069,7 +1069,7 @@ def compute_summary_statistics(
     "--parallel",
     type=int,
     default=1,
-    help="Number of parallel runs to execute simultaneously (default: 1, max: 8)",
+    help="Number of parallel runs to execute simultaneously (default: 1, max: 32)",
 )
 @click.option(
     "--print-code/--no-print-code",
@@ -1200,7 +1200,7 @@ def main(
         ]
 
     # Clamp parallel to reasonable range
-    parallel = max(1, min(parallel, 8))
+    parallel = max(1, min(parallel, 32))
 
     console.print(
         Panel(
