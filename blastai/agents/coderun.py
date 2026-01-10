@@ -218,9 +218,7 @@ def create_python_executor(
             return param_vals.get(ref) == state_val
         return state_val == pattern
 
-    # Track if this is the first SMCP tool call after ai_exec/ask_human
-    # Used to fail fast (1s timeout) on precondition failures after login/navigation
-    first_smcp_after_fallback = {"value": True}
+    first_smcp_after_fallback = {"value": False}
 
     # Build wrappers for SMCP tools and register them into executor.state
     # Also create Pydantic models and register them for use in generated code
