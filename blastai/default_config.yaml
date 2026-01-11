@@ -18,6 +18,7 @@ constraints:
     data: false  # Enable data-level parallelism for content extraction
     first_of_n: false  # Default disable first-result parallelism
   max_parallelism_nesting_depth: 1
+  first_of_n_num_copies: 4  # Number of copies to launch for first_of_n parallelism strategy
   llm_model: "openai:gpt-4.1"
   llm_model_mini: "openai:gpt-4.1-mini"
   allow_vision: true
