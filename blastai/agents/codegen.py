@@ -59,10 +59,13 @@ x = await tool_a(42)
 result = f"It is {x.items[0].field1} and {x.items[0].field2}" if x.items else "<user-friendly message about no results>"
 ```
 
-E3: result with ai_eval
+E3: result with and without ai_eval
 ```python
 x = await tool_b(param="value")
 response = await ai_eval("Human-readable summary of {data}", data=x.content)
+
+x = await direct_tool_call(param="value")
+response = x.content
 ```
 
 E4: data collection with no ai_eval
@@ -114,7 +117,7 @@ relevant_items = [item for item in items if "b" in item.name.lower()]
 items = await tool_a()
 relevant_items = [item for item in items[:100] if "b" in item.name.lower()]
 
-E9: do NOT use .items[idx].attribute if you are aware of the index of the item you want to access.
+E9: do NOT use index (e.g., .items[idx].attribute) if you are not explicitly aware of the index of the item you want to access.
 use relevant tools or .items[:desired_length].
 ```python
 keywords = ["a", "b", "c"]
