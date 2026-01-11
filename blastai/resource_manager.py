@@ -42,7 +42,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import psutil
 from browser_use.agent.views import AgentHistoryList
@@ -93,6 +93,14 @@ class ResourceManager:
         self._start_time = time.time()  # Track when the resource manager was created
         self._prev_not_allocated = 0  # Track previous not_allocated count
         self._prev_completed_with_executor = 0
+        # Track LLM timing from evicted executors
+        self._total_llm_timing_evicted = {
+            "llm_total_seconds": 0.0,
+            "llm_prefill_seconds": 0.0,
+            "llm_decode_seconds": 0.0,
+            "num_llm_calls": 0,
+            "execution_seconds": 0.0,
+        }
 
         # Initialize secrets manager
         self._secrets_manager = SecretsManager()
@@ -245,11 +253,47 @@ class ResourceManager:
 
         return current_token_usage
 
-    def check_constraints_sat(self, with_new_executors: int = 0) -> bool:
+    def _get_llm_timing(self) -> Dict[str, float]:
+        """Get total LLM timing across all executors (including evicted).
+
+        Returns:
+            Dictionary with llm_total_seconds, llm_prefill_seconds, llm_decode_seconds,
+            num_llm_calls, execution_seconds
+        """
+        # Start with evicted executor timing
+        total_timing = self._total_llm_timing_evicted.copy()
+
+        # Add timing from current executors
+        for task in self.scheduler.tasks.values():
+            if task.executor:
+                try:
+                    timing = task.executor.get_llm_timing()
+                    total_timing["llm_total_seconds"] += timing.get(
+                        "llm_total_seconds", 0.0
+                    )
+                    total_timing["llm_prefill_seconds"] += timing.get(
+                        "llm_prefill_seconds", 0.0
+                    )
+                    total_timing["llm_decode_seconds"] += timing.get(
+                        "llm_decode_seconds", 0.0
+                    )
+                    total_timing["num_llm_calls"] += timing.get("num_llm_calls", 0)
+                    total_timing["execution_seconds"] += timing.get(
+                        "execution_seconds", 0.0
+                    )
+                except Exception:
+                    pass  # Skip if executor doesn't have timing
+
+        return total_timing
+
+    def check_constraints_sat(
+        self, with_new_executors: int = 0, for_subtask: bool = False
+    ) -> bool:
         """Check if resource constraints are satisfied.
 
         Args:
             with_new_executors: Number of new executors to check for
+            for_subtask: Whether this is for a subtask (subject to max_parallel_workers)
         """
         # Count running executors
         running_executors = sum(
@@ -262,6 +306,19 @@ class ResourceManager:
             > self.constraints.max_concurrent_browsers
         ):
             return False
+
+        # Check max parallel workers for subtasks
+        if for_subtask and self.constraints.max_parallel_workers is not None:
+            running_subtasks = sum(
+                1
+                for task in self.scheduler.tasks.values()
+                if task.executor and task.parent_task_id is not None
+            )
+            if (
+                running_subtasks + with_new_executors
+                > self.constraints.max_parallel_workers
+            ):
+                return False
 
         # Check memory limit if set
         if self.constraints.max_memory is not None:
@@ -308,14 +365,17 @@ class ResourceManager:
 
     async def _request_executor(self, task_id: str) -> Optional[Executor]:
         """Request a new executor if constraints allow."""
-        if not self.check_constraints_sat(with_new_executors=1):
+        task = self.scheduler.tasks.get(task_id)
+        is_subtask = task is not None and task.parent_task_id is not None
+
+        if not self.check_constraints_sat(with_new_executors=1, for_subtask=is_subtask):
             # Only log constraint violation once per task
             if task_id not in self._reported_constraint_tasks:
                 self._reported_constraint_tasks.add(task_id)
 
                 # Check which constraint was violated
                 running_executors = sum(
-                    1 for task in self.scheduler.tasks.values() if task.executor
+                    1 for t in self.scheduler.tasks.values() if t.executor
                 )
                 if running_executors + 1 > self.constraints.max_concurrent_browsers:
                     logger.debug(
@@ -323,22 +383,44 @@ class ResourceManager:
                     )
                     return None
 
+                # Check max_parallel_workers for subtasks
+                if is_subtask and self.constraints.max_parallel_workers is not None:
+                    running_subtasks = sum(
+                        1
+                        for t in self.scheduler.tasks.values()
+                        if t.executor and t.parent_task_id is not None
+                    )
+                    if running_subtasks + 1 > self.constraints.max_parallel_workers:
+                        logger.debug(
+                            f"Cannot create executor for task {task_id}: would exceed max_parallel_workers ({running_subtasks + 1} > {self.constraints.max_parallel_workers})"
+                        )
+                        return None
+
                 total_memory = self._get_total_memory_usage()
-                if total_memory + (500 * 1024 * 1024) > self.constraints.max_memory:
+                if (
+                    self.constraints.max_memory is not None
+                    and total_memory + (500 * 1024 * 1024) > self.constraints.max_memory
+                ):
                     logger.debug(
                         f"Cannot create executor for task {task_id}: would exceed max_memory ({(total_memory + 500 * 1024 * 1024) / (1024 * 1024):.1f}MB > {self.constraints.max_memory / (1024 * 1024):.1f}MB)"
                     )
                     return None
 
                 cost_last_minute = self._get_cost(timedelta(minutes=1))
-                if cost_last_minute > self.constraints.max_cost_per_minute:
+                if (
+                    self.constraints.max_cost_per_minute is not None
+                    and cost_last_minute > self.constraints.max_cost_per_minute
+                ):
                     logger.debug(
                         f"Cannot create executor for task {task_id}: exceeded max_cost_per_minute (${cost_last_minute:.2f} > ${self.constraints.max_cost_per_minute:.2f})"
                     )
                     return None
 
                 cost_last_hour = self._get_cost(timedelta(hours=1))
-                if cost_last_hour > self.constraints.max_cost_per_hour:
+                if (
+                    self.constraints.max_cost_per_hour is not None
+                    and cost_last_hour > self.constraints.max_cost_per_hour
+                ):
                     logger.debug(
                         f"Cannot create executor for task {task_id}: exceeded max_cost_per_hour (${cost_last_hour:.2f} > ${self.constraints.max_cost_per_hour:.2f})"
                     )
@@ -480,6 +562,27 @@ class ResourceManager:
         self._total_token_usage_evicted_executors += (
             task.executor.get_total_token_usage()
         )
+
+        # Add LLM timing to evicted total
+        try:
+            llm_timing = task.executor.get_llm_timing()
+            self._total_llm_timing_evicted["llm_total_seconds"] += llm_timing.get(
+                "llm_total_seconds", 0.0
+            )
+            self._total_llm_timing_evicted["llm_prefill_seconds"] += llm_timing.get(
+                "llm_prefill_seconds", 0.0
+            )
+            self._total_llm_timing_evicted["llm_decode_seconds"] += llm_timing.get(
+                "llm_decode_seconds", 0.0
+            )
+            self._total_llm_timing_evicted["num_llm_calls"] += llm_timing.get(
+                "num_llm_calls", 0
+            )
+            self._total_llm_timing_evicted["execution_seconds"] += llm_timing.get(
+                "execution_seconds", 0.0
+            )
+        except Exception:
+            pass  # Skip if executor doesn't have timing
 
         # Store a reference to the executor before clearing it
         executor = task.executor

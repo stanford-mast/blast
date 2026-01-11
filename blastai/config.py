@@ -84,6 +84,11 @@ class Constraints(BaseModel):
         default=1, description="Maximum depth of nested parallel tasks"
     )
 
+    max_parallel_workers: Optional[int] = Field(
+        default=None,
+        description="Maximum number of parallel workers (subtasks) that can run simultaneously. None means no limit (uses max_concurrent_browsers).",
+    )
+
     llm_model: str = Field(default="gpt-4.1", description="Primary LLM model to use")
 
     llm_model_mini: str = Field(

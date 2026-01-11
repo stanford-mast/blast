@@ -14,6 +14,7 @@ from lmnr import Laminar
 
 logger = logging.getLogger(__name__)
 
+from .agents.timing_tracker import TimingTracker, set_current_tracker
 from .config import Constraints, Settings
 from .models import TokenUsage
 from .resource_factory_utils import cleanup_stealth_profile_dir
@@ -92,6 +93,7 @@ class Executor:
         self._total_cost = 0.0  # Track total LLM cost
         self._total_token_usage = TokenUsage()  # Track total LLM token usage
         self._cb = None  # Track current callback
+        self._timing_tracker = TimingTracker()  # Track LLM timing
 
     def _get_url_or_search(self, input_str: Optional[str]) -> Optional[str]:
         """Convert input to URL or Google search URL.
@@ -161,6 +163,9 @@ class Executor:
             AgentHistoryList containing the execution history
         """
         self._running = True
+        # Set the timing tracker as the current tracker for LLM timing
+        set_current_tracker(self._timing_tracker)
+        self._timing_tracker.start_execution()
         try:
             if isinstance(task_or_plan, str):
                 self._task = task_or_plan
@@ -332,6 +337,8 @@ class Executor:
             raise RuntimeError(f"Failed to execute task: {str(e)}")
         finally:
             self._running = False
+            self._timing_tracker.end_execution()
+            set_current_tracker(None)  # Clear the current tracker
 
     async def get_reasoning(self) -> List[AgentReasoning]:
         """Get current agent reasoning states.
@@ -475,6 +482,21 @@ class Executor:
     def get_total_token_usage(self) -> TokenUsage:
         """Get total LLM token usage for this executor."""
         return self._total_token_usage
+
+    def get_llm_timing(self) -> Dict[str, float]:
+        """Get LLM timing breakdown for this executor.
+
+        Returns:
+            Dictionary with llm_total_seconds, llm_prefill_seconds, llm_decode_seconds, num_llm_calls
+        """
+        timing = self._timing_tracker.get_timing()
+        return {
+            "llm_total_seconds": timing.total_llm_seconds,
+            "llm_prefill_seconds": timing.total_prefill_seconds,
+            "llm_decode_seconds": timing.total_decode_seconds,
+            "num_llm_calls": len(timing.llm_calls),
+            "execution_seconds": timing.execution_seconds,
+        }
 
     def set_task_id(self, task_id: str, controller: Controller):
         """Update task ID and controller for both executor and agent.

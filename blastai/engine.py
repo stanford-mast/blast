@@ -427,6 +427,9 @@ class Engine:
         total_cost = self.resource_manager._get_cost()
         total_token_usage = self.resource_manager._get_token_usage()
 
+        # Get LLM timing from resource manager (includes evicted executors)
+        llm_timing = self.resource_manager._get_llm_timing()
+
         return {
             "tasks": {
                 "scheduled": len(scheduled_tasks),
@@ -440,6 +443,11 @@ class Engine:
             "total_cost": round(total_cost, 2),
             "total_token_usage": total_token_usage.to_json(),
             "total_token_usage_str": total_token_usage.format_detailed(),
+            "llm_total_seconds": round(llm_timing.get("llm_total_seconds", 0.0), 3),
+            "llm_prefill_seconds": round(llm_timing.get("llm_prefill_seconds", 0.0), 3),
+            "llm_decode_seconds": round(llm_timing.get("llm_decode_seconds", 0.0), 3),
+            "num_llm_calls": llm_timing.get("num_llm_calls", 0),
+            "execution_seconds": round(llm_timing.get("execution_seconds", 0.0), 3),
         }
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
