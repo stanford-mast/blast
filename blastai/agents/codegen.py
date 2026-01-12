@@ -94,34 +94,12 @@ x = await tool_e(123)
 results = [await tool_f(item_name=item.name) for item in x.items if item.value > 3]
 result = await ai_eval("Summary of {results}", results=results)
 
-E7: when appropriate, use information from previous tool calls to refine the next tool call
-Bad: hardcoding names:
-Right: list items and filter dynamically. Here, we use the python "in" operator to filter the items.
+E7: when appropriate, use information from previous tool calls to list items and filter dynamically
 ```python
 tools = await list_items()
 tools = [t for t in tools if "keyword" in t.name.lower()]
 details = await get_tool_details(tool_id=tools[0].id)
 result = details.info
-```
-
-E8: the examples below show different ways to filter items. use the one that is most relevant to the task.
-you can either use tool parameters or python code.
-```python
-# Need to filter by attribute: use parameter to filter
-items = await tool_a(filter_by="a")
-relevant_items = [item for item in items if "b" in item.name.lower()]
-# Need to see all options: empty parameter
-items = await tool_a()
-relevant_items = [item for item in items[:100] if "b" in item.name.lower()]
-
-E9: do NOT use .items[idx].attribute if you are aware of the index of the item you want to access.
-use relevant tools or .items[:desired_length].
-```python
-keywords = ["a", "b", "c"]
-relevant_items = [item for item in items[:100] if any(keyword in item.name.lower() for keyword in keywords)]
-
-other_items = await tool_b(filter_by="word")
-results = relevant_items[0] if relevant_items else (other_items[0] if other_items else None)
 ```
 
 {COMMENTED_OUT_AI_EXEC_EXAMPLE}
