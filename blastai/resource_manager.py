@@ -309,10 +309,12 @@ class ResourceManager:
 
         # Check max parallel workers for subtasks
         if for_subtask and self.constraints.max_parallel_workers is not None:
+            # Only count actively running subtasks (not completed ones)
+            # Completed subtasks keep their executor for state merging but shouldn't block new allocations
             running_subtasks = sum(
                 1
                 for task in self.scheduler.tasks.values()
-                if task.executor and task.parent_task_id is not None
+                if task.executor and task.parent_task_id is not None and not task.is_completed
             )
             if (
                 running_subtasks + with_new_executors
@@ -340,8 +342,11 @@ class ResourceManager:
 
         return True
 
-    def _calculate_max_new_executors(self) -> int:
+    def _calculate_max_new_executors(self, for_subtasks: bool = False) -> int:
         """Calculate maximum number of new executors that can be created given current constraints.
+
+        Args:
+            for_subtasks: Whether this calculation is for subtasks (subject to max_parallel_workers)
 
         Returns:
             Maximum number of new executors allowed
@@ -352,6 +357,18 @@ class ResourceManager:
 
         # Start with max concurrent browsers constraint
         max_new = self.constraints.max_concurrent_browsers - running_executors
+
+        # Check max_parallel_workers for subtasks
+        if for_subtasks and self.constraints.max_parallel_workers is not None:
+            # Only count subtasks that are actively running (have executor AND not completed)
+            # Completed subtasks keep their executor for state merging but shouldn't block new allocations
+            running_subtasks = sum(
+                1
+                for task in self.scheduler.tasks.values()
+                if task.executor and task.parent_task_id is not None and not task.is_completed
+            )
+            max_new_by_workers = self.constraints.max_parallel_workers - running_subtasks
+            max_new = min(max_new, max_new_by_workers)
 
         # Check memory limit if set
         if self.constraints.max_memory is not None:
@@ -385,10 +402,11 @@ class ResourceManager:
 
                 # Check max_parallel_workers for subtasks
                 if is_subtask and self.constraints.max_parallel_workers is not None:
+                    # Only count actively running subtasks (not completed ones)
                     running_subtasks = sum(
                         1
                         for t in self.scheduler.tasks.values()
-                        if t.executor and t.parent_task_id is not None
+                        if t.executor and t.parent_task_id is not None and not t.is_completed
                     )
                     if running_subtasks + 1 > self.constraints.max_parallel_workers:
                         logger.debug(
@@ -694,8 +712,46 @@ class ResourceManager:
                 tasks_not_allocated = len(ready_tasks)
                 for group in priority_groups:
                     # Calculate how many new executors we can create
-                    max_new_executors = self._calculate_max_new_executors()
+                    # For subtask groups, also enforce max_parallel_workers
+                    is_subtask_group = group.name == "subtask"
+                    max_new_executors = self._calculate_max_new_executors(
+                        for_subtasks=is_subtask_group
+                    )
+
+                    # Log scheduling status for this group
+                    running_executors = sum(
+                        1 for t in self.scheduler.tasks.values() if t.executor
+                    )
+                    # Only count actively running subtasks (not completed ones)
+                    running_subtasks = sum(
+                        1
+                        for t in self.scheduler.tasks.values()
+                        if t.executor and t.parent_task_id is not None and not t.is_completed
+                    )
+                    pending_in_group = len(group.task_ids)
+                    max_parallel_workers = self.constraints.max_parallel_workers
+
+                    if is_subtask_group:
+                        logger.debug(
+                            f"Scheduler status for '{group.name}': "
+                            f"pending={pending_in_group}, "
+                            f"running_subtasks={running_subtasks}/{max_parallel_workers or 'unlimited'}, "
+                            f"running_total={running_executors}/{self.constraints.max_concurrent_browsers}, "
+                            f"can_schedule={max_new_executors}"
+                        )
+                    else:
+                        logger.debug(
+                            f"Scheduler status for '{group.name}': "
+                            f"pending={pending_in_group}, "
+                            f"running_total={running_executors}/{self.constraints.max_concurrent_browsers}, "
+                            f"can_schedule={max_new_executors}"
+                        )
+
                     if max_new_executors <= 0:
+                        if pending_in_group > 0:
+                            logger.debug(
+                                f"Cannot schedule any tasks from '{group.name}': at capacity"
+                            )
                         break
 
                     tasks_to_allocate = group.task_ids[:max_new_executors]
@@ -704,7 +760,7 @@ class ResourceManager:
 
                     # Create executors in parallel for tasks that can be allocated
                     logger.debug(
-                        f"Creating {len(tasks_to_allocate)} executors in parallel for priority group '{group.name}'"
+                        f"Scheduling {len(tasks_to_allocate)}/{pending_in_group} tasks from '{group.name}': {tasks_to_allocate}"
                     )
                     creation_results = await asyncio.gather(
                         *[
@@ -751,6 +807,7 @@ class ResourceManager:
                         exec_results = await asyncio.gather(
                             *[coro for _, coro in exec_starts], return_exceptions=True
                         )
+                        started_count = 0
                         for (task_id, _), result in zip(exec_starts, exec_results):
                             if isinstance(result, Exception):
                                 logger.error(
@@ -759,6 +816,11 @@ class ResourceManager:
                             else:
                                 tasks_allocated += 1
                                 tasks_not_allocated -= 1
+                                started_count += 1
+                        if started_count > 0:
+                            logger.debug(
+                                f"Started {started_count} tasks from '{group.name}'"
+                            )
 
                 # Get current executor stats
                 running_executors = sum(
@@ -791,6 +853,12 @@ class ResourceManager:
         """Background task for monitoring resource usage."""
         while self._running:
             try:
+                # Note: We intentionally do NOT evict completed task executors here
+                # because runner.py needs their browser sessions for state merging
+                # after the engine run completes. Instead, the counting logic in
+                # _calculate_max_new_executors() excludes completed tasks so they
+                # don't block new allocations.
+
                 # Check if constraints are satisfied
                 def get_num_unscheduled_tasks():
                     return sum(
@@ -842,15 +910,6 @@ class ResourceManager:
                             logger.debug(
                                 f"Resource monitor: exceeded max_cost_per_hour (${cost_last_hour:.2f} > ${self.constraints.max_cost_per_hour:.2f})"
                             )
-
-                    # First try evicting completed executors
-                    for task in self.scheduler.tasks.values():
-                        if task.is_completed and task.executor:
-                            await self._evict_executor(task.id)
-                            if self.check_constraints_sat(
-                                with_new_executors=get_num_unscheduled_tasks()
-                            ):
-                                break
 
                 # If still unsat, pause lowest priority tasks
                 if not self.check_constraints_sat():

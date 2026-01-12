@@ -8,6 +8,71 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 from .config import Settings
 
+
+def enable_standalone_mode(browser_use_log_level: str = "INFO"):
+    """Enable standalone mode with comprehensive logging configuration.
+
+    Call this at the TOP of your script (before importing blastai or browser_use)
+    to prevent blastai from capturing/redirecting logs and configure browser-use
+    logging visibility.
+
+    Args:
+        browser_use_log_level: Log level for browser-use loggers ('DEBUG', 'INFO', 'WARNING', 'ERROR')
+                              Controlled by BLASTAI_LOG_LEVEL environment variable
+                              Defaults to 'INFO' (set to 'DEBUG' for full browser-use visibility)
+
+    Example:
+        # generate_tools.py - with full debug logging
+        from blastai.logging_setup import enable_standalone_mode
+        enable_standalone_mode(browser_use_log_level="DEBUG")
+
+        # Now import blastai (if needed) and run your script
+        from blastai.agents import AgentExecutor
+
+    Environment Variables:
+        BLASTAI_LOG_LEVEL: Override browser_use_log_level parameter
+        BROWSER_DISABLE_GPU: Set to '1' to disable GPU (fixes WSL transparency)
+        HEADLESS: Set to 'true' to run browser headless
+    """
+    # Mark as standalone mode
+    os.environ["BLASTAI_STANDALONE_MODE"] = "1"
+
+    # Get log level from environment variable or parameter
+    log_level_str = os.getenv("BLASTAI_LOG_LEVEL", browser_use_log_level).upper()
+    log_level = getattr(logging, log_level_str, logging.INFO)
+
+    # Auto-detect WSL and disable GPU if running there
+    if "microsoft" in os.uname().release.lower():
+        os.environ.setdefault("BROWSER_DISABLE_GPU", "1")
+
+    # Configure root logger with force=True to override any previous config
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        force=True,  # Critical: force reconfiguration even if already configured
+        stream=sys.stdout,  # Use stdout explicitly (not stderr)
+    )
+
+    # Configure logging levels for specific components
+    loggers_config = {
+        "browser_use": log_level,
+        "browser_use.agent": log_level,
+        "browser_use.browser": log_level,
+        "bubus": logging.INFO,
+        "cdp_use": logging.INFO,
+        "asyncio": logging.INFO,
+        "httpcore": logging.WARNING,
+        "httpx": logging.WARNING,
+        "openai": logging.INFO,
+    }
+
+    for logger_name, level in loggers_config.items():
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(level)
+        logger.propagate = True
+
+
 # We'll use a lazy import for metrics display to avoid circular imports
 _metrics_display = None
 

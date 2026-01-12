@@ -11,10 +11,10 @@ This is useful for understanding LLM performance bottlenecks:
 - Low tokens/sec → model capacity issues
 """
 
-import time
 import logging
-from typing import Tuple, Optional
+import time
 from dataclasses import dataclass
+from typing import Optional, Tuple
 
 from browser_use.llm.base import BaseChatModel
 from browser_use.llm.messages import BaseMessage

@@ -14,11 +14,56 @@ from lmnr import Laminar
 
 logger = logging.getLogger(__name__)
 
-from .agents.timing_tracker import TimingTracker, set_current_tracker
 from .config import Constraints, Settings
 from .models import TokenUsage
 from .resource_factory_utils import cleanup_stealth_profile_dir
 from .response import AgentReasoning
+from .timing_tracker import (
+    TimingTracker,
+    get_current_tracker,
+    set_current_tracker,
+)
+
+
+class _LLMTimingWrapper:
+    """
+    Wraps an LLM to track calls to the timing tracker.
+
+    When browser-use calls ainvoke() on the LLM, this wrapper intercepts it,
+    records timing to the global timing tracker, and delegates to the wrapped LLM.
+    """
+
+    def __init__(self, llm: BaseChatModel):
+        self._llm = llm
+
+    async def ainvoke(self, messages, output_format=None, **kwargs):
+        """Intercept ainvoke calls to track timing."""
+        tracker = get_current_tracker()
+
+        # Call LLM with timing tracking
+        start_time = time.time()
+        try:
+            response = await self._llm.ainvoke(
+                messages, output_format=output_format, **kwargs
+            )
+        finally:
+            elapsed = time.time() - start_time
+
+            # Record LLM timing if tracker is available
+            if tracker is not None:
+                tracker.record_llm_call(
+                    total_seconds=elapsed,
+                    prefill_seconds=None,
+                    decode_seconds=None,
+                    tokens=None,
+                )
+
+        return response
+
+    def __getattr__(self, name):
+        """Delegate all other attributes to the wrapped LLM."""
+        return getattr(self._llm, name)
+
 
 # Initialize Laminar if available and API key is set
 laminar_api_key = os.environ.get("LMNR_PROJECT_API_KEY")
@@ -190,11 +235,13 @@ class Executor:
                         if self.constraints.allow_parallelism.get("task", False)
                         else 180
                     )
+                    # Wrap LLM to track timing
+                    wrapped_llm = _LLMTimingWrapper(self.llm)
                     self.agent = Agent(
                         task=task,
                         browser_session=self.browser_session,
                         controller=self.controller,
-                        llm=self.llm,
+                        llm=wrapped_llm,
                         use_vision=self.constraints.allow_vision,
                         initial_actions=initial_actions,
                         sensitive_data=self.sensitive_data,
@@ -307,11 +354,13 @@ class Executor:
                         if self.constraints.allow_parallelism.get("task", False)
                         else 180
                     )
+                    # Wrap LLM to track timing
+                    wrapped_llm = _LLMTimingWrapper(self.llm)
                     self.agent = Agent(
                         task="",  # Plan already contains the task
                         browser_session=self.browser_session,
                         controller=self.controller,
-                        llm=self.llm,
+                        llm=wrapped_llm,
                         use_vision=self.constraints.allow_vision,
                         sensitive_data=self.sensitive_data,
                         calculate_cost=True,
