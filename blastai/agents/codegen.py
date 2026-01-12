@@ -62,7 +62,7 @@ result = f"It is {x.items[0].field1} and {x.items[0].field2}" if x.items else "<
 E3: result with ai_eval
 ```python
 x = await tool_b(param="value")
-response = await ai_eval("Human-readable summary of {data}", data=x.content)
+result = await ai_eval("Human-readable summary of {data}", data=x.content)
 ```
 
 E4: data collection with no ai_eval
@@ -93,6 +93,7 @@ await tool_c()
 x = await tool_e(123)
 results = [await tool_f(item_name=item.name) for item in x.items if item.value > 3]
 result = await ai_eval("Summary of {results}", results=results)
+```
 
 E7: when appropriate, use information from previous tool calls to list items and filter dynamically
 ```python
