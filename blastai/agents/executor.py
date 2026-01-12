@@ -17,7 +17,7 @@ from openai import OpenAI
 from pydantic import BaseModel, Field, create_model
 
 # Apply browser-use patches early, before any browser-use tools are created
-from ..browser_use_patches import apply_all_patches
+# from ..browser_use_patches import apply_all_patches
 from .codegen import CodeGenerator
 from .coderun import create_python_executor
 from .execution_hooks import ExecutionHooks, StopExecutionError
@@ -27,7 +27,7 @@ from .timing_tracker import set_current_tracker
 from .tools_smcp import add_smcp_tool, execute_smcp_tool
 from .tools_synthesis import add_core_tool
 
-apply_all_patches()
+# apply_all_patches()
 
 if TYPE_CHECKING:
     from browser_use.browser import BrowserSession

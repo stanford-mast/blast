@@ -314,7 +314,9 @@ class ResourceManager:
             running_subtasks = sum(
                 1
                 for task in self.scheduler.tasks.values()
-                if task.executor and task.parent_task_id is not None and not task.is_completed
+                if task.executor
+                and task.parent_task_id is not None
+                and not task.is_completed
             )
             if (
                 running_subtasks + with_new_executors
@@ -365,9 +367,13 @@ class ResourceManager:
             running_subtasks = sum(
                 1
                 for task in self.scheduler.tasks.values()
-                if task.executor and task.parent_task_id is not None and not task.is_completed
+                if task.executor
+                and task.parent_task_id is not None
+                and not task.is_completed
             )
-            max_new_by_workers = self.constraints.max_parallel_workers - running_subtasks
+            max_new_by_workers = (
+                self.constraints.max_parallel_workers - running_subtasks
+            )
             max_new = min(max_new, max_new_by_workers)
 
         # Check memory limit if set
@@ -406,7 +412,9 @@ class ResourceManager:
                     running_subtasks = sum(
                         1
                         for t in self.scheduler.tasks.values()
-                        if t.executor and t.parent_task_id is not None and not t.is_completed
+                        if t.executor
+                        and t.parent_task_id is not None
+                        and not t.is_completed
                     )
                     if running_subtasks + 1 > self.constraints.max_parallel_workers:
                         logger.debug(
@@ -726,7 +734,9 @@ class ResourceManager:
                     running_subtasks = sum(
                         1
                         for t in self.scheduler.tasks.values()
-                        if t.executor and t.parent_task_id is not None and not t.is_completed
+                        if t.executor
+                        and t.parent_task_id is not None
+                        and not t.is_completed
                     )
                     pending_in_group = len(group.task_ids)
                     max_parallel_workers = self.constraints.max_parallel_workers
