@@ -106,6 +106,47 @@ def count_visited_paths(state: dict, paths: List[str]) -> int:
     return sum(1 for path in paths if path in all_visited_paths)
 
 
+def _extract_orders_from_action_history(data: dict) -> List[dict]:
+    """
+    Extract orders by combining cart/addItemToCart and cart/placeOrder actions.
+
+    This is a fallback when orders aren't persisted to foodOrders but the order
+    was successfully placed (evidenced by cart/placeOrder action in history).
+
+    Returns a list with a single reconstructed order if found, empty list otherwise.
+    """
+    action_history = data.get("actionhistory", [])
+
+    # Find cart items added and the placeOrder action
+    cart_items = []
+    place_order_payload = None
+
+    for action in action_history:
+        action_type = action.get("type", "")
+        if action_type == "cart/addItemToCart":
+            item = action.get("payload", {}).get("item", {})
+            if item:
+                cart_items.append(item)
+        elif action_type == "cart/placeOrder":
+            place_order_payload = action.get("payload", {})
+
+    # If we have both cart items and a placeOrder action, construct an order
+    if cart_items and place_order_payload:
+        order = {
+            "cartItems": cart_items,
+            "checkoutDetails": {
+                "account": place_order_payload.get("account", {}),
+                "shipping": place_order_payload.get("shipping", {}),
+                "payment": place_order_payload.get("payment", {}),
+                "charges": place_order_payload.get("charges", {}),
+            },
+            "orderId": "reconstructed-from-action-history",
+        }
+        return [order]
+
+    return []
+
+
 def extract_orders(data: dict) -> List[dict]:
     """
     Extract all orders from the data.
@@ -114,6 +155,7 @@ def extract_orders(data: dict) -> List[dict]:
     - differences.foodOrders.added
     - initialfinaldiff.added.cart.foodOrders
     - Recursive scan of initialfinaldiff.added for order-like objects
+    - Fallback: reconstruct from cart/addItemToCart + cart/placeOrder actions
 
     Orders are identified by having 'orderId', 'cartItems', AND 'checkoutDetails'.
     The 'orderId' requirement distinguishes actual placed orders from the cart object itself
@@ -164,6 +206,11 @@ def extract_orders(data: dict) -> List[dict]:
         if key not in seen:
             seen.add(key)
             unique_orders.append(o)
+
+    # Final fallback: reconstruct order from action history if no orders found
+    if not unique_orders:
+        unique_orders = _extract_orders_from_action_history(data)
+
     return unique_orders
 
 

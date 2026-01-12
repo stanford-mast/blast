@@ -640,12 +640,12 @@ async def run_test(
 )
 @click.option(
     "--test-loop/--no-test-loop",
-    default=True,
+    default=False,
     help="Test baseline loop mode (no tools)",
 )
 @click.option(
     "--test-loop-tools/--no-test-loop-tools",
-    default=True,
+    default=False,
     help="Test loop mode with tools",
 )
 @click.option(

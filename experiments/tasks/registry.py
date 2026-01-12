@@ -35,40 +35,48 @@ class TaskValidatorRegistry:
 
         Looks for Python files that export a 'validator' instance.
         The task ID is derived from the filename (e.g., dashdish_deepresearch1.py -> dashdish-deepresearch1).
+        
+        Searches both the tasks directory and llm_eval subdirectory.
         """
         tasks_dir = Path(__file__).parent
+        
+        # Directories to search for validators
+        search_dirs = [
+            (tasks_dir, "experiments.tasks"),
+            (tasks_dir / "llm_eval", "experiments.tasks.llm_eval"),
+        ]
 
-        for py_file in tasks_dir.glob("*.py"):
-            # Skip __init__, base, registry, and other infrastructure files
-            if py_file.stem in [
-                "__init__",
-                "base",
-                "registry",
-                "validation",
-                "accuracy",
-            ]:
+        for search_dir, module_prefix in search_dirs:
+            if not search_dir.exists():
                 continue
-
-            try:
-                # Import the module
-                spec = importlib.util.spec_from_file_location(py_file.stem, py_file)
-                if spec is None or spec.loader is None:
+                
+            for py_file in search_dir.glob("*.py"):
+                # Skip __init__, base, registry, and other infrastructure files
+                if py_file.stem in [
+                    "__init__",
+                    "base",
+                    "registry",
+                    "validation",
+                    "accuracy",
+                ]:
                     continue
 
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
+                try:
+                    # Import the module using the proper module path
+                    module_name = f"{module_prefix}.{py_file.stem}"
+                    module = importlib.import_module(module_name)
 
-                # Check if it has a 'validator' attribute
-                if hasattr(module, "validator") and isinstance(
-                    module.validator, TaskValidator
-                ):
-                    # Convert filename to task ID (underscore to hyphen)
-                    task_id = py_file.stem.replace("_", "-")
-                    self._validators[task_id] = module.validator
-                    logger.info(f"Registered validator for task: {task_id}")
+                    # Check if it has a 'validator' attribute
+                    if hasattr(module, "validator") and isinstance(
+                        module.validator, TaskValidator
+                    ):
+                        # Convert filename to task ID (underscore to hyphen)
+                        task_id = py_file.stem.replace("_", "-")
+                        self._validators[task_id] = module.validator
+                        logger.info(f"Registered validator for task: {task_id}")
 
-            except Exception as e:
-                logger.warning(f"Failed to load validator from {py_file}: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to load validator from {py_file}: {e}")
 
     def get_validator(self, task_id: str) -> Optional[TaskValidator]:
         """
@@ -131,32 +139,50 @@ class UnifiedValidator:
                 logger.warning(f"Failed to load task config from {yaml_file}: {e}")
 
     def _load_script_evaluators(self):
-        """Load script evaluators from eval_scripts directory."""
-        eval_scripts_dir = Path(__file__).parent / "eval_scripts"
+        """Load script evaluators from eval_scripts and script_eval directories."""
+        tasks_dir = Path(__file__).parent
+        
+        # Directories to search for script evaluators
+        # Format: (directory, module_prefix, filename_pattern, strip_prefix)
+        search_configs = [
+            # eval_scripts/ uses eval_*.py pattern and strips "eval_" prefix
+            (tasks_dir / "eval_scripts", "experiments.tasks.eval_scripts", "eval_*.py", "eval_"),
+            # script_eval/ uses *.py pattern directly (no prefix to strip)
+            (tasks_dir / "script_eval", "experiments.tasks.script_eval", "*.py", None),
+        ]
 
-        if not eval_scripts_dir.exists():
-            logger.warning(f"Eval scripts directory not found: {eval_scripts_dir}")
-            return
+        for search_dir, module_prefix, pattern, strip_prefix in search_configs:
+            if not search_dir.exists():
+                continue
 
-        for py_file in eval_scripts_dir.glob("eval_*.py"):
-            try:
-                # Extract task ID from filename: eval_dashdish_custom_1.py -> dashdish-custom-1
-                stem = py_file.stem  # e.g., "eval_dashdish_custom_1"
-                if stem.startswith("eval_"):
-                    # Remove "eval_" prefix and convert underscores to hyphens
-                    task_id = stem[5:].replace("_", "-")
+            for py_file in search_dir.glob(pattern):
+                # Skip __init__ and utility files
+                if py_file.stem in ["__init__", "eval_utils", "constants"]:
+                    continue
+                    
+                try:
+                    # Extract task ID from filename
+                    stem = py_file.stem
+                    if strip_prefix and stem.startswith(strip_prefix):
+                        # Remove prefix and convert underscores to hyphens
+                        task_id = stem[len(strip_prefix):].replace("_", "-")
+                    else:
+                        # Just convert underscores to hyphens
+                        task_id = stem.replace("_", "-")
 
                     # Import the module
-                    module_name = f"experiments.tasks.eval_scripts.{py_file.stem}"
+                    module_name = f"{module_prefix}.{py_file.stem}"
                     module = importlib.import_module(module_name)
 
                     # Check if it has an 'evaluate' function
                     if hasattr(module, "evaluate") and callable(module.evaluate):
                         self._script_evaluators[task_id] = module.evaluate
+                        # Also set eval_type to "script" for this task
+                        self._eval_types[task_id] = "script"
                         logger.info(f"Loaded script evaluator for task: {task_id}")
 
-            except Exception as e:
-                logger.warning(f"Failed to load script evaluator from {py_file}: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to load script evaluator from {py_file}: {e}")
 
     def get_eval_type(self, task_id: str) -> str:
         """Get the evaluation type for a task."""

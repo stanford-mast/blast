@@ -160,7 +160,7 @@
     {
       "name": "get_store_details",
       "title": "Get Store Details",
-      "description": "Extracts detailed information about a store, including its name, rating, review count, and estimated pickup time.",
+      "description": "Extracts detailed information about a store, including its name, rating, review count, pickup time, and delivery time.",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -184,6 +184,14 @@
           "pickup_time": {
             "type": "string",
             "description": "The estimated time or status for order pickup."
+          },
+          "delivery_time": {
+            "type": "string",
+            "description": "The estimated time for delivery."
+          },
+          "has_delivery": {
+            "type": "boolean",
+            "description": "Whether delivery is available for this store."
           }
         },
         "required": [
@@ -197,7 +205,7 @@
       "lang": "js",
       "is_ready": "return !!document.querySelector('h3.MuiTypography-h3') ? true : [false, 'Store name element not found'];",
       "is_completed": "return (typeof output.name === 'string' && typeof output.rating === 'number') ? true : [false, 'Invalid output format'];",
-      "execute": "const storeName = document.querySelector('h3.MuiTypography-h3')?.innerText || '';\nconst ratingValue = parseFloat(document.querySelector('.css-1blxmo9')?.innerText || '0');\nconst reviewCountRaw = document.querySelector('.css-ph0okg')?.innerText || '';\nconst review_count = parseInt(reviewCountRaw.replace(/[^0-9]/g, '') || '0');\nconst pickupContainer = Array.from(document.querySelectorAll('.MuiStack-root.css-2k05wz')).find(el => el.innerText.includes('Pickup'));\nconst pickup_time = pickupContainer?.querySelector('span.MuiTypography-caption')?.innerText || '';\nreturn { name: storeName, rating: ratingValue, review_count: review_count, pickup_time: pickup_time };",
+      "execute": "const storeName = document.querySelector('h3.MuiTypography-h3')?.innerText || '';\nconst ratingValue = parseFloat(document.querySelector('.css-1blxmo9')?.innerText || '0');\nconst reviewCountRaw = document.querySelector('.css-ph0okg')?.innerText || '';\nconst review_count = parseInt(reviewCountRaw.replace(/[^0-9]/g, '') || '0');\nconst containers = Array.from(document.querySelectorAll('.MuiStack-root'));\nconst pickupContainer = containers.find(el => el.innerText.includes('Pickup'));\nconst pickup_time = pickupContainer?.querySelector('span.MuiTypography-caption')?.innerText || '';\nconst deliveryContainer = containers.find(el => el.innerText.includes('Delivery'));\nconst delivery_time = deliveryContainer?.querySelector('span.MuiTypography-caption')?.innerText || '';\nconst has_delivery = !!deliveryContainer;\nreturn { name: storeName, rating: ratingValue, review_count: review_count, pickup_time: pickup_time, delivery_time: delivery_time, has_delivery: has_delivery };",
       "pre_path": "*vercel.app*",
       "pre": {
         "page_type": "store"
@@ -287,9 +295,9 @@
             "enum": [
               "section",
               "sidebar",
-              "search"
+              "url"
             ],
-            "description": "How the filter was applied: 'section' (clicked See all), 'sidebar' (clicked sidebar menu), or 'search' (used search box)."
+            "description": "How the filter was applied: 'section' (clicked See all), 'sidebar' (clicked sidebar menu), or 'url' (direct URL navigation with encoded category)."
           }
         },
         "required": [
@@ -300,7 +308,7 @@
       "lang": "js",
       "is_ready": "return true;",
       "is_completed": "if (output.success === false) return true; return (location.pathname.includes('/categories') || document.querySelector('input[placeholder=\"Search DashDish\"]')?.value) ? true : [false, 'Filter not applied yet'];",
-      "execute": "const headers = Array.from(document.querySelectorAll('h6')); const targetHeader = headers.find(h => h.textContent.trim().toLowerCase().includes(inputs.category_name.toLowerCase())); if (targetHeader) { const sectionRow = targetHeader.closest('.MuiStack-root'); const seeAllButton = sectionRow ? Array.from(sectionRow.querySelectorAll('button')).find(b => b.textContent.includes('See all')) : null; if (seeAllButton) { const catName = targetHeader.textContent.trim(); seeAllButton.click(); for (let i = 0; i < 20; i++) { await new Promise(r => setTimeout(r, 250)); if (location.pathname.includes('/categories')) break; } return { success: true, category_name: catName, method: 'section' }; } } const sidebarItems = Array.from(document.querySelectorAll('.MuiListItemButton-root')); const sidebarMatch = sidebarItems.find(el => el.textContent.trim().toLowerCase().includes(inputs.category_name.toLowerCase())); if (sidebarMatch) { const catName = sidebarMatch.textContent.trim(); sidebarMatch.click(); for (let i = 0; i < 20; i++) { await new Promise(r => setTimeout(r, 250)); if (location.pathname.includes('/categories')) break; } return { success: true, category_name: catName, method: 'sidebar' }; } const input = document.querySelector('input[placeholder=\"Search DashDish\"]'); if (input) { const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; nativeInputValueSetter.call(input, inputs.category_name); input.dispatchEvent(new Event('input', { bubbles: true })); const form = input.closest('form'); if (form) { form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); } await new Promise(r => setTimeout(r, 500)); return { success: true, category_name: inputs.category_name, method: 'search' }; } return { success: false };",
+      "execute": "const headers = Array.from(document.querySelectorAll('h6')); const targetHeader = headers.find(h => h.textContent.trim().toLowerCase().includes(inputs.category_name.toLowerCase())); if (targetHeader) { const sectionRow = targetHeader.closest('.MuiStack-root'); const seeAllButton = sectionRow ? Array.from(sectionRow.querySelectorAll('button')).find(b => b.textContent.includes('See all')) : null; if (seeAllButton) { const catName = targetHeader.textContent.trim(); setTimeout(() => seeAllButton.click(), 10); return { success: true, category_name: catName, method: 'section' }; } } const sidebarItems = Array.from(document.querySelectorAll('.MuiListItemButton-root')); const sidebarMatch = sidebarItems.find(el => el.textContent.trim().toLowerCase().includes(inputs.category_name.toLowerCase())); if (sidebarMatch) { const catName = sidebarMatch.textContent.trim(); setTimeout(() => sidebarMatch.click(), 10); return { success: true, category_name: catName, method: 'sidebar' }; } const encodedCategory = encodeURIComponent(inputs.category_name); const categoryUrl = '/categories?category=' + encodedCategory; setTimeout(() => { window.location.href = categoryUrl; }, 10); return { success: true, category_name: inputs.category_name, method: 'url' };",
       "pre_path": "*vercel.app*",
       "pre": {
         "page_type": "home"
@@ -374,10 +382,15 @@
     {
       "name": "list_all_stores",
       "title": "List All Stores",
-      "description": "Lists all visible stores on the home page without filtering.",
+      "description": "Lists all visible stores on the home page. Use detailed=true to include rating, distance, delivery time, delivery fee, and promo.",
       "input_schema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "detailed": {
+            "type": "boolean",
+            "description": "If true, includes additional fields: rating, distance, delivery_time, delivery_fee, has_dashpass, promo. Defaults to false."
+          }
+        },
         "required": []
       },
       "output_schema": {
@@ -391,6 +404,30 @@
                 "name": {
                   "type": "string",
                   "description": "The name of the store"
+                },
+                "rating": {
+                  "type": "number",
+                  "description": "(detailed only) The store rating (e.g., 4.1)"
+                },
+                "distance": {
+                  "type": "string",
+                  "description": "(detailed only) Distance to store (e.g., '1.1 mi')"
+                },
+                "delivery_time": {
+                  "type": "string",
+                  "description": "(detailed only) Estimated delivery time (e.g., '33 min')"
+                },
+                "delivery_fee": {
+                  "type": "string",
+                  "description": "(detailed only) Delivery fee (e.g., '$2.99 delivery fee')"
+                },
+                "has_dashpass": {
+                  "type": "boolean",
+                  "description": "(detailed only) Whether store offers DashPass (indicates delivery available)"
+                },
+                "promo": {
+                  "type": "string",
+                  "description": "(detailed only) Any promotional offer (e.g., '$10 off on $50+')"
                 }
               },
               "required": [
@@ -407,7 +444,7 @@
       "lang": "js",
       "is_ready": "return document.querySelectorAll('h6.MuiTypography-subtitle1').length > 0 ? true : [false, 'No store cards found on page'];",
       "is_completed": "return Array.isArray(output.items) ? true : [false, 'Output items is not an array'];",
-      "execute": "const stores = Array.from(document.querySelectorAll('h6.MuiTypography-subtitle1')).map(el => ({ name: el.textContent.trim() })).filter(item => item.name); return { items: stores };",
+      "execute": "const detailed = inputs.detailed === true; const stores = Array.from(document.querySelectorAll('h6.MuiTypography-subtitle1')).map(nameEl => { const name = nameEl.textContent.trim(); if (!detailed) return { name }; const card = nameEl.closest('.MuiStack-root')?.parentElement || nameEl.parentElement?.parentElement; const hasDashpass = !!card?.querySelector('.MuiSvgIcon-colorSuccess'); const ratingEl = card?.querySelector('h6.MuiTypography-subtitle2'); const rating = ratingEl ? parseFloat(ratingEl.textContent) : null; const textEls = Array.from(card?.querySelectorAll('p.MuiTypography-body2') || []); const texts = textEls.map(el => el.textContent.trim()).filter(t => t && t !== '•'); const distance = texts.find(t => t.includes('mi')) || null; const deliveryTime = texts.find(t => t.includes('min')) || null; const deliveryFee = texts.find(t => t.includes('delivery fee')) || null; const promoEl = card?.querySelector('.MuiTypography-caption'); const promo = promoEl ? promoEl.textContent.trim() : null; return { name, rating, distance, delivery_time: deliveryTime, delivery_fee: deliveryFee, has_dashpass: hasDashpass, promo }; }).filter(item => item.name); return { items: stores };",
       "pre_path": "*vercel.app*",
       "pre": {
         "page_type": "home"

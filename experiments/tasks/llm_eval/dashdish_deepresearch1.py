@@ -10,7 +10,7 @@ Task: Go through each restaurant in "National favorites" category and extract:
 from typing import List
 import re
 from pydantic import BaseModel, Field
-from experiments.tasks.base import TaskValidator
+from ..base import TaskValidator
 
 
 class RestaurantData(BaseModel):

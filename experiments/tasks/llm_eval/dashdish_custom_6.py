@@ -11,7 +11,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from experiments.tasks.base import TaskValidator
+from ..base import TaskValidator
 
 
 class DashDishCustom6Output(BaseModel):

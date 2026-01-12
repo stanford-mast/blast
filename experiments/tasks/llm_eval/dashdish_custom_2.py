@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from experiments.tasks.base import TaskValidator
+from ..base import TaskValidator
 
 
 class StoreReviews(BaseModel):

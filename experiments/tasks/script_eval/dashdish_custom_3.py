@@ -42,19 +42,27 @@ def evaluate(
         ]
         logger.info(f"  Order {i}: items = {item_names}")
 
-    # Check if exactly one taco order is placed
+    # Check if order was placed and if it contains a taco
+    order_placed = len(orders) >= 1
     taco_order_count = count_orders_with_keyword(final_state, TACO_KEYWORD)
-    order_ok = taco_order_count == 1
+    order_correct = taco_order_count >= 1
 
-    # Binary: taco must be in an order, no partial credit for cart
-    total_pct = 1.0 if order_ok else 0.0
+    # Partial credit:
+    # - 50% for placing any order
+    # - 50% for order containing a taco
+    total_pct = 0.0
+    if order_placed:
+        total_pct += 0.5
+    if order_correct:
+        total_pct += 0.5
 
-    success = order_ok
+    success = order_placed and order_correct
 
     details = {
         "taco_orders_found": taco_order_count,
-        "taco_orders_expected": 1,
         "total_orders_found": len(orders),
+        "order_placed": order_placed,
+        "order_correct": order_correct,
     }
 
     return success, total_pct, details

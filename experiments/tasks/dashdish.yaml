@@ -21,14 +21,14 @@ tasks:
   goal: 'Buy a taco from any store and make sure you place the order.'
   smcp_registry: experiments/tools/dashdish.json
 - id: dashdish-custom-4
-  eval_type: llm
+  eval_type: script
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
-  goal: 'Can Honey BBQ Wings from Wingstop be ordered with sauce on the side?'
+  goal: 'Place an order for any type of sub-sandwich, keep the total under $30'
   smcp_registry: experiments/tools/dashdish.json
 - id: dashdish-custom-5
   eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
-  goal: 'How many restaurants are under the smoothies category?'
+  goal: 'What are the first three restaurants listed on the homepage?'
   smcp_registry: experiments/tools/dashdish.json
 - id: dashdish-custom-6
   eval_type: llm
@@ -43,7 +43,7 @@ tasks:
 - id: dashdish-custom-8
   eval_type: llm
   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
-  goal: 'How long does it take to pick up an order from RT Rotisserie?'
+  goal: 'How many restaurants in the "Light & fresh" category offer delivery?'
   smcp_registry: experiments/tools/dashdish.json
 - id: dashdish-custom-9
   eval_type: llm

@@ -34,6 +34,34 @@ def get_successful_task(
     return get_successful_main_task(task_states, logger)
 
 
+def get_task_for_evaluation(
+    parallelism_config: Dict[str, Any],
+    task_states: Dict[str, TaskState],
+    logger: logging.Logger,
+) -> Optional[TaskState]:
+    """
+    Get a task for evaluation, preferring successful tasks but falling back to any completed task.
+
+    This ensures we can still evaluate even when the task reported failure,
+    which is important for checking if actions were actually performed correctly.
+    """
+    # First try to get a successful task
+    successful = get_successful_task(parallelism_config, task_states, logger)
+    if successful:
+        return successful
+
+    # Fall back to any completed task for evaluation
+    logger.info("No successful task found, falling back to any completed task", indent=6)
+
+    if parallelism_config.get("first_of_n", False):
+        subtask = get_any_completed_subtask(task_states, logger)
+        if subtask:
+            return subtask
+        return get_any_completed_main_task(task_states, logger)
+
+    return get_any_completed_main_task(task_states, logger)
+
+
 def get_successful_main_task(
     task_states: Dict[str, TaskState], logger: logging.Logger
 ) -> Optional[TaskState]:
@@ -69,6 +97,41 @@ def get_successful_subtask(
             return task_state
 
     logger.warning("No successful subtask found", indent=6)
+    return None
+
+
+def get_any_completed_subtask(
+    task_states: Dict[str, TaskState], logger: logging.Logger
+) -> Optional[TaskState]:
+    """Get any completed subtask from the task states, regardless of success."""
+    for task_state in task_states.values():
+        # Subtask is completed, has a parent, has an executor with browser session
+        if (
+            task_state.is_completed
+            and task_state.executor
+            and task_state.executor.browser_session
+            and task_state.parent_task_id
+        ):
+            logger.info(f"Found completed subtask: {task_state.id}", indent=6)
+            return task_state
+
+    logger.warning("No completed subtask found", indent=6)
+    return None
+
+
+def get_any_completed_main_task(
+    task_states: Dict[str, TaskState], logger: logging.Logger
+) -> Optional[TaskState]:
+    """Get any completed main task from the task states, regardless of success."""
+    for task_state in task_states.values():
+        if (
+            task_state.is_completed
+            and task_state.parent_task_id is None
+            and task_state.executor
+            and task_state.executor.browser_session
+        ):
+            return task_state
+    logger.warning("No completed main task found", indent=6)
     return None
 
 

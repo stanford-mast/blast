@@ -1,0 +1,100 @@
+tasks:
+# - id: dashdish-offline-1
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app
+#   goal: Can you find out how much a medium 'Chicken Biryani' from 'Mashaallah Halal Food Pakistani Food' costs? And while you're at it, add one to the cart, buy it, and let me know the total price.
+
+# - id: dashdish-offline-2
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app
+#   goal: Click on the 'Poke' category icon, go to the fastest store and summarize all reviews and menu details.
+
+# - id: dashdish-custom-1
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app
+#   goal: How much is a matcha croissant and a regular iced matcha latte from stonemill matcha? What about a ceremonial grade matcha latte and a mochi set?
+#   evaluate: true
+
+# - id: dashdish-custom-2
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
+#   goal: For each vendor under the 'Costume party ready' category, visit the store page and get the first three reviews.
+#   evaluate: true
+
+# - id: dashdish-custom-3
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
+#   goal: Buy a taco from any store and make sure you place the order.
+#   evaluate: true
+
+# - id: dashdish-custom-4
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
+#   goal: Place an order for any type of sub-sandwich, keep the total under $30
+#   evaluate: true
+
+# - id: dashdish-custom-5
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
+#   goal: What are the first three restaurants listed on the homepage?
+#   evaluate: true
+
+# - id: dashdish-custom-6
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
+#   goal: Visit the first five restaurants in "Best near you" and report how many of them have under 20 reviews?
+#   evaluate: true
+
+# - id: dashdish-custom-7
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
+#   goal: What's the most expensive item from Petco?
+#   evaluate: true
+
+# - id: dashdish-custom-8
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
+#   goal: How many restaurants in the "Light & fresh" category offer delivery?
+#   evaluate: true
+
+# - id: dashdish-custom-9
+#   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app/
+#   goal: Tell me which of Winstop, Man vs. Fries, McDonald's, Popeyes, and Ike's has the cheapest fries item and its price.
+#   evaluate: true
+
+stages:
+  # - name: "baseline"
+  #   description: "Baseline with all parallelism disabled"
+  #   config:
+  #     allow_parallelism:
+  #       task: false
+  #       data: false
+  #       first_of_n: false
+  #     max_parallelism_nesting_depth: 1
+  #     llm_model: "openai:gpt-4.1"
+  #     # llm_model: "openai:gpt-4.1-mini"
+  #     # llm_model: "google:gemini-2.5-pro"
+  #     llm_model_mini: "openai:gpt-4.1-mini"
+  
+  # - name: "first_of_n_only"
+  #   description: "Only first-of-n parallelism enabled"
+  #   config:
+  #     allow_parallelism:
+  #       task: false
+  #       data: false
+  #       first_of_n: true
+  #     first_of_n_num_copies: 4
+  #     max_parallelism_nesting_depth: 1
+  #     llm_model: "openai:gpt-4.1"
+  #     # llm_model: "openai:gpt-4.1-mini"
+  #     # llm_model: "google:gemini-2.5-pro"
+  #     llm_model_mini: "openai:gpt-4.1-mini"
+
+  - name: "task_parallelism_only"
+    description: "Only task-level parallelism for subtasks"
+    config:
+      allow_parallelism:
+        task: true
+        data: false
+        first_of_n: false
+      max_parallel_workers: 4  # Limit number of parallel workers running simultaneously
+      max_parallelism_nesting_depth: 1
+      llm_model: "openai:gpt-4.1"
+      # llm_model: "openai:gpt-4.1-mini"
+      # llm_model: "google:gemini-2.5-pro"
+      llm_model_mini: "openai:gpt-4.1-mini"
+  
+settings:
+  runs_per_stage: 1
+  logs_dir: "logs"
+  output_dir: "results"

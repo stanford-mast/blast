@@ -1,7 +1,7 @@
 """
-DashDish Custom Task 5: Smoothies Category Count
+DashDish Custom Task 8: Light & Fresh Delivery Count
 
-Task: How many restaurants are under the smoothies category?
+Task: How many restaurants in the "Light & fresh" category offer delivery?
 
 Expected Answer: 5
 """
@@ -10,14 +10,14 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from experiments.tasks.base import TaskValidator
+from ..base import TaskValidator
 
 
-class DashDishCustom5Output(BaseModel):
-    """Expected output schema for dashdish-custom-5 task"""
+class DashDishCustom8Output(BaseModel):
+    """Expected output schema for dashdish-custom-8 task"""
 
     restaurant_count: int = Field(
-        description="Number of restaurants under the smoothies category"
+        description="Number of restaurants in the 'Light & fresh' category that offer delivery"
     )
     restaurant_names: Optional[list[str]] = Field(
         default=None, description="Optional list of restaurant names"
@@ -25,15 +25,15 @@ class DashDishCustom5Output(BaseModel):
 
 
 # Ground truth
-EXPECTED_COUNT = 5
+EXPECTED_COUNT = 10
 
 
-class DashDishCustom5Validator(TaskValidator):
-    """Validator for DashDish Custom Task 5"""
+class DashDishCustom8Validator(TaskValidator):
+    """Validator for DashDish Custom Task 8"""
 
     @property
     def output_schema(self) -> type[BaseModel]:
-        return DashDishCustom5Output
+        return DashDishCustom8Output
 
     def check_correctness_pct(self, parsed_output: BaseModel) -> float:
         """Check if the count is correct."""
@@ -41,7 +41,7 @@ class DashDishCustom5Validator(TaskValidator):
 
         logger = logging.getLogger(__name__)
 
-        if not isinstance(parsed_output, DashDishCustom5Output):
+        if not isinstance(parsed_output, DashDishCustom8Output):
             logger.warning(
                 f"check_correctness_pct: unexpected type {type(parsed_output)}"
             )
@@ -61,4 +61,4 @@ class DashDishCustom5Validator(TaskValidator):
 
 
 # Create singleton validator instance
-validator = DashDishCustom5Validator()
+validator = DashDishCustom8Validator()
