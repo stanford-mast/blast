@@ -94,6 +94,9 @@ _early_logs: List[
 ] = []  # (logger_name, level, timestamp, message)
 _early_logging_configured = False
 
+# Track file handlers to close them properly on cleanup
+_active_file_handlers: List[logging.Handler] = []
+
 
 class EarlyLogHandler(logging.Handler):
     """Handler that captures logs before proper logging is set up."""
@@ -250,8 +253,13 @@ def setup_logging(
     settings: Optional[Settings] = None, engine_hash: Optional[str] = None
 ):
     """Set up logging - redirect everything to files except metrics and shutdown."""
+    global _early_logs, _active_file_handlers
+
     if not settings:
         settings = Settings()
+
+    # Close and clear any existing file handlers from previous runs
+    cleanup_logging()
 
     # Create logs directory
     logs_dir = Path(settings.logs_dir or "blast-logs")
@@ -262,7 +270,6 @@ def setup_logging(
     web_log = logs_dir / f"{engine_hash or 'default'}.web.log"
 
     # Process any early logs if we have an engine hash
-    global _early_logs
     if engine_hash and _early_logs:
         with open(engine_log, "a") as f:
             for logger_name, level, timestamp, message in _early_logs:
@@ -284,8 +291,10 @@ def setup_logging(
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.WARNING)
 
-    # Clear any existing handlers
-    root_logger.handlers.clear()
+    # Clear any existing handlers (close them first)
+    for handler in root_logger.handlers[:]:
+        handler.close()
+        root_logger.removeHandler(handler)
 
     # Create formatters
     formatter = logging.Formatter(
@@ -297,6 +306,7 @@ def setup_logging(
     engine_handler.setFormatter(formatter)
     engine_handler.setLevel(logging.WARNING)  # Base level for third-party libs
     root_logger.addHandler(engine_handler)
+    _active_file_handlers.append(engine_handler)
 
     # Set up web log handler for web-specific logs
     web_handler = logging.FileHandler(web_log)
@@ -304,20 +314,24 @@ def setup_logging(
     web_handler.addFilter(lambda record: record.name == "web")
     web_handler.setLevel(logging.INFO)  # Web UI logs at INFO level
     root_logger.addHandler(web_handler)
+    _active_file_handlers.append(web_handler)
 
     # Configure loggers with their own handlers to ensure proper levels
     def setup_logger(name: str, level: int):
         logger = logging.getLogger(name)
         logger.setLevel(level)
 
-        # Clear any existing handlers
-        logger.handlers.clear()
+        # Clear any existing handlers (close them first)
+        for handler in logger.handlers[:]:
+            handler.close()
+            logger.removeHandler(handler)
 
         # Add handler specifically for this logger
         handler = logging.FileHandler(engine_log)
         handler.setFormatter(formatter)
         handler.setLevel(level)
         logger.addHandler(handler)
+        _active_file_handlers.append(handler)
 
         # Don't propagate to root logger since we have our own handler
         logger.propagate = False
@@ -334,8 +348,37 @@ def setup_logging(
         for child in ["server", "engine", "scheduler", "executor"]:
             child_logger = logging.getLogger(f"{name}.{child}")
             child_logger.setLevel(level)
-            # Clear any existing handlers
-            child_logger.handlers.clear()
+            # Clear any existing handlers (close them first)
+            for handler in child_logger.handlers[:]:
+                handler.close()
+                child_logger.removeHandler(handler)
+
+
+def cleanup_logging():
+    """Clean up logging handlers to prevent memory leaks.
+
+    This should be called before setting up new logging or when the engine stops.
+    It closes all file handlers that were created by setup_logging.
+    """
+    global _active_file_handlers, _early_logs
+
+    # Close and remove all tracked file handlers
+    for handler in _active_file_handlers:
+        try:
+            handler.close()
+        except Exception:
+            pass  # Ignore errors during cleanup
+
+    _active_file_handlers.clear()
+
+    # Clear early logs buffer
+    _early_logs = []
+
+    # Restore stdout/stderr if they were redirected
+    if isinstance(sys.stdout, (LogRedirect, EarlyStdoutRedirect)):
+        sys.stdout = sys.__stdout__
+    if isinstance(sys.stderr, (LogRedirect, EarlyStdoutRedirect)):
+        sys.stderr = sys.__stderr__
 
 
 def should_show_metrics(settings: Settings) -> bool:

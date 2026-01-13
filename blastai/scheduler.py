@@ -827,3 +827,23 @@ class Scheduler:
             groups.append(TaskPriorityGroup("fifo", remaining))
 
         return groups
+
+    def clear(self):
+        """Clear all tasks and their references.
+
+        This should be called during engine shutdown to prevent memory leaks.
+        It clears all task references which allows garbage collection of:
+        - Executor instances
+        - AgentHistoryList results
+        - asyncio.Task objects
+        - Any other referenced objects
+        """
+        # Clear references in each task to help garbage collection
+        for task in self.tasks.values():
+            task.executor = None
+            task.executor_run_task = None
+            task.result = None
+            task.interactive_queues = None
+
+        # Clear the tasks dictionary
+        self.tasks.clear()

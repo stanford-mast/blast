@@ -645,7 +645,7 @@ async def run_test(
 )
 @click.option(
     "--test-loop-tools/--no-test-loop-tools",
-    default=False,
+    default=True,
     help="Test loop mode with tools",
 )
 @click.option(
@@ -738,28 +738,51 @@ def main(
 
         agent_no_tools = Agent(description="", tools=[])
 
-        # Parse markdown for candidates
-        md_file = f"{task_id}.md"
-        md_path = results_path / md_file
-        if not md_path.exists():
-            console.print(f"[yellow]Warning: Markdown file not found: {md_path}[/]")
+        # Parse markdown for candidates from all matching files
+        # Pattern: {task_id}_*.md (e.g., dashdish-custom-9_gemini-2.5-pro.md)
+        # Search both in results_path directly and in model subdirectories
+        md_pattern = f"{task_id}_*.md"
+        md_files = list(results_path.glob(md_pattern))  # Direct matches
+        md_files += list(results_path.glob(f"*/{md_pattern}"))  # Subdirectory matches
+
+        # Filter out e2e_detailed files (those are output files, not input)
+        md_files = [f for f in md_files if "_e2e_detailed" not in f.name]
+
+        if not md_files:
+            console.print(
+                f"[yellow]Warning: No markdown files found matching: {md_pattern}[/]"
+            )
             console.print(f"[yellow]Skipping task {task_id}[/]")
             continue
 
-        runs = parse_markdown_runs(md_path)
-        console.print(f"[green]Parsed {len(runs)} runs from {md_file}[/]")
-
-        # Load planning times from JSON
+        runs = {}
         planning_times = {}
-        json_file = f"{task_id}.json"
-        json_path = results_path / json_file
-        if json_path.exists():
-            planning_times = load_planning_times(json_path)
+        run_id_offset = 0  # Offset to create unique run IDs across files
+
+        for md_path in sorted(md_files):
+            console.print(f"[dim]Reading: {md_path.name}[/]")
+            file_runs = parse_markdown_runs(md_path)
+
+            # Adjust run IDs to be unique across files
+            for run_id, run_data in file_runs.items():
+                new_run_id = run_id + run_id_offset
+                runs[new_run_id] = run_data
+
+            # Load planning times from corresponding JSON file
+            json_path = md_path.with_suffix(".json")
+            if json_path.exists():
+                file_planning_times = load_planning_times(json_path)
+                for run_id, planning_time in file_planning_times.items():
+                    new_run_id = run_id + run_id_offset
+                    planning_times[new_run_id] = planning_time
+
+            run_id_offset += len(file_runs)
+
+        console.print(f"[green]Parsed {len(runs)} runs from {len(md_files)} file(s)[/]")
+        if planning_times:
             console.print(
                 f"[green]Loaded planning times for {len(planning_times)} runs[/]"
             )
-        else:
-            console.print(f"[yellow]Warning: JSON file not found: {json_path}[/]")
 
         # Build test configs
         model_list = models.split()

@@ -195,9 +195,15 @@ class Engine:
                         except asyncio.TimeoutError:
                             pass
 
-                # Finally stop resource manager and clear caches
+                # Stop resource manager (this also clears its tracking data)
                 await self.resource_manager.stop()
-                self.cache_manager.clear()  # This will respect persist setting
+
+                # Clear scheduler tasks to free memory
+                self.scheduler.clear()
+
+                # Clear caches (this will respect persist setting)
+                self.cache_manager.clear()
+
                 self._started = False
 
             except Exception as e:

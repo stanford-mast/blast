@@ -103,6 +103,15 @@ details = await get_tool_details(tool_id=tools[0].id)
 result = details.info
 ```
 
+E8: use contains matching instead of exact key lookup when searching for items by name
+```python
+items = await list_items()
+# DON'T use exact match: prices.get('Target Item') - this fails if the actual name is 'Target Item (Large)'
+# DO use contains matching to find items flexibly:
+matching = [item for item in items if "target item" in item.name.lower()]
+price = matching[0].price if matching else None
+```
+
 {COMMENTED_OUT_AI_EXEC_EXAMPLE}
 """
 

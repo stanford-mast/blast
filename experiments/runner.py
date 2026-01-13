@@ -10,6 +10,7 @@ Options:
 
 import argparse
 import asyncio
+import gc
 import hashlib
 import json
 import os
@@ -22,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from blastai import Engine
-from blastai.logging_setup import setup_logging
+from blastai.logging_setup import cleanup_logging, setup_logging
 from blastai.response import AgentHistoryListResponse
 
 from .logger import ExperimentLogger
@@ -541,8 +542,17 @@ class ExperimentRunner:
                 result = None
 
         finally:
+            # Clear references to large objects to help garbage collection
+            evaluator = None
+            final_state = None
+
             if engine:
                 await engine.stop()
+            # Clean up logging handlers to prevent file handle leaks
+            cleanup_logging()
+            # Force garbage collection to reclaim memory
+            gc.collect()
+
         self.logger.info(
             f"Run {run_number} completed in {result.total_time if result else 0:.2f} seconds",
             indent=4,

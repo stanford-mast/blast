@@ -823,68 +823,94 @@ def save_results_to_files(
     suffix: str = "",
 ):
     """
-    Save results to JSON and Markdown files.
+    Save results to JSON and Markdown files, grouped by model.
+
+    Files are named {task_id}_{model}.json/.md
+    If a file already exists, a timestamp suffix is added.
 
     Args:
-        suffix: Optional suffix to add to filenames (e.g., timestamp)
+        suffix: Deprecated - timestamp is only added when file exists
     """
+    from collections import defaultdict
+    from datetime import datetime
+
     # Create results directory
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build filename with optional suffix
-    base_name = f"{task_id}{suffix}" if suffix else task_id
-
-    # Save JSON file
-    json_file = results_dir / f"{base_name}.json"
-    all_results = []
-
-    # Add codegen results
+    # Group results by model
+    results_by_model: Dict[str, List[CodegenResult]] = defaultdict(list)
     for result in codegen_results:
-        all_results.append(result.to_dict())
+        model_safe = result.config.model.replace("/", "-")
+        results_by_model[model_safe].append(result)
 
-    # Add page load results
-    for result in page_load_results:
-        all_results.append(result.to_dict())
+    saved_files = []
 
-    with open(json_file, "w") as f:
-        json.dump(all_results, f, indent=2)
+    # Save each model's results to separate files
+    for model_safe, model_results in results_by_model.items():
+        # Build base filename with model name
+        base_name = f"{task_id}_{model_safe}"
 
-    # Save Markdown file with generated code
-    md_file = results_dir / f"{base_name}.md"
-    with open(md_file, "w") as f:
-        f.write(f"# Generated Code for Task: {task_id}\n\n")
+        # Check if file exists, add timestamp if so
+        json_file = results_dir / f"{base_name}.json"
+        md_file = results_dir / f"{base_name}.md"
 
-        for i, result in enumerate(codegen_results):
-            f.write(f"## Run {i + 1}\n\n")
-            f.write(f"**Config:**\n")
-            f.write(f"- Model: `{result.config.model}`\n")
-            f.write(f"- With Protocol: `{result.config.with_protocol}`\n\n")
-            f.write(f"**Metrics:**\n")
-            f.write(f"- Generation Latency: {result.generation_latency:.3f}s\n")
-            f.write(f"- Estimated Cost: {result.estimated_cost:.2f}s\n")
-            f.write(
-                f"- Overall Pass: {'✓' if result.codecheck.overall_pass else '✗'}\n"
-            )
-            if result.codecheck.failure_types:
+        if json_file.exists() or md_file.exists():
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base_name = f"{task_id}_{model_safe}_{timestamp}"
+            json_file = results_dir / f"{base_name}.json"
+            md_file = results_dir / f"{base_name}.md"
+
+        # Save JSON file
+        all_results = []
+        for result in model_results:
+            all_results.append(result.to_dict())
+
+        # Add page load results (only to first model's file to avoid duplication)
+        if model_safe == list(results_by_model.keys())[0]:
+            for result in page_load_results:
+                all_results.append(result.to_dict())
+
+        with open(json_file, "w") as f:
+            json.dump(all_results, f, indent=2)
+
+        # Save Markdown file with generated code
+        with open(md_file, "w") as f:
+            f.write(f"# Generated Code for Task: {task_id}\n\n")
+
+            for i, result in enumerate(model_results):
+                f.write(f"## Run {i + 1}\n\n")
+                f.write(f"**Config:**\n")
+                f.write(f"- Model: `{result.config.model}`\n")
+                f.write(f"- With Protocol: `{result.config.with_protocol}`\n\n")
+                f.write(f"**Metrics:**\n")
+                f.write(f"- Generation Latency: {result.generation_latency:.3f}s\n")
+                f.write(f"- Estimated Cost: {result.estimated_cost:.2f}s\n")
                 f.write(
-                    f"- Failure Types: {', '.join(result.codecheck.failure_types)}\n"
+                    f"- Overall Pass: {'✓' if result.codecheck.overall_pass else '✗'}\n"
                 )
-            if result.actual_latency is not None:
-                f.write(f"- Actual Latency: {result.actual_latency:.2f}s\n")
-            f.write(f"\n**Generated Code:**\n\n")
-            if result.generated_code.strip():
-                f.write(f"```python\n{result.generated_code}\n```\n\n")
-            else:
-                # Provide a readable placeholder for empty code results
-                placeholder = (
-                    "# (no code generated or code block missing in model output)"
-                )
-                f.write(f"```python\n{placeholder}\n```\n\n")
-            f.write("---\n\n")
+                if result.codecheck.failure_types:
+                    f.write(
+                        f"- Failure Types: {', '.join(result.codecheck.failure_types)}\n"
+                    )
+                if result.actual_latency is not None:
+                    f.write(f"- Actual Latency: {result.actual_latency:.2f}s\n")
+                f.write(f"\n**Generated Code:**\n\n")
+                if result.generated_code.strip():
+                    f.write(f"```python\n{result.generated_code}\n```\n\n")
+                else:
+                    # Provide a readable placeholder for empty code results
+                    placeholder = (
+                        "# (no code generated or code block missing in model output)"
+                    )
+                    f.write(f"```python\n{placeholder}\n```\n\n")
+                f.write("---\n\n")
+
+        saved_files.append((json_file, md_file))
 
     console.print(f"[green]Saved results to:[/]")
-    console.print(f"  - {json_file}")
-    console.print(f"  - {md_file}")
+    for json_file, md_file in saved_files:
+        console.print(f"  - {json_file}")
+        console.print(f"  - {md_file}")
 
 
 def compute_summary_statistics(
@@ -1087,12 +1113,6 @@ def compute_summary_statistics(
     default=1,
     help="Maximum retry iterations for code generation (default: 1, no retries)",
 )
-@click.option(
-    "--no-overwrite",
-    is_flag=True,
-    default=False,
-    help="Use timestamped filenames to avoid overwriting existing results",
-)
 def main(
     tasks: str,
     ids: str,
@@ -1105,7 +1125,6 @@ def main(
     print_code: bool,
     print_prompt: bool,
     max_iterations: int,
-    no_overwrite: bool,
 ):
     """
     Evaluate code generation performance across different configurations.
@@ -1219,12 +1238,7 @@ def main(
     )
 
     async def run_all_evaluations():
-        # Generate timestamp suffix if no_overwrite is set
         from datetime import datetime
-
-        timestamp_suffix = (
-            f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if no_overwrite else ""
-        )
 
         # Load tasks
         tasks_file = Path(tasks)
@@ -1266,13 +1280,12 @@ def main(
                 print_prompt=print_prompt,
             )
 
-            # Save results with optional timestamp suffix
+            # Save results (per-model files, timestamp added if file exists)
             save_results_to_files(
                 task_id,
                 codegen_results,
                 page_load_results,
                 results_path,
-                suffix=timestamp_suffix,
             )
 
             # Store for summary
@@ -1282,8 +1295,11 @@ def main(
         console.print("\n[blue]Computing summary statistics...[/]")
         summary = compute_summary_statistics(all_results)
 
-        # Save summary to results directory
-        summary_file = results_path / f"summary{timestamp_suffix}.json"
+        # Save summary to results directory (add timestamp if file exists)
+        summary_file = results_path / "summary.json"
+        if summary_file.exists():
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            summary_file = results_path / f"summary_{timestamp}.json"
 
         with open(summary_file, "w") as f:
             json.dump(summary, f, indent=2)
@@ -1360,8 +1376,22 @@ def main(
             )
             console.print(f"  Measurements: {pl['num_measurements']}")
 
-    # Run async evaluation
-    asyncio.run(run_all_evaluations())
+    # Run async evaluation with explicit cleanup
+    async def run_with_cleanup():
+        try:
+            await run_all_evaluations()
+        finally:
+            # Cancel any pending tasks to prevent hanging
+            pending = [
+                t for t in asyncio.all_tasks() if t is not asyncio.current_task()
+            ]
+            if pending:
+                for task in pending:
+                    task.cancel()
+                # Wait for cancellations with timeout
+                await asyncio.wait(pending, timeout=5.0)
+
+    asyncio.run(run_with_cleanup())
 
     console.print("\n[green]✓ Evaluation complete![/]\n")
 

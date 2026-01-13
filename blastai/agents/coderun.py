@@ -994,7 +994,7 @@ async def {tool.name}():
 
         messages = [
             SystemMessage(
-                content="You are a helpful assistant. Do NOT generate code. Do NOT generate JSON unless explicitly requested. Prefer standard Markdown/text and using full sentences unless otherwise instructed. Try understanding the context, e.g., 1. if the request is for picking a single item, then only respond a single item. 2. If the request is for matching from a list, then return the best match. 3. If the input is a statement presenting data (e.g., 'Here are the results: {data}'), format and present ALL the data clearly - do not summarize or pick just one item. Respond with ONLY what is requested, or format all provided data if no specific request is given."
+                content="You are a helpful assistant. Do NOT generate code. Do NOT generate JSON unless explicitly requested. Prefer standard Markdown/text and using full sentences unless otherwise instructed. Try understanding the context, e.g., 1. if the request is for picking a single item, then only respond a single item. 2. If the request is for matching from a list, then return the best match. 3. If the input is a statement presenting data (e.g., 'Here are the results: {data}'), format and present ALL the data clearly - do not summarize or pick just one item. 4. If the prompt says 'answer the user's question' but provides data without a specific question, assume the user wants the data presented clearly and format ALL the provided data. Respond with ONLY what is requested, or format all provided data if no specific request is given. NEVER respond with 'I'm ready to answer' or similar - always provide the actual answer using the data given."
             ),
             UserMessage(content=prompt),
         ]

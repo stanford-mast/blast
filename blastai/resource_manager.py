@@ -138,6 +138,26 @@ class ResourceManager:
 
             # No shared browser cleanup needed
 
+        # Clear tracking data to prevent memory leaks
+        self._clear_tracking_data()
+
+    def _clear_tracking_data(self):
+        """Clear all tracking data to prevent memory leaks between runs."""
+        self._total_cost_evicted_executors = 0.0
+        self._total_token_usage_evicted_executors = TokenUsage()
+        self._cost_history.clear()
+        self._token_usage_history.clear()
+        self._reported_constraint_tasks.clear()
+        self._total_llm_timing_evicted = {
+            "llm_total_seconds": 0.0,
+            "llm_prefill_seconds": 0.0,
+            "llm_decode_seconds": 0.0,
+            "num_llm_calls": 0,
+            "execution_seconds": 0.0,
+        }
+        self._prev_not_allocated = 0
+        self._prev_completed_with_executor = 0
+
     def _get_total_memory_usage(self) -> float:
         """Get total memory usage for all browser processes created since engine start.
 
