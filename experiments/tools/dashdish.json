@@ -295,9 +295,9 @@
             "enum": [
               "section",
               "sidebar",
-              "url"
+              "search"
             ],
-            "description": "How the filter was applied: 'section' (clicked See all), 'sidebar' (clicked sidebar menu), or 'url' (direct URL navigation with encoded category)."
+            "description": "How the filter was applied: 'section' (clicked See all), 'sidebar' (clicked sidebar menu), or 'search' (typed into search input)."
           }
         },
         "required": [
@@ -308,7 +308,7 @@
       "lang": "js",
       "is_ready": "return true;",
       "is_completed": "if (output.success === false) return true; return (location.pathname.includes('/categories') || document.querySelector('input[placeholder=\"Search DashDish\"]')?.value) ? true : [false, 'Filter not applied yet'];",
-      "execute": "const headers = Array.from(document.querySelectorAll('h6')); const targetHeader = headers.find(h => h.textContent.trim().toLowerCase().includes(inputs.category_name.toLowerCase())); if (targetHeader) { const sectionRow = targetHeader.closest('.MuiStack-root'); const seeAllButton = sectionRow ? Array.from(sectionRow.querySelectorAll('button')).find(b => b.textContent.includes('See all')) : null; if (seeAllButton) { const catName = targetHeader.textContent.trim(); setTimeout(() => seeAllButton.click(), 10); return { success: true, category_name: catName, method: 'section' }; } } const sidebarItems = Array.from(document.querySelectorAll('.MuiListItemButton-root')); const sidebarMatch = sidebarItems.find(el => el.textContent.trim().toLowerCase().includes(inputs.category_name.toLowerCase())); if (sidebarMatch) { const catName = sidebarMatch.textContent.trim(); setTimeout(() => sidebarMatch.click(), 10); return { success: true, category_name: catName, method: 'sidebar' }; } const encodedCategory = encodeURIComponent(inputs.category_name); const categoryUrl = '/categories?category=' + encodedCategory; setTimeout(() => { window.location.href = categoryUrl; }, 10); return { success: true, category_name: inputs.category_name, method: 'url' };",
+      "execute": "const headers = Array.from(document.querySelectorAll('h6')); const targetHeader = headers.find(h => h.textContent.trim().toLowerCase().includes(inputs.category_name.toLowerCase())); if (targetHeader) { const sectionRow = targetHeader.closest('.MuiStack-root'); const seeAllButton = sectionRow ? Array.from(sectionRow.querySelectorAll('button')).find(b => b.textContent.includes('See all')) : null; if (seeAllButton) { const catName = targetHeader.textContent.trim(); setTimeout(() => seeAllButton.click(), 10); return { success: true, category_name: catName, method: 'section' }; } } const sidebarItems = Array.from(document.querySelectorAll('.MuiListItemButton-root')); const sidebarMatch = sidebarItems.find(el => el.textContent.trim().toLowerCase().includes(inputs.category_name.toLowerCase())); if (sidebarMatch) { const catName = sidebarMatch.textContent.trim(); setTimeout(() => sidebarMatch.click(), 10); return { success: true, category_name: catName, method: 'sidebar' }; } const searchInput = document.querySelector('input[placeholder=\"Search DashDish\"]'); if (searchInput) { const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; nativeInputValueSetter.call(searchInput, inputs.category_name); searchInput.dispatchEvent(new Event('input', { bubbles: true })); const form = searchInput.closest('form'); if (form) { form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); } return { success: true, category_name: inputs.category_name, method: 'search' }; } return { success: false, category_name: inputs.category_name, error: 'Could not find category header, sidebar, or search input' };",
       "pre_path": "*vercel.app*",
       "pre": {
         "page_type": "home"
