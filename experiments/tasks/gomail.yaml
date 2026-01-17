@@ -1,0 +1,38 @@
+# GoMail task definitions
+tasks:
+- id: gomail-custom-1
+  eval_type: llm
+  initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+  goal: 'How many unread emails are in the Inbox?'
+- id: gomail-custom-2
+  eval_type: script
+  initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+  goal: 'Forward the first two emails in my inbox to me@example.com, each with a short note "Forwarded from my inbox", and then delete the two original emails.'
+- id: gomail-custom-3
+  eval_type: script
+  initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+  goal: 'Compose a new email to jonathan.smith@example.com with the subject "Meeting Notes" and body "Please find the meeting notes attached."'
+- id: gomail-custom-4
+  eval_type: script
+  initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+  goal: 'Clear all my emails that are visible please!'
+- id: gomail-custom-5
+  eval_type: script
+  initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+  goal: "Write an email to each of 'alice', 'bob', 'charlie', 'david'@example.com with personalized greetings and a simple Merry Christmas message."
+- id: gomail-custom-6
+  eval_type: script
+  initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+  goal: 'Reply to each of the first four emails in my inbox with "unsubscribe"'
+- id: gomail-custom-7
+  eval_type: script
+  initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+  goal: "Delete all emails from 'Alerts', 'Newsletter', or 'Notifications'."
+- id: gomail-custom-8
+  eval_type: script
+  initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+  goal: "Create three new labels: 'Work', 'Personal', 'Urgent'."
+- id: gomail-custom-9
+  eval_type: script
+  initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+  goal: 'Draft a new email and send it to any four different people.'

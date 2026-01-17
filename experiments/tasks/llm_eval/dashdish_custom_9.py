@@ -4,7 +4,7 @@ DashDish Custom Task 9: Cheapest Fries Comparison
 Task: Tell me which of Wingstop, Man vs. Fries, McDonald's, Popeyes, and Ike's
 has the cheapest fries item and its price.
 
-Expected Answer: Popeyes with fries at $3.49
+Expected Answer: Popeyes with Cajun Fries at $3.49
 """
 
 from typing import Optional
@@ -18,12 +18,12 @@ class DashDishCustom9Output(BaseModel):
     """Expected output schema for dashdish-custom-9 task"""
 
     restaurant_name: str = Field(
-        description="Name of the restaurant with the cheapest fries"
+        description="Name of the restaurant with the cheapest fries item"
     )
     fries_item_name: Optional[str] = Field(
-        default=None, description="Name of the fries item"
+        default=None, description="Name of the cheapest fries item"
     )
-    price: float = Field(description="Price of the fries item in dollars")
+    price: float = Field(description="Price of the cheapest fries item in dollars")
 
 
 # Ground truth
@@ -66,9 +66,9 @@ class DashDishCustom9Validator(TaskValidator):
         score = 0.0
 
         # Check restaurant name
-        restaurant_correct = (
-            normalize_name(parsed_output.restaurant_name) == normalize_name(EXPECTED_RESTAURANT)
-        )
+        restaurant_correct = normalize_name(
+            parsed_output.restaurant_name
+        ) == normalize_name(EXPECTED_RESTAURANT)
         if restaurant_correct:
             score += 0.5
             logger.debug(f"Restaurant correct: {parsed_output.restaurant_name}")

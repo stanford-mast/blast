@@ -1,4 +1,6 @@
 tasks:
+# DASHDISH
+
 # - id: dashdish-offline-1
 #   initial_url: https://real-dashdish-1rmq4pjxg-real-sites.vercel.app
 #   goal: Can you find out how much a medium 'Chicken Biryani' from 'Mashaallah Halal Food Pakistani Food' costs? And while you're at it, add one to the cart, buy it, and let me know the total price.
@@ -52,33 +54,90 @@ tasks:
 #   goal: Tell me which of Winstop, Man vs. Fries, McDonald's, Popeyes, and Ike's has the cheapest fries item and its price.
 #   evaluate: true
 
+# GOMAIL
+
+# - id: gomail-offline-1
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: Create a new label called "Thank You" and send a quick thank you note to bob@example.com.
+
+# - id: gomail-offline-2
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: Forward the first email in my inbox to me@example.com with note "FYI: This is a test" and then delete it.
+
+# - id: gomail-custom-1
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: How many unread emails are in the Inbox?
+#   evaluate: true
+
+# - id: gomail-custom-2
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: Forward the first two emails in my inbox to me@example.com, each with a short note "Forwarded from my inbox", and then delete the two original emails.
+#   evaluate: true
+
+# - id: gomail-custom-3
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: Compose a new email to jonathan.smith@example.com with the subject "Meeting Notes" and body "Please find the meeting notes attached."
+#   evaluate: true
+
+# - id: gomail-custom-4
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: Clear all my emails that are visible please!
+#   evaluate: true
+
+# - id: gomail-custom-5
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: Write an email to each of 'alice', 'bob', 'charlie', 'david'@example.com with personalized greetings and a simple Merry Christmas message.
+#   evaluate: true
+
+# - id: gomail-custom-6
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: Reply to each of the first four emails in my inbox with "unsubscribe"
+#   evaluate: true
+
+# - id: gomail-custom-7
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: Delete all emails from 'Alerts', 'Newsletter', or 'Notifications'.
+#   evaluate: true
+
+# - id: gomail-custom-8
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: "Create three new labels: 'Work', 'Personal', 'Urgent'."
+#   evaluate: true
+
+# - id: gomail-custom-9
+#   initial_url: https://real-gomail-1glk4rtaf-real-sites.vercel.app/
+#   goal: Draft a new email and send it to any four different people.
+#   evaluate: true
+
 stages:
-  # - name: "baseline"
-  #   description: "Baseline with all parallelism disabled"
-  #   config:
-  #     allow_parallelism:
-  #       task: false
-  #       data: false
-  #       first_of_n: false
-  #     max_parallelism_nesting_depth: 1
-  #     llm_model: "openai:gpt-4.1"
-  #     # llm_model: "openai:gpt-4.1-mini"
-  #     # llm_model: "google:gemini-2.5-pro"
-  #     llm_model_mini: "openai:gpt-4.1-mini"
+  - name: "baseline"
+    description: "Baseline with all parallelism disabled"
+    config:
+      allow_parallelism:
+        task: false
+        data: false
+        first_of_n: false
+      max_parallelism_nesting_depth: 1
+      llm_model: "openai:gpt-4.1"
+      # llm_model: "openai:gpt-4.1-mini"
+      # llm_model: "google:gemini-2.5-pro"
+      # llm_model: "google:gemini-2.5-flash"
+      llm_model_mini: "openai:gpt-4.1-mini"
   
-  # - name: "first_of_n_only"
-  #   description: "Only first-of-n parallelism enabled"
-  #   config:
-  #     allow_parallelism:
-  #       task: false
-  #       data: false
-  #       first_of_n: true
-  #     first_of_n_num_copies: 4
-  #     max_parallelism_nesting_depth: 1
-  #     llm_model: "openai:gpt-4.1"
-  #     # llm_model: "openai:gpt-4.1-mini"
-  #     # llm_model: "google:gemini-2.5-pro"
-  #     llm_model_mini: "openai:gpt-4.1-mini"
+  - name: "first_of_n_only"
+    description: "Only first-of-n parallelism enabled"
+    config:
+      allow_parallelism:
+        task: false
+        data: false
+        first_of_n: true
+      first_of_n_num_copies: 4
+      max_parallelism_nesting_depth: 1
+      llm_model: "openai:gpt-4.1"
+      # llm_model: "openai:gpt-4.1-mini"
+      # llm_model: "google:gemini-2.5-pro"
+      # llm_model: "google:gemini-2.5-flash"
+      llm_model_mini: "openai:gpt-4.1-mini"
 
   - name: "task_parallelism_only"
     description: "Only task-level parallelism for subtasks"
@@ -92,9 +151,10 @@ stages:
       llm_model: "openai:gpt-4.1"
       # llm_model: "openai:gpt-4.1-mini"
       # llm_model: "google:gemini-2.5-pro"
+      # llm_model: "google:gemini-2.5-flash"
       llm_model_mini: "openai:gpt-4.1-mini"
   
 settings:
-  runs_per_stage: 1
+  runs_per_stage: 3
   logs_dir: "logs"
   output_dir: "results"
