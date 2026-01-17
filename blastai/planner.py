@@ -31,9 +31,13 @@ Use pseudocode to indicate dependencies and parallelism opportunities. For examp
 first find top 10 phones of 2025 --> launch_subtask(check price of $phone on Amazon, <referral URL if provided>) for $phone in <list of phones> --> get_subtask_results(<list of phones>) to compare and summarize.  
 Indicate with angle brackets when a value needs to be filled in at execution time.  
 Explain reasoning with inline comments, for example: /* because 'top 10' web pages typically have referral URLs */  
-Parallelize across unique web pages or websites, but do not parallelize within the same page or website. For example:  
+Parallelize across unique web pages or websites. For example:  
 get Kyrie’s stats this season /* not parallelizing because all the stats are likely on the same web page */  
 Do not hallucinate additional levels of detail or make assumptions about how the task can be decomposed.  
+
+**Note**: If there are a high number of items (e.g., 20 or more) to process (e.g., a list of products, emails, or search results), do NOT launch a subtask per item. Instead, group items and launch a small number of subtasks (e.g., 4-5 subtasks each handling a batch of items). For example, if there are 50 items to process, launch 5 subtasks each handling 10 items, NOT 50 subtasks for 50 items.
+Otherwise, launch a subtask per item.
+
 Launch a subtask only if it is doing some work in parallel with the main task or another task. Otherwise, use the main task.
 
 Examples:  
@@ -75,7 +79,20 @@ Plan: find last 3 Marvel movies --> get_subtask_results(check ticket price of $m
 
 Example 10:  
 Task: Find the top 8 biotech companies and for each CEO find the undergraduate university they attended  
-Plan: search for list of top 8 biotech companies --> get list of CEOs from that list /* CEO names usually listed alongside company details */ --> launch_subtask(find undergraduate university of $CEO, initial search for $CEO) for $CEO in <list of 8 CEOs> /* parallelize each CEO lookup */ --> get_subtask_results to summarize each CEO's alma mater"""
+Plan: search for list of top 8 biotech companies --> get list of CEOs from that list /* CEO names usually listed alongside company details */ --> launch_subtask(find undergraduate university of $CEO, initial search for $CEO) for $CEO in <list of 8 CEOs> /* parallelize each CEO lookup */ --> get_subtask_results to summarize each CEO's alma mater
+
+Example 11:  
+Task: Delete all 50 visible emails in the inbox  
+Plan: extract list of 50 email identifiers from inbox --> launch_subtask(delete emails $batch, starting at current page URL) for $batch in [emails 1-10, emails 11-20, emails 21-30, emails 31-40, emails 41-50] /* batch into 5 subtasks of 10 emails each, NOT 50 subtasks */ --> get_subtask_results to confirm all deleted
+
+Example 12:  
+Task: Get the price of every product on this search results page, then find the cheapest option on Amazon for each  
+Plan: extract list of products and prices from this page /* all on same page */ --> launch_subtask(find cheapest price for $product on Amazon) for $product in <list of products> /* parallelize Amazon lookups since each is a separate site */ --> get_subtask_results to compare
+
+Example 13:
+Task: Create five new tickets on this project management board
+Plan: launch_subtask(create ticket for $project, initial search for $project) for $project in <list of 5 projects> /* parallelize each project creation */ --> get_subtask_results to confirm all created
+"""
 
     async def _generate_context_summary(
         self, previous_tasks: List[Tuple[str, str]]
@@ -161,7 +178,7 @@ Plan: search for list of top 8 biotech companies --> get list of CEOs from that 
 
         guidance_text = """
         IMPORTANT:
-        - You MUST use the launch_subtask tool to parallelize this task. Do NOT attempt to complete parallelizable items sequentially yourself - delegate them to subtasks. For each item you need to process in parallel: 
+        - View the content after "Execute:" carefully. Unless it indicates sequential execution, you MUST use the launch_subtask tool to parallelize this task. Do NOT attempt to complete parallelizable items sequentially yourself - delegate them to subtasks. For each item you need to process in parallel: 
             1. Call launch_subtask once for each item with the specific details 
             2. After launching all subtasks, use get_subtask_results to collect and aggregate their results 
             3. Only proceed sequentially if the task genuinely cannot be parallelized
