@@ -418,9 +418,72 @@ class ExperimentRunner:
             result.metrics = metrics
             result.reported_success = bool(task_result.is_successful())
             result.final_result = task_result.final_result()
+
+            # Always fetch final state if initial_url is available (for state retrieval/merging)
+            final_state = None
+            if "initial_url" in task_config:
+                task_states = engine.scheduler.tasks
+                is_single_task_mode = not parallelism_config.get("task", False)
+
+                if (
+                    is_single_task_mode
+                ):  # For sequential or first-of-n mode, get state from a task
+                    self.logger.info(
+                        "Single task mode: fetching final state",
+                        indent=6,
+                    )
+
+                    eval_task = get_task_for_evaluation(
+                        parallelism_config, task_states, self.logger
+                    )
+                    if eval_task:
+                        final_state = await fetch_final_state(
+                            eval_task, task_config["initial_url"], self.logger
+                        )
+                        if final_state is None:
+                            self.logger.warning(
+                                "Failed to fetch final state", indent=6
+                            )
+                    else:
+                        self.logger.warning(
+                            "No completed task found for state retrieval", indent=6
+                        )
+
+                else:  # For task parallelism, merge states from all completed tasks
+                    self.logger.info(
+                        "Task parallelism mode: fetching and merging states from all completed tasks",
+                        indent=6,
+                    )
+                    completed_tasks = get_all_completed_tasks(task_states, self.logger)
+
+                    final_states = await asyncio.gather(
+                        *[
+                            fetch_final_state(
+                                task_state, task_config["initial_url"], self.logger
+                            )
+                            for task_state in completed_tasks
+                        ]
+                    )
+                    valid_states_dict = {
+                        task_state.id: state
+                        for task_state, state in zip(completed_tasks, final_states)
+                        if state is not None
+                    }
+                    final_state = merge_parallel_final_states(
+                        valid_states_dict, self.logger
+                    )
+                    if not final_state:
+                        self.logger.warning(
+                            "Failed to merge final states", indent=6
+                        )
+
+            # Save final state (with or without actual state data)
             result.final_state_path = self._save_final_state(
-                experiment_folder, final_result=result.final_result
+                experiment_folder,
+                final_result=result.final_result,
+                final_state=final_state,
             )
+            self.logger.info(f"Saved final state to {result.final_state_path}", indent=6)
 
             # If not evaluating, return the result
             if not do_eval:
@@ -433,77 +496,11 @@ class ExperimentRunner:
                 )
                 return result
 
-            task_states = engine.scheduler.tasks
-            is_single_task_mode = not parallelism_config.get("task", False)
-
-            if (
-                is_single_task_mode
-            ):  # For sequential or first-of-n mode, get state from a task
-                self.logger.info(
-                    "Single task mode: fetching state for evaluation",
-                    indent=6,
+            if final_state is None:
+                self.logger.error(
+                    "No final state available for evaluation", indent=6
                 )
-
-                eval_task = get_task_for_evaluation(
-                    parallelism_config, task_states, self.logger
-                )
-                if not eval_task:
-                    self.logger.error(
-                        "No completed task found for evaluation", indent=6
-                    )
-                    return result
-
-                final_state = await fetch_final_state(
-                    eval_task, task_config["initial_url"], self.logger
-                )
-                if final_state is None:
-                    self.logger.error(
-                        "Failed to fetch final state for evaluation", indent=6
-                    )
-                    return result
-
-                final_state_path = self._save_final_state(
-                    experiment_folder,
-                    final_result=result.final_result,
-                    final_state=final_state,
-                )
-                self.logger.info(f"Saved final state to {final_state_path}", indent=6)
-
-            else:  # For task parallelism, merge states from all completed tasks
-                self.logger.info(
-                    "Task parallelism mode: fetching and merging states from all completed tasks",
-                    indent=6,
-                )
-                completed_tasks = get_all_completed_tasks(task_states, self.logger)
-
-                final_states = await asyncio.gather(
-                    *[
-                        fetch_final_state(
-                            task_state, task_config["initial_url"], self.logger
-                        )
-                        for task_state in completed_tasks
-                    ]
-                )
-                valid_states_dict = {
-                    task_state.id: state
-                    for task_state, state in zip(completed_tasks, final_states)
-                    if state is not None
-                }
-                final_state = merge_parallel_final_states(
-                    valid_states_dict, self.logger
-                )
-                if not final_state:
-                    self.logger.error(
-                        "Failed to merge final states for evaluation", indent=6
-                    )
-                    return result
-
-                final_state_path = self._save_final_state(
-                    experiment_folder,
-                    final_result=result.final_result,
-                    final_state=final_state,
-                )
-                self.logger.info(f"Saved final state to {final_state_path}", indent=6)
+                return result
 
             try:
                 # Wrap the state in the expected format for the evaluator

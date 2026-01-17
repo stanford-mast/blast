@@ -191,11 +191,68 @@ async def fetch_final_state(
         return None
 
 
+def _merge_differences(
+    final_states: Dict[str, Dict[str, Any]], logger: logging.Logger
+) -> Dict[str, Any]:
+    """
+    Merge the 'differences' section from multiple task states.
+
+    Each task may have its own differences (added/deleted/updated emails, etc.).
+    We need to combine all of them to get the full picture of what changed.
+    """
+    merged_differences: Dict[str, Any] = {}
+    # Track seen IDs per category/change_type to deduplicate
+    seen_ids: Dict[str, Dict[str, set]] = {}
+
+    for task_id, state in final_states.items():
+        task_differences = state.get("differences", {})
+        if not task_differences:
+            continue
+
+        for category, changes in task_differences.items():
+            # category is e.g., "emails", and changes is {"added": [...], "deleted": [...], "updated": [...]}
+            if category not in merged_differences:
+                merged_differences[category] = {}
+                seen_ids[category] = {}
+
+            if not isinstance(changes, dict):
+                continue
+
+            for change_type, items in changes.items():
+                # change_type is e.g., "added", "deleted", "updated"
+                if change_type not in merged_differences[category]:
+                    merged_differences[category][change_type] = []
+                    seen_ids[category][change_type] = set()
+
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, dict):
+                            item_id = item.get("id")
+                            # Deduplicate by ID
+                            if item_id is not None:
+                                if item_id in seen_ids[category][change_type]:
+                                    continue  # Skip duplicate
+                                seen_ids[category][change_type].add(item_id)
+                            item["_source_task_id"] = task_id
+                            merged_differences[category][change_type].append(item)
+                elif items is not None:
+                    # Handle non-list values (shouldn't happen often, but be safe)
+                    merged_differences[category][change_type].append(items)
+
+    return merged_differences
+
+
 def merge_parallel_final_states(
     final_states: Dict[str, Any], logger: logging.Logger
 ) -> Dict[str, Any]:
     """
-    Merge final states from multiple tasks. Combines action histories and uses the last task's final state.
+    Merge final states from multiple tasks.
+
+    Combines:
+    - Action histories (sorted by timestamp)
+    - Differences (added/deleted/updated items from all tasks)
+
+    Other fields are taken from the last task's state.
 
     This is only used if parallelism is enabled.
     """
@@ -223,17 +280,31 @@ def merge_parallel_final_states(
     for idx, action in enumerate(all_actions):
         action["index"] = idx
 
+    # Merge differences from all tasks
+    merged_differences = _merge_differences(final_states, logger)
+
     # Other fields are from the last state
     merged_state = final_states[list(final_states.keys())[-1]].copy()
     merged_state["actionhistory"] = all_actions
+    merged_state["differences"] = merged_differences
     merged_state["_metadata"] = {
         "num_tasks_merged": len(final_states),
         "task_ids": list(final_states.keys()),
         "total_actions": len(all_actions),
     }
 
+    # Log merge statistics
+    diff_stats = []
+    for category, changes in merged_differences.items():
+        for change_type, items in changes.items():
+            if items:
+                diff_stats.append(f"{category}.{change_type}: {len(items)}")
+
     logger.info(
         f"Merged state has {len(all_actions)} total actions from {len(final_states)} tasks",
         indent=8,
     )
+    if diff_stats:
+        logger.info(f"Merged differences: {', '.join(diff_stats)}", indent=8)
+
     return merged_state
