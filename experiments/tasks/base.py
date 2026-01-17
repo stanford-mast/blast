@@ -42,14 +42,14 @@ async def parse_output_with_llm(output: str, output_schema: type[T]) -> Optional
     Returns:
         Parsed output as instance of output_schema, or None if parsing failed
     """
-    try:
-        import logging
+    import logging
 
+    logger = logging.getLogger(__name__)
+
+    try:
         from browser_use.llm.messages import UserMessage
 
         from blastai.agents.llm_factory import LLMFactory
-
-        logger = logging.getLogger(__name__)
 
         llm = LLMFactory.create_llm("claude-sonnet-4-20250514", temperature=0.0)
 
