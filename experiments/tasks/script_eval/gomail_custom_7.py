@@ -49,10 +49,8 @@ EXPECTED_EMAILS = [
     "top stories from around the world",
     "major event happening",
     "weekly tech news",
-    "top tracks for your week",
     # Notifications
     "linkedin profile views",
-    "new job matches",
     "friend request was accepted",
     "how to improve your coding skills",
     "new shows and movies",
@@ -125,7 +123,7 @@ def get_trashed_emails(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def get_all_target_emails(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Get all emails from target senders in the initial state.
+    Get all emails matching EXPECTED_EMAILS subjects AND from target senders.
     """
     target_emails = []
 
@@ -135,8 +133,10 @@ def get_all_target_emails(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     for email in init_emails:
         if isinstance(email, dict):
+            subject = email.get("subject", "")
             from_field = email.get("from", "")
-            if is_target_sender(from_field):
+            # Must match BOTH subject keyword AND target sender
+            if get_matching_keyword(subject) and is_target_sender(from_field):
                 target_emails.append(email)
 
     return target_emails

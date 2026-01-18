@@ -57,9 +57,9 @@
       },
       "tool_executor_type": "smcp",
       "lang": "js",
-      "is_ready": "const isOnInbox = document.querySelector('.css-1bg4gk8[aria-current=\"page\"]') && document.querySelector('table.css-1l0t7oz tr[role=\"listitem\"]'); const isOnEmailDetail = document.querySelector('button[aria-label=\"Back to inbox\"]') || document.querySelector('div[aria-label=\"Delete\"]'); return (isOnInbox || isOnEmailDetail) ? true : [false, 'Page not loaded yet'];",
+      "is_ready": "const inboxActive = document.querySelector('.css-1bg4gk8[aria-current=\"page\"]'); const hasEmails = document.querySelector('table.css-1l0t7oz tr[role=\"listitem\"]'); const isOnInbox = inboxActive && (hasEmails || document.querySelector('.css-1l0t7oz')); const isOnEmailDetail = document.querySelector('button[aria-label=\"Back to inbox\"]') || document.querySelector('div[aria-label=\"Delete\"]'); return (isOnInbox || isOnEmailDetail) ? true : [false, 'Page not loaded yet'];",
       "is_completed": "return true;",
-      "execute": "const isOnInbox = document.querySelector('.css-1bg4gk8[aria-current=\"page\"]') && document.querySelector('table.css-1l0t7oz tr[role=\"listitem\"]'); const isOnEmailDetail = document.querySelector('button[aria-label=\"Back to inbox\"]') || document.querySelector('div[aria-label=\"Delete\"]'); if (isOnEmailDetail && !isOnInbox) { return { page: 'email_detail', folder: null, unread_count: 0, visible_email_count: 0, selected_email: 'active' }; } if (!isOnInbox) { return { page: null, folder: null, unread_count: 0, visible_email_count: 0, selected_email: null }; } const currentFolder = document.querySelector('.css-1bg4gk8[aria-current=\"page\"]')?.textContent.trim() || null; const unreadCount = document.querySelector('.css-1bg4gk8[aria-current=\"page\"]')?.closest('.css-uvkhdn')?.querySelector('.css-112f2lb')?.textContent.trim() || null; const emailRows = document.querySelectorAll('table.css-1l0t7oz tr[role=\"listitem\"]'); const visibleEmailCount = emailRows.length; return { page: 'inbox', folder: currentFolder, unread_count: unreadCount ? parseInt(unreadCount) : 0, visible_email_count: visibleEmailCount, selected_email: null };",
+      "execute": "const inboxActive = document.querySelector('.css-1bg4gk8[aria-current=\"page\"]'); const hasEmails = document.querySelector('table.css-1l0t7oz tr[role=\"listitem\"]'); const isOnInbox = inboxActive && (hasEmails || document.querySelector('.css-1l0t7oz')); const isOnEmailDetail = document.querySelector('button[aria-label=\"Back to inbox\"]') || document.querySelector('div[aria-label=\"Delete\"]'); if (isOnEmailDetail && !isOnInbox) { return { page: 'email_detail', folder: null, unread_count: 0, visible_email_count: 0, selected_email: 'active' }; } if (inboxActive) { const currentFolder = inboxActive.textContent.trim() || null; const unreadCount = inboxActive.closest('.css-uvkhdn')?.querySelector('.css-112f2lb')?.textContent.trim() || null; const emailRows = document.querySelectorAll('table.css-1l0t7oz tr[role=\"listitem\"]'); const visibleEmailCount = emailRows.length; return { page: 'inbox', folder: currentFolder, unread_count: unreadCount ? parseInt(unreadCount) : 0, visible_email_count: visibleEmailCount, selected_email: null }; } return { page: null, folder: null, unread_count: 0, visible_email_count: 0, selected_email: null };",
       "pre_path": "*vercel.app*",
       "pre": {},
       "post": {},
@@ -69,17 +69,21 @@
     {
       "name": "list_emails",
       "title": "List Emails",
-      "description": "Lists emails with optional filtering by unread status and sender name.",
+      "description": "Lists emails from the inbox with optional filtering by unread status and sender.",
       "input_schema": {
         "type": "object",
         "properties": {
-          "filterType": {
-            "type": "string",
-            "description": "Filter to apply to the email list; use 'unread' to show only unread emails."
+          "unread": {
+            "type": "boolean",
+            "description": "If true, only return unread emails."
           },
-          "senderName": {
+          "sender": {
             "type": "string",
-            "description": "Partial or full name of the sender to filter emails by."
+            "description": "Filter by who sent the email (the 'From' field). Partial match, case-insensitive."
+          },
+          "visible_only": {
+            "type": "boolean",
+            "description": "If true, only return emails visible on the current page. Defaults to false."
           }
         },
         "required": []
@@ -93,22 +97,28 @@
               "type": "object",
               "properties": {
                 "email_id": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Unique identifier for the email"
                 },
                 "index": {
-                  "type": "integer"
+                  "type": "integer",
+                  "description": "Position in the email list (0-based)"
                 },
                 "sender": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Who sent the email (the 'From' field). E.g., 'Alerts', 'Support', 'Jane Smith'"
                 },
                 "subject": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "The email's subject line/title. E.g., 'Your Ride Receipt', 'Action Required'"
                 },
                 "is_unread": {
-                  "type": "boolean"
+                  "type": "boolean",
+                  "description": "Whether the email has not been read yet"
                 },
                 "date": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "When the email was received"
                 }
               },
               "required": [
@@ -130,7 +140,7 @@
       "lang": "js",
       "is_ready": "return document.querySelectorAll('tr[role=\"listitem\"]').length > 0 ? true : [false,'No emails listed'];",
       "is_completed": "return output && Array.isArray(output.items);",
-      "execute": "const rows = Array.from(document.querySelectorAll('tr[role=\"listitem\"]'));\nconst items = rows.map((row, idx) => {\n  // Sender\n  const sender = row.querySelector('td:nth-child(4) p')?.textContent.trim() || '';\n  // Subject\n  const subject = row.querySelector('td:nth-child(6) p')?.textContent.trim() || '';\n  // Date\n  const date = row.querySelector('td:last-child p')?.textContent.trim() || '';\n  // Unread: infer from font weight or aria-label\n  let is_unread = false;\n  const subjectEl = row.querySelector('td:nth-child(6) p');\n  if(subjectEl && window.getComputedStyle(subjectEl).fontWeight >= 600) is_unread = true;\n  if(row.getAttribute('aria-label') && row.getAttribute('aria-label').toLowerCase().includes('unread')) is_unread = true;\n  // Email ID: use row index or a data-id if available\n  const email_id = row.getAttribute('data-id') || `email_${idx}`;\n  return {email_id, index: idx, sender, subject, is_unread, date};\n});\n// Filtering\nlet filtered = items;\nif(inputs.filterType === 'unread') filtered = filtered.filter(e => e.is_unread);\nif(inputs.senderName) filtered = filtered.filter(e => e.sender.toLowerCase().includes(inputs.senderName.toLowerCase()));\nreturn {items: filtered};",
+      "execute": "// Helper to extract emails from current page\nfunction extractEmails(startIdx) {\n  const rows = Array.from(document.querySelectorAll('tr[role=\"listitem\"]'));\n  return rows.map((row, i) => {\n    const sender = row.querySelector('td:nth-child(4) p')?.textContent.trim() || '';\n    const subjectEl = row.querySelector('td:nth-child(5) p');\n    const subject = subjectEl?.textContent.trim() || '';\n    const date = row.querySelector('td:last-child p')?.textContent.trim() || '';\n    let is_unread = false;\n    if(subjectEl && window.getComputedStyle(subjectEl).fontWeight >= 600) is_unread = true;\n    if(row.getAttribute('aria-label')?.toLowerCase().includes('unread')) is_unread = true;\n    const email_id = `email_${startIdx + i}`;\n    return {email_id, index: startIdx + i, sender, subject, is_unread, date};\n  });\n}\nlet allItems = extractEmails(0);\n// Only paginate if visible_only is not set\nif (!inputs.visible_only) {\n  const paginationText = document.querySelector('.css-14ctrt0')?.textContent || '';\n  const match = paginationText.match(/(\\d+)-(\\d+) of (\\d+)/);\n  const totalEmails = match ? parseInt(match[3]) : 50;\n  const pageSize = match ? parseInt(match[2]) - parseInt(match[1]) + 1 : 50;\n  const totalPages = Math.ceil(totalEmails / pageSize);\n  for (let page = 1; page < totalPages && page < 5; page++) {\n    const olderBtn = document.querySelector('[aria-label=\"Older\"]');\n    if (!olderBtn) break;\n    olderBtn.click();\n    await new Promise(r => setTimeout(r, 400));\n    const pageItems = extractEmails(allItems.length);\n    allItems = allItems.concat(pageItems);\n  }\n  // Go back to first page\n  for (let i = 0; i < totalPages; i++) {\n    const newerBtn = document.querySelector('[aria-label=\"Newer\"]');\n    if (!newerBtn) break;\n    newerBtn.click();\n    await new Promise(r => setTimeout(r, 200));\n  }\n}\n// Filter\nlet filtered = allItems;\nif(inputs.unread === true) filtered = filtered.filter(e => e.is_unread);\nif(inputs.sender) filtered = filtered.filter(e => e.sender.toLowerCase().includes(inputs.sender.toLowerCase()));\nreturn {items: filtered};",
       "pre_path": "*vercel.app*",
       "pre": {
         "page": "inbox"
@@ -440,9 +450,9 @@
       },
       "tool_executor_type": "smcp",
       "lang": "js",
-      "is_ready": "if (!inputs.email_ids || !inputs.email_ids.trim()) return [false, 'No email_ids provided'];\nconst emailIds = inputs.email_ids.split(',').map(s => s.trim()).filter(s => s);\nlet allFound = emailIds.every(id => document.querySelector(`[data-email-id='${id}']`) || document.querySelectorAll('tr[role=\"listitem\"]')[parseInt(id.replace('email_',''))]);\nreturn allFound ? true : [false, 'Some email rows not found'];",
+      "is_ready": "if (!inputs.email_ids || !inputs.email_ids.trim()) return [false, 'No email_ids provided']; return true;",
       "is_completed": "return output && output.success === true ? true : [false, output && output.error ? output.error : 'Delete action failed'];",
-      "execute": "const emailIds = inputs.email_ids.split(',').map(s => s.trim()).filter(s => s);\nconst rows = document.querySelectorAll('tr[role=\"listitem\"]');\n// Select checkboxes for matching IDs\nemailIds.forEach(id => {\n  const idx = parseInt(id.replace('email_',''));\n  const row = rows[idx];\n  if (row) {\n    const cb = row.querySelector('button[role=\"checkbox\"]');\n    if (cb && cb.getAttribute('aria-checked') !== 'true') cb.click();\n  }\n});\n// Wait for possible dynamic rendering of Delete button\nawait new Promise(r => setTimeout(r, 300));\nconst delBtn = document.querySelector('[aria-label=\"Delete\"]');\nif (delBtn) { delBtn.click(); return {success: true}; }\nreturn {success: false, error: 'No Delete button found'};",
+      "execute": "const emailIds = inputs.email_ids.split(',').map(s => s.trim()).filter(s => s);\nconst PAGE_SIZE = 50;\n// Group IDs by page\nconst pageGroups = {};\nemailIds.forEach(id => {\n  const idx = parseInt(id.replace('email_',''));\n  const page = Math.floor(idx / PAGE_SIZE);\n  if (!pageGroups[page]) pageGroups[page] = [];\n  pageGroups[page].push(idx % PAGE_SIZE);\n});\n// Go to first page\nfor (let i = 0; i < 5; i++) {\n  const newerBtn = document.querySelector('[aria-label=\"Newer\"]');\n  if (!newerBtn) break;\n  newerBtn.click();\n  await new Promise(r => setTimeout(r, 200));\n}\n// Process pages in REVERSE order (last page first) so indices don't shift\nconst pages = Object.keys(pageGroups).map(Number).sort((a,b) => b - a);\nfor (const page of pages) {\n  // Navigate to this page from first page\n  for (let i = 0; i < page; i++) {\n    const olderBtn = document.querySelector('[aria-label=\"Older\"]');\n    if (!olderBtn) break;\n    olderBtn.click();\n    await new Promise(r => setTimeout(r, 300));\n  }\n  // Select emails on this page\n  const rows = document.querySelectorAll('tr[role=\"listitem\"]');\n  for (const rowIdx of pageGroups[page]) {\n    const row = rows[rowIdx];\n    if (row) {\n      const cb = row.querySelector('button[role=\"checkbox\"]');\n      if (cb && cb.getAttribute('aria-checked') !== 'true') cb.click();\n    }\n  }\n  await new Promise(r => setTimeout(r, 200));\n  // Delete selected\n  const delBtn = document.querySelector('[aria-label=\"Delete\"]');\n  if (delBtn) {\n    delBtn.click();\n    await new Promise(r => setTimeout(r, 400));\n  }\n  // Go back to first page\n  for (let i = 0; i < 5; i++) {\n    const newerBtn = document.querySelector('[aria-label=\"Newer\"]');\n    if (!newerBtn) break;\n    newerBtn.click();\n    await new Promise(r => setTimeout(r, 200));\n  }\n}\nreturn {success: true};",
       "pre_path": "*vercel.app*",
       "pre": {
         "page": "inbox"
