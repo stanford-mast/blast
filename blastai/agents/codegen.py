@@ -104,10 +104,10 @@ result = details.info
 ```
 
 E8: use contains matching instead of exact key lookup when searching for items by name
+DON'T use exact match: prices.get('Target Item') - this fails if the actual name is 'Target Item (Large)'
+DO use contains matching to find items flexibly:
 ```python
 items = await list_items()
-# DON'T use exact match: prices.get('Target Item') - this fails if the actual name is 'Target Item (Large)'
-# DO use contains matching to find items flexibly:
 matching = [item for item in items if "target item" in item.name.lower()]
 price = matching[0].price if matching else None
 ```
@@ -596,6 +596,9 @@ class CodeGenerator:
 
         # Handle non-string patterns (numbers, booleans, etc.)
         if not isinstance(pattern, str):
+            # Use repr() for booleans since json.dumps(True) returns "true" (invalid Python)
+            if isinstance(pattern, bool):
+                return f"assert {var_ref} == {repr(pattern)}"
             return f"assert {var_ref} == {json.dumps(pattern)}"
 
         # Handle string patterns
