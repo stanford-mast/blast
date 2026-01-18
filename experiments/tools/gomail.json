@@ -1,0 +1,572 @@
+{
+  "description": "",
+  "tools": [
+    {
+      "name": "observe_email",
+      "title": "Observe Email",
+      "description": "Observes and reports the current email folder, unread email count, and number of visible emails in the inbox.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "inbox",
+              null
+            ],
+            "description": "The logical page currently being viewed, or null if not in inbox."
+          },
+          "folder": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name of the current email folder, or null if not available."
+          },
+          "unread_count": {
+            "type": "integer",
+            "description": "The number of unread emails in the current folder."
+          },
+          "visible_email_count": {
+            "type": "integer",
+            "description": "The number of visible emails currently displayed in the email list."
+          },
+          "selected_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Indicates if an email is currently selected/open. 'active' when on email detail, null otherwise."
+          }
+        },
+        "required": [
+          "page",
+          "folder",
+          "unread_count",
+          "visible_email_count",
+          "selected_email"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const isOnInbox = document.querySelector('.css-1bg4gk8[aria-current=\"page\"]') && document.querySelector('table.css-1l0t7oz tr[role=\"listitem\"]'); const isOnEmailDetail = document.querySelector('button[aria-label=\"Back to inbox\"]') || document.querySelector('div[aria-label=\"Delete\"]'); return (isOnInbox || isOnEmailDetail) ? true : [false, 'Page not loaded yet'];",
+      "is_completed": "return true;",
+      "execute": "const isOnInbox = document.querySelector('.css-1bg4gk8[aria-current=\"page\"]') && document.querySelector('table.css-1l0t7oz tr[role=\"listitem\"]'); const isOnEmailDetail = document.querySelector('button[aria-label=\"Back to inbox\"]') || document.querySelector('div[aria-label=\"Delete\"]'); if (isOnEmailDetail && !isOnInbox) { return { page: 'email_detail', folder: null, unread_count: 0, visible_email_count: 0, selected_email: 'active' }; } if (!isOnInbox) { return { page: null, folder: null, unread_count: 0, visible_email_count: 0, selected_email: null }; } const currentFolder = document.querySelector('.css-1bg4gk8[aria-current=\"page\"]')?.textContent.trim() || null; const unreadCount = document.querySelector('.css-1bg4gk8[aria-current=\"page\"]')?.closest('.css-uvkhdn')?.querySelector('.css-112f2lb')?.textContent.trim() || null; const emailRows = document.querySelectorAll('table.css-1l0t7oz tr[role=\"listitem\"]'); const visibleEmailCount = emailRows.length; return { page: 'inbox', folder: currentFolder, unread_count: unreadCount ? parseInt(unreadCount) : 0, visible_email_count: visibleEmailCount, selected_email: null };",
+      "pre_path": "*vercel.app*",
+      "pre": {},
+      "post": {},
+      "type": "observe",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_emails",
+      "title": "List Emails",
+      "description": "Lists emails with optional filtering by unread status and sender name.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "filterType": {
+            "type": "string",
+            "description": "Filter to apply to the email list; use 'unread' to show only unread emails."
+          },
+          "senderName": {
+            "type": "string",
+            "description": "Partial or full name of the sender to filter emails by."
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "email_id": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "sender": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "is_unread": {
+                  "type": "boolean"
+                },
+                "date": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "email_id",
+                "index",
+                "sender",
+                "subject",
+                "is_unread",
+                "date"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelectorAll('tr[role=\"listitem\"]').length > 0 ? true : [false,'No emails listed'];",
+      "is_completed": "return output && Array.isArray(output.items);",
+      "execute": "const rows = Array.from(document.querySelectorAll('tr[role=\"listitem\"]'));\nconst items = rows.map((row, idx) => {\n  // Sender\n  const sender = row.querySelector('td:nth-child(4) p')?.textContent.trim() || '';\n  // Subject\n  const subject = row.querySelector('td:nth-child(6) p')?.textContent.trim() || '';\n  // Date\n  const date = row.querySelector('td:last-child p')?.textContent.trim() || '';\n  // Unread: infer from font weight or aria-label\n  let is_unread = false;\n  const subjectEl = row.querySelector('td:nth-child(6) p');\n  if(subjectEl && window.getComputedStyle(subjectEl).fontWeight >= 600) is_unread = true;\n  if(row.getAttribute('aria-label') && row.getAttribute('aria-label').toLowerCase().includes('unread')) is_unread = true;\n  // Email ID: use row index or a data-id if available\n  const email_id = row.getAttribute('data-id') || `email_${idx}`;\n  return {email_id, index: idx, sender, subject, is_unread, date};\n});\n// Filtering\nlet filtered = items;\nif(inputs.filterType === 'unread') filtered = filtered.filter(e => e.is_unread);\nif(inputs.senderName) filtered = filtered.filter(e => e.sender.toLowerCase().includes(inputs.senderName.toLowerCase()));\nreturn {items: filtered};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page": "inbox"
+      },
+      "post": {
+        "page": "inbox"
+      },
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "get_email_details",
+      "title": "Get Email Details",
+      "description": "Retrieves detailed information for the currently viewed email.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "sender": {
+            "type": "string",
+            "description": "The sender of the email."
+          },
+          "to": {
+            "type": "string",
+            "description": "The recipient(s) of the email."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The subject line of the email."
+          },
+          "body": {
+            "type": "string",
+            "description": "The main body content of the email."
+          },
+          "dateTime": {
+            "type": "string",
+            "description": "The date and time when the email was sent or received."
+          },
+          "label": {
+            "type": "string",
+            "description": "The label or category assigned to the email."
+          }
+        },
+        "required": [
+          "sender",
+          "subject",
+          "body"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('button[aria-label=\"Back to inbox\"]') || document.querySelector('div[aria-label=\"Delete\"]') ? true : [false,'Email detail view not present - must call goto_email_detail first'];",
+      "is_completed": "return output && typeof output === 'object' && output.sender && output.subject && output.body ? true : [false,'Missing required fields'];",
+      "execute": "// Extract details from currently viewed email detail page\nconst container = document.body;\n// Find sender - typically in a prominent text element\nconst senderEl = container.querySelector('p.MuiTypography-body2.css-4yrl5t') || container.querySelector('[data-testid=\"sender\"]');\nconst sender = senderEl?.textContent.trim() || '';\n// Find subject\nconst subjectEl = container.querySelector('h6.MuiTypography-h6') || container.querySelector('[data-testid=\"subject\"]');\nconst subject = subjectEl?.textContent.trim() || '';\n// Find body - look for the main content area\nconst bodyEls = container.querySelectorAll('.MuiDialogContent-root p, [data-testid=\"body\"] p');\nconst body = Array.from(bodyEls).map(p => p.textContent).join('\\n').trim() || '';\n// Find date\nconst dateEl = container.querySelector('p.MuiTypography-body2.css-itt0yp') || container.querySelector('[data-testid=\"date\"]');\nconst dateTime = dateEl?.textContent.trim() || '';\n// Find to field\nconst toEl = Array.from(container.querySelectorAll('p')).find(p => /To:|Recipient:/i.test(p.textContent));\nconst to = toEl ? toEl.textContent.replace(/^To:\\s*/i, '').trim() : '';\n// Find label\nconst labelEl = container.querySelector('.MuiChip-label') || container.querySelector('[data-testid=\"label\"]');\nconst label = labelEl?.textContent.trim() || sender;\nreturn { sender, to, subject, body, dateTime, label };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page": "email_detail",
+        "selected_email": "*"
+      },
+      "post": {
+        "page": "email_detail",
+        "selected_email": "*"
+      },
+      "type": "getFields",
+      "pre_tools": {
+        "_": [
+          "goto_email_detail"
+        ]
+      }
+    },
+    {
+      "name": "send_email",
+      "title": "Send Email",
+      "description": "Sends an email by automatically filling in the recipient, subject, and body fields and clicking the send button.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "The email address of the recipient."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The subject line of the email."
+          },
+          "body": {
+            "type": "string",
+            "description": "The main content of the email."
+          }
+        },
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('.ql-editor[contenteditable=\"true\"]') && document.querySelector('input[placeholder=\"Recipients\"]') && document.querySelector('input[placeholder=\"Subject\"]') ? true : [false,'Compose dialog or fields not present'];",
+      "is_completed": "const errorMsg=document.body.textContent.includes('Please specify at least one recipient.');const composeOpen=!!document.querySelector('.ql-editor[contenteditable=\"true\"]');return !composeOpen&&!errorMsg?true:[false,'Compose dialog still present or error shown'];",
+      "execute": "const sleep = ms => new Promise(r => setTimeout(r, ms)); async function fillAndSend() {\n  // Open compose if not open\n  let bodyDiv = document.querySelector('.ql-editor[contenteditable=\"true\"]');\n  if (!bodyDiv) {\n    const composeBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim().toLowerCase() === 'compose');\n    if (composeBtn) {\n      composeBtn.click();\n      await sleep(500);\n    }\n    bodyDiv = document.querySelector('.ql-editor[contenteditable=\"true\"]');\n    if (!bodyDiv) return {success:false,error:'Body editor not found after opening compose'};\n  }\n\n  // To field - enter email and press Enter\n  const toInput = document.querySelector('input[placeholder=\"Recipients\"]');\n  if (!toInput) return {success:false,error:'To input not found'};\n  toInput.focus();\n  await sleep(100);\n  // Type email character by character for better compatibility\n  toInput.value = inputs.to;\n  toInput.dispatchEvent(new Event('input', {bubbles:true}));\n  await sleep(150);\n  // Press Enter to confirm recipient\n  toInput.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13}));\n  toInput.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13}));\n  await sleep(300);\n\n  // Subject field\n  const subjInput = document.querySelector('input[placeholder=\"Subject\"]');\n  if (!subjInput) return {success:false,error:'Subject input not found'};\n  subjInput.focus();\n  await sleep(50);\n  subjInput.value = inputs.subject;\n  subjInput.dispatchEvent(new Event('input', {bubbles:true}));\n  await sleep(100);\n\n  // Body field\n  bodyDiv.focus();\n  await sleep(50);\n  bodyDiv.innerHTML = `<p>${inputs.body.replace(/\\n/g,'</p><p>')}</p>`;\n  bodyDiv.dispatchEvent(new Event('input', {bubbles:true}));\n  await sleep(100);\n\n  // Send button\n  const sendBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim().toLowerCase() === 'send');\n  if (!sendBtn) return {success:false,error:'Send button not found'};\n\n  await sleep(300);\n  sendBtn.click();\n\n  return {success:true};\n}\nreturn fillAndSend();",
+      "pre_path": "*vercel.app*",
+      "pre": {},
+      "post": {},
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_email_detail",
+      "title": "Goto Email Detail",
+      "description": "Navigates to and opens a specific email's detail view.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "email_id": {
+            "type": "integer",
+            "description": "The zero-based index of the email to open in the list."
+          }
+        },
+        "required": [
+          "email_id"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "True if the email was successfully opened; false otherwise."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const rows = document.querySelectorAll('tr[role=\"listitem\"]'); return rows && rows.length > inputs.email_id ? true : [false, 'Email row not found'];",
+      "is_completed": "const hasBackButton = document.querySelector('button[aria-label=\"Back to inbox\"]'); const hasDeleteButton = document.querySelector('div[aria-label=\"Delete\"]'); return (hasBackButton || hasDeleteButton) ? true : [false, 'Email detail view not loaded'];",
+      "execute": "const rows = document.querySelectorAll('tr[role=\"listitem\"]'); if (!rows[inputs.email_id]) return {success: false}; rows[inputs.email_id].click(); await new Promise(r => setTimeout(r, 800)); return {success: true};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page": "inbox"
+      },
+      "post": {
+        "page": "email_detail",
+        "selected_email": "active"
+      },
+      "type": "gotoItem",
+      "pre_tools": {
+        "email_id": [
+          "list_emails"
+        ]
+      }
+    },
+    {
+      "name": "reply_to_email",
+      "title": "Reply To Email",
+      "description": "Replies to the currently viewed email by composing and sending a message in the reply textarea.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "The content of the reply message to be sent."
+          }
+        },
+        "required": [
+          "body"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('textarea[placeholder=\"Type your reply...\"]') ? true : [false,'Reply UI not present - must call goto_email_detail first'];",
+      "is_completed": "return !document.querySelector('textarea[placeholder=\"Type your reply...\"]') ? true : [false,'Reply UI still present'];",
+      "execute": "try {\n  let textarea = document.querySelector('textarea[placeholder=\"Type your reply...\"]');\n  if (!textarea) return { success: false, error: 'Reply textarea not found' };\n  textarea.focus();\n  textarea.value = '';\n  textarea.dispatchEvent(new Event('input', { bubbles: true }));\n  // Simulate full composition per character\n  for (let c of inputs.body) {\n    textarea.value += c;\n    textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));\n    textarea.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: c }));\n    textarea.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: c }));\n    textarea.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: c }));\n    textarea.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));\n    textarea.dispatchEvent(new Event('change', { bubbles: true }));\n    await new Promise(r=>setTimeout(r,10));\n  }\n  // Wait for Send button\n  let tries=0, sendBtn;\n  while (tries++<12) {\n    sendBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim()==='Send' && !b.disabled && !b.className.includes('Mui-disabled'));\n    if (sendBtn) break; await new Promise(r=>setTimeout(r,100));\n  }\n  if (!sendBtn) return { success: false, error: 'Send button not enabled after typing' };\n  sendBtn.click();\n  return { success: true };\n} catch(e) { return { success: false, error: e.message }; }",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page": "email_detail",
+        "selected_email": "*"
+      },
+      "post": {
+        "page": "email_detail",
+        "selected_email": "*"
+      },
+      "type": "setFields",
+      "pre_tools": {
+        "_": [
+          "goto_email_detail"
+        ]
+      }
+    },
+    {
+      "name": "forward_email",
+      "title": "Forward Email",
+      "description": "Sends an email by filling in the recipient and optional note, and clicking the send button.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "The email address of the recipient."
+          },
+          "note": {
+            "type": "string",
+            "description": "An optional message to include in the email."
+          }
+        },
+        "required": [
+          "to"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const forwardBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.textContent.trim().toLowerCase() === 'forward'); const hasBackButton = document.querySelector('button[aria-label=\"Back to inbox\"]'); return (forwardBtn || hasBackButton) ? true : [false,'Not on email detail page'];",
+      "is_completed": "return true;",
+      "execute": "// Click Forward button if needed\nlet recInput = document.querySelector('input[placeholder=\"Recipients\"]');\nif (!recInput) {\n  const forwardBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.textContent.trim().toLowerCase() === 'forward');\n  if (forwardBtn) { forwardBtn.click(); await new Promise(r => setTimeout(r, 800)); }\n  recInput = document.querySelector('input[placeholder=\"Recipients\"]');\n}\nif (!recInput) return {success:false,error:'Recipient input not found after clicking Forward'};\n// Use native setter to trigger React state\nrecInput.focus();\nconst nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;\nnativeSetter.call(recInput, inputs.to);\nrecInput.dispatchEvent(new Event('input', {bubbles:true}));\nawait new Promise(r => setTimeout(r, 300));\n// Press Enter to confirm recipient\nrecInput.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', keyCode:13, bubbles:true}));\nrecInput.dispatchEvent(new KeyboardEvent('keyup', {key:'Enter', keyCode:13, bubbles:true}));\nawait new Promise(r => setTimeout(r, 300));\n// Fill note if provided\nconst noteInput = document.querySelector('textarea[placeholder=\"Add your message (optional)\"]');\nif(inputs.note && noteInput){\n  const noteSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;\n  noteSetter.call(noteInput, inputs.note);\n  noteInput.dispatchEvent(new Event('input',{bubbles:true}));\n  await new Promise(r => setTimeout(r, 200));\n}\n// Wait for Send button to become enabled and click it\nawait new Promise(r => setTimeout(r, 300));\nlet sendBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.textContent.trim().toLowerCase()==='send' && !btn.disabled);\nif(sendBtn){sendBtn.click(); await new Promise(r => setTimeout(r, 500)); return {success:true};}\n// Retry after short delay\nawait new Promise(r => setTimeout(r, 500));\nsendBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.textContent.trim().toLowerCase()==='send' && !btn.disabled);\nif(sendBtn){sendBtn.click(); await new Promise(r => setTimeout(r, 500)); return {success:true};}\nreturn {success:false,error:'Send button not found or still disabled'};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page": "email_detail",
+        "selected_email": "*"
+      },
+      "post": {
+        "page": "email_detail",
+        "selected_email": "*"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "delete_email_batch",
+      "title": "Delete Email Batch",
+      "description": "Deletes a batch of emails by selecting them via their IDs and clicking the Delete button.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "email_ids": {
+            "type": "string",
+            "description": "Comma-separated list of email IDs to delete (e.g. 'email_0,email_1,email_2')"
+          }
+        },
+        "required": [
+          "email_ids"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates if the delete operation was successful."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the delete operation failed."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "if (!inputs.email_ids || !inputs.email_ids.trim()) return [false, 'No email_ids provided'];\nconst emailIds = inputs.email_ids.split(',').map(s => s.trim()).filter(s => s);\nlet allFound = emailIds.every(id => document.querySelector(`[data-email-id='${id}']`) || document.querySelectorAll('tr[role=\"listitem\"]')[parseInt(id.replace('email_',''))]);\nreturn allFound ? true : [false, 'Some email rows not found'];",
+      "is_completed": "return output && output.success === true ? true : [false, output && output.error ? output.error : 'Delete action failed'];",
+      "execute": "const emailIds = inputs.email_ids.split(',').map(s => s.trim()).filter(s => s);\nconst rows = document.querySelectorAll('tr[role=\"listitem\"]');\n// Select checkboxes for matching IDs\nemailIds.forEach(id => {\n  const idx = parseInt(id.replace('email_',''));\n  const row = rows[idx];\n  if (row) {\n    const cb = row.querySelector('button[role=\"checkbox\"]');\n    if (cb && cb.getAttribute('aria-checked') !== 'true') cb.click();\n  }\n});\n// Wait for possible dynamic rendering of Delete button\nawait new Promise(r => setTimeout(r, 300));\nconst delBtn = document.querySelector('[aria-label=\"Delete\"]');\nif (delBtn) { delBtn.click(); return {success: true}; }\nreturn {success: false, error: 'No Delete button found'};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page": "inbox"
+      },
+      "post": {
+        "page": "inbox"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "create_label",
+      "title": "Create Label",
+      "description": "Creates a new label with the specified name in the UI.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "label_name": {
+            "type": "string",
+            "description": "The name of the label to create."
+          }
+        },
+        "required": [
+          "label_name"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const dialog = document.querySelector('[aria-labelledby=\"create-label-dialog-title\"]');\nconst input = dialog ? dialog.querySelector('input[type=\"text\"]') : null;\nconst btns = dialog ? Array.from(dialog.querySelectorAll('button')) : [];\nconst createBtn = btns.find(btn => btn.textContent.trim() === 'Create');\nreturn (dialog && input && createBtn) ? true : [false,'Dialog/input/button missing'];",
+      "is_completed": "// Check that dialog is closed\nconst dialogClosed = !document.querySelector('[aria-labelledby=\"create-label-dialog-title\"]');\n// Check that a label node now exists under .css-a5uraa\nconst labelsContainer = document.querySelector('.css-a5uraa');\nif (!labelsContainer) return [false,'Labels container missing'];\nconst labels = Array.from(labelsContainer.children).filter(node => node.nodeType === 1 && node.textContent.trim() !== '' && !node.textContent.includes('Labels'));\nreturn (dialogClosed && labels.length > 0) ? true : [false,'Dialog still open or no new label appeared'];",
+      "execute": "const dialog = document.querySelector('[aria-labelledby=\"create-label-dialog-title\"]');\nif (!dialog) return {success:false,error:'Dialog not open'};\nconst input = dialog.querySelector('input[type=\"text\"]');\nif (!input) return {success:false,error:'Input not found'};\ninput.focus();\ninput.value = inputs.label_name;\ninput.dispatchEvent(new Event('input', {bubbles:true}));\nsetTimeout(()=>{\n  const btns = Array.from(dialog.querySelectorAll('button'));\n  const createBtn = btns.find(btn => btn.textContent.trim() === 'Create' && !btn.disabled);\n  if(createBtn) createBtn.click();\n},150);\nreturn {success:true};",
+      "pre_path": "*vercel.app*",
+      "pre": {},
+      "post": {
+        "label_created": "$label_name"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_inbox",
+      "title": "Goto Inbox",
+      "description": "Navigates back to the main inbox page from the email detail view.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "const rows = document.querySelectorAll('tr[role=\"listitem\"]'); return rows.length > 0 ? true : [false, 'Not on inbox page yet'];",
+      "execute": "// Try back button first with MouseEvent\nconst backBtn = document.querySelector('button[aria-label=\"Back to inbox\"]');\nif (backBtn) {\n  backBtn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));\n  await new Promise(r => setTimeout(r, 1500));\n  const rows = document.querySelectorAll('tr[role=\"listitem\"]');\n  if (rows.length > 0) return {success: true};\n}\n// Try clicking Inbox menu item in sidebar\nconst inboxMenuItem = document.querySelector('div[role=\"menuitem\"][aria-label*=\"Inbox\"]');\nif (inboxMenuItem) {\n  inboxMenuItem.click();\n  await new Promise(r => setTimeout(r, 1500));\n  return {success: true};\n}\n// Last resort: find and click any element with Inbox text\nconst inboxEl = Array.from(document.querySelectorAll('a, div[role=\"menuitem\"]')).find(el => el.textContent.includes('Inbox'));\nif (inboxEl) { inboxEl.click(); await new Promise(r => setTimeout(r, 1500)); }\nreturn {success: true};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page": "email_detail"
+      },
+      "post": {
+        "page": "inbox"
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "delete_email",
+      "title": "Delete Email",
+      "description": "Deletes the currently selected email by clicking the Delete button.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('div[aria-label=\"Delete\"].css-1anjxao') || document.querySelector('div[aria-label=\"Delete\"]') ? true : [false, 'Delete button not found'];",
+      "is_completed": "return !document.querySelector('div[aria-label=\"Delete\"].css-1anjxao') && !document.querySelector('div[aria-label=\"Delete\"]') ? true : [false, 'Still on email detail or delete did not complete'];",
+      "execute": "const btn = document.querySelector('div[aria-label=\"Delete\"].css-1anjxao') || document.querySelector('div[aria-label=\"Delete\"]'); if(btn){btn.click(); return {success:true};} return {success:false};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page": "email_detail",
+        "selected_email": "*"
+      },
+      "post": {
+        "page": "inbox"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    }
+  ],
+  "is_ready_timeout_ms": 30000
+}
