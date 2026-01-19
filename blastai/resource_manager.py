@@ -315,9 +315,12 @@ class ResourceManager:
             with_new_executors: Number of new executors to check for
             for_subtask: Whether this is for a subtask (subject to max_parallel_workers)
         """
-        # Count running executors
+        # Count only actively running executors (exclude completed tasks)
+        # Completed tasks keep their executor for state merging but shouldn't block new allocations
         running_executors = sum(
-            1 for task in self.scheduler.tasks.values() if task.executor
+            1
+            for task in self.scheduler.tasks.values()
+            if task.executor and not task.is_completed
         )
 
         # Check max concurrent browsers
@@ -373,8 +376,12 @@ class ResourceManager:
         Returns:
             Maximum number of new executors allowed
         """
+        # Only count actively running executors (exclude completed tasks)
+        # Completed tasks keep their executor for state merging but shouldn't block new allocations
         running_executors = sum(
-            1 for task in self.scheduler.tasks.values() if task.executor
+            1
+            for task in self.scheduler.tasks.values()
+            if task.executor and not task.is_completed
         )
 
         # Start with max concurrent browsers constraint
@@ -417,8 +424,11 @@ class ResourceManager:
                 self._reported_constraint_tasks.add(task_id)
 
                 # Check which constraint was violated
+                # Only count actively running executors (exclude completed tasks)
                 running_executors = sum(
-                    1 for t in self.scheduler.tasks.values() if t.executor
+                    1
+                    for t in self.scheduler.tasks.values()
+                    if t.executor and not t.is_completed
                 )
                 if running_executors + 1 > self.constraints.max_concurrent_browsers:
                     logger.debug(
@@ -747,8 +757,11 @@ class ResourceManager:
                     )
 
                     # Log scheduling status for this group
+                    # Only count actively running executors (exclude completed tasks)
                     running_executors = sum(
-                        1 for t in self.scheduler.tasks.values() if t.executor
+                        1
+                        for t in self.scheduler.tasks.values()
+                        if t.executor and not t.is_completed
                     )
                     # Only count actively running subtasks (not completed ones)
                     running_subtasks = sum(
@@ -906,8 +919,11 @@ class ResourceManager:
                         self._last_constraint_report = current_time
 
                         # Log which constraint was violated
+                        # Only count actively running executors (exclude completed tasks)
                         running_executors = sum(
-                            1 for task in self.scheduler.tasks.values() if task.executor
+                            1
+                            for task in self.scheduler.tasks.values()
+                            if task.executor and not task.is_completed
                         )
                         if running_executors > self.constraints.max_concurrent_browsers:
                             logger.debug(

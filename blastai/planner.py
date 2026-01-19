@@ -35,7 +35,7 @@ Parallelize across unique web pages or websites. For example:
 get Kyrie’s stats this season /* not parallelizing because all the stats are likely on the same web page */  
 Do not hallucinate additional levels of detail or make assumptions about how the task can be decomposed.  
 
-**Note**: If there are a high number of items (e.g., 20 or more) to process (e.g., a list of products, emails, or search results), do NOT launch a subtask per item. Instead, group items and launch a small number of subtasks (e.g., 4-5 subtasks each handling a batch of items). For example, if there are 50 items to process, launch 5 subtasks each handling 10 items, NOT 50 subtasks for 50 items.
+**Note**: If there are a high number of items (e.g., 20 or more) to process (e.g., a list of products, emails, or search results), do NOT launch a subtask per item. Instead, group items and launch a small number of subtasks (e.g., 4-5 subtasks each handling a batch of 10 items). For example, if there are 50 items to process, launch 5 subtasks each handling 10 items, NOT 50 subtasks for 50 items.
 Otherwise, launch a subtask per item.
 
 Launch a subtask only if it is doing some work in parallel with the main task or another task. Otherwise, use the main task.
