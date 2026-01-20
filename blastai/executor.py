@@ -218,9 +218,22 @@ class Executor:
 
                 # Create agent if this is first run, otherwise add new task
                 if not self.agent:
-                    # Create initial actions if URL/search provided
-                    initial_actions = None
                     url = self._get_url_or_search(initial_url)
+                    if url:
+                        # Dismiss popups before agent sees the page
+                        try:
+                            page = await self.browser_session.get_current_page()
+                            if page:
+                                config_url = (
+                                    url.rstrip("/") + "/config?removePopup=true"
+                                )
+                                await page.goto(config_url)
+                                await page.wait_for_load_state("domcontentloaded")
+                        except Exception as e:
+                            logger.debug(f"Failed to dismiss popup: {e}")
+
+                    # Create initial actions for the main URL only
+                    initial_actions = None
                     if url:
                         initial_actions = [
                             {"go_to_url": {"url": url, "new_tab": False}}
