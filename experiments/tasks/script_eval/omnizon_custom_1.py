@@ -13,8 +13,7 @@ import json
 import sys
 from typing import Any, Dict, Tuple
 
-# Expected order total to be cancelled (the most expensive one)
-# Order number is randomized, but total is consistent
+# Expected order total
 EXPECTED_ORDER_TOTAL = 2448.88
 
 
