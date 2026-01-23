@@ -109,6 +109,67 @@ tasks:
 #   goal: Draft a new email and send it to any four different people.
 #   evaluate: true
 
+# OMNIZON
+
+# - id: omnizon-offline-1
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: Go to Returns & Orders page, write a product review for first item in the first order, and then cancel the entire order.
+#   evaluate: true
+
+# - id: omnizon-offline-2
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: Search for "Sony WH-1000XM5" and click into the first result. Add it to the cart and buy it.
+#   evaluate: true
+
+# - id: omnizon-offline-3
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: Go to the "Gaming" page, and click on the Playstation wireless controller to view the product details and add three to the cart. Make sure you buy it.
+#   evaluate: true
+
+#- id: omnizon-custom-1
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: Find the most expensive order on Returns & Orders page and cancel it.
+#   evaluate: true
+
+# - id: omnizon-custom-2
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: Go to Returns & Orders page and write a product review for each item in the first three orders.
+#   evaluate: true
+
+# - id: omnizon-custom-3
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: Cancel the six orders placed in December and July on the Returns & Orders page.
+
+# - id: omnizon-custom-4
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: How many orders have not yet shipped? How many cancelled?
+#   evaluate: true
+
+# - id: omnizon-custom-5
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: Click on \"buy now\" on any product, increase its quantity to the maximum allowed, update the delivery date to the last available, and place the order.
+#   evaluate: true
+
+# - id: omnizon-custom-6
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: "Which of the following coffee makers has touchscreen: Gevi 10, Gevi 12, Simply Good Coffee, and BELLA Single Serve? Make sure you visit the product pages of each of them."
+#   evaluate: true
+
+# - id: omnizon-custom-7
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: Visit "Gift", "Toy", "Gaming", and "Cosmetic" categories on the menu bar. For each, click on the first item and report the product color.
+#   evaluate: true
+
+# - id: omnizon-custom-8
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: Search for "Automatic Espresso Machine," click on the cheapest one, change the quantity to 5, use \"buy now\" to purchase them and complete the checkout.
+#   evaluate: true
+
+# - id: omnizon-custom-9
+#   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
+#   goal: I want to create a gaming collection - buy any gaming device under $100.
+#   evaluate: true
+
 stages:
   - name: "baseline"
     description: "Baseline with all parallelism disabled"
@@ -153,6 +214,76 @@ stages:
       # llm_model: "google:gemini-2.5-pro"
       # llm_model: "google:gemini-2.5-flash"
       llm_model_mini: "openai:gpt-4.1-mini"
+
+  # - name: "baseline"
+  #   description: "Baseline with all parallelism disabled"
+  #   config:
+  #     allow_parallelism:
+  #       task: false
+  #       data: false
+  #       first_of_n: false
+  #     max_parallelism_nesting_depth: 1
+  #     llm_model: "google:gemini-2.5-pro"
+  #     llm_model_mini: "openai:gpt-4.1-mini"
+  
+  # - name: "first_of_n_only"
+  #   description: "Only first-of-n parallelism enabled"
+  #   config:
+  #     allow_parallelism:
+  #       task: false
+  #       data: false
+  #       first_of_n: true
+  #     first_of_n_num_copies: 4
+  #     max_parallelism_nesting_depth: 1
+  #     llm_model: "google:gemini-2.5-pro"
+  #     llm_model_mini: "openai:gpt-4.1-mini"
+
+  # - name: "task_parallelism_only"
+  #   description: "Only task-level parallelism for subtasks"
+  #   config:
+  #     allow_parallelism:
+  #       task: true
+  #       data: false
+  #       first_of_n: false
+  #     max_parallel_workers: 4  # Limit number of parallel workers running simultaneously
+  #     max_parallelism_nesting_depth: 1
+  #     llm_model: "google:gemini-2.5-pro"
+  #     llm_model_mini: "openai:gpt-4.1-mini"
+
+  # - name: "baseline"
+  #   description: "Baseline with all parallelism disabled"
+  #   config:
+  #     allow_parallelism:
+  #       task: false
+  #       data: false
+  #       first_of_n: false
+  #     max_parallelism_nesting_depth: 1
+  #     llm_model: "google:gemini-2.5-flash"
+  #     llm_model_mini: "openai:gpt-4.1-mini"
+  
+  # - name: "first_of_n_only"
+  #   description: "Only first-of-n parallelism enabled"
+  #   config:
+  #     allow_parallelism:
+  #       task: false
+  #       data: false
+  #       first_of_n: true
+  #     first_of_n_num_copies: 4
+  #     max_parallelism_nesting_depth: 1
+  #     llm_model: "google:gemini-2.5-flash"
+  #     llm_model_mini: "openai:gpt-4.1-mini"
+
+  # - name: "task_parallelism_only"
+  #   description: "Only task-level parallelism for subtasks"
+  #   config:
+  #     allow_parallelism:
+  #       task: true
+  #       data: false
+  #       first_of_n: false
+  #     max_parallel_workers: 4  # Limit number of parallel workers running simultaneously
+  #     max_parallelism_nesting_depth: 1
+  #     llm_model: "google:gemini-2.5-flash"
+  #     llm_model_mini: "openai:gpt-4.1-mini"
   
 settings:
   runs_per_stage: 3
