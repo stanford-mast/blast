@@ -231,204 +231,204 @@ class Tools:
                 scheduler, task_ids, as_final=True
             )
 
-        @self.controller.action("""Extract structured, semantic data (e.g. product description, price, all information about XYZ) from the current webpage based on a textual query.
-Only use this for extracting info from a single product/article page, not for entire listings or search results pages.
-""")
-        async def extract_structured_content_fast(
-            query: str, browser_session: BrowserSession = None, page_extraction_llm=None
-        ) -> ActionResult:
-            """Extract structured content by splitting into chunks and processing in parallel."""
-            if not browser_session:
-                return ActionResult(success=False, error="Browser session required")
+        #         @self.controller.action("""Extract structured, semantic data (e.g. product description, price, all information about XYZ) from the current webpage based on a textual query.
+        # Only use this for extracting info from a single product/article page, not for entire listings or search results pages.
+        # """)
+        #         async def extract_structured_content_fast(
+        #             query: str, browser_session: BrowserSession = None, page_extraction_llm=None
+        #         ) -> ActionResult:
+        #             """Extract structured content by splitting into chunks and processing in parallel."""
+        #             if not browser_session:
+        #                 return ActionResult(success=False, error="Browser session required")
 
-            try:
-                # Record overall start time
-                overall_start = time.time()
+        #             try:
+        #                 # Record overall start time
+        #                 overall_start = time.time()
 
-                # Get raw content
-                page = await browser_session.get_current_page()
-                content_start = time.time()
+        #                 # Get raw content
+        #                 page = await browser_session.get_current_page()
+        #                 content_start = time.time()
 
-                # Determine if we should include links based on query
-                strip = []
-                include_links = False
-                lower_query = query.lower()
-                url_keywords = ["url", "links"]
-                if any(keyword in lower_query for keyword in url_keywords):
-                    include_links = True
+        #                 # Determine if we should include links based on query
+        #                 strip = []
+        #                 include_links = False
+        #                 lower_query = query.lower()
+        #                 url_keywords = ["url", "links"]
+        #                 if any(keyword in lower_query for keyword in url_keywords):
+        #                     include_links = True
 
-                if not include_links:
-                    strip = ["a", "img"]
+        #                 if not include_links:
+        #                     strip = ["a", "img"]
 
-                # Get page content
-                content = markdownify.markdownify(await page.content(), strip=strip)
+        #                 # Get page content
+        #                 content = markdownify.markdownify(await page.content(), strip=strip)
 
-                # Add iframe content
-                for iframe in page.frames:
-                    try:
-                        await iframe.wait_for_load_state(
-                            timeout=5000
-                        )  # extra on top of already loaded page
-                    except Exception as e:
-                        pass
+        #                 # Add iframe content
+        #                 for iframe in page.frames:
+        #                     try:
+        #                         await iframe.wait_for_load_state(
+        #                             timeout=5000
+        #                         )  # extra on top of already loaded page
+        #                     except Exception as e:
+        #                         pass
 
-                    if iframe.url != page.url and not iframe.url.startswith("data:"):
-                        content += f"\n\nIFRAME {iframe.url}:\n"
-                        try:
-                            iframe_html = await iframe.content()
-                            iframe_markdown = markdownify.markdownify(
-                                iframe_html, strip=strip
-                            )
-                            content += iframe_markdown
-                        except Exception as e:
-                            logger.debug(
-                                f"Error extracting iframe content from within page {page.url}: {type(e).__name__}: {e}"
-                            )
+        #                     if iframe.url != page.url and not iframe.url.startswith("data:"):
+        #                         content += f"\n\nIFRAME {iframe.url}:\n"
+        #                         try:
+        #                             iframe_html = await iframe.content()
+        #                             iframe_markdown = markdownify.markdownify(
+        #                                 iframe_html, strip=strip
+        #                             )
+        #                             content += iframe_markdown
+        #                         except Exception as e:
+        #                             logger.debug(
+        #                                 f"Error extracting iframe content from within page {page.url}: {type(e).__name__}: {e}"
+        #                             )
 
-                content_time = time.time() - content_start
-                total_chars = len(content)
+        #                 content_time = time.time() - content_start
+        #                 total_chars = len(content)
 
-                # Limit content size if needed
-                max_chars = 40000
-                if len(content) > max_chars:
-                    content = (
-                        content[: max_chars // 2]
-                        + "\n... left out the middle because it was too long ...\n"
-                        + content[-max_chars // 2 :]
-                    )
+        #                 # Limit content size if needed
+        #                 max_chars = 40000
+        #                 if len(content) > max_chars:
+        #                     content = (
+        #                         content[: max_chars // 2]
+        #                         + "\n... left out the middle because it was too long ...\n"
+        #                         + content[-max_chars // 2 :]
+        #                     )
 
-                # Split content into chunks for parallel processing
-                chunk_start = time.time()
-                chunk_size = max(
-                    total_chars // 8, 3000
-                )  # At least 3000 chars per chunk
-                chunks = []
-                current_chunk = []
-                current_size = 0
+        #                 # Split content into chunks for parallel processing
+        #                 chunk_start = time.time()
+        #                 chunk_size = max(
+        #                     total_chars // 8, 3000
+        #                 )  # At least 3000 chars per chunk
+        #                 chunks = []
+        #                 current_chunk = []
+        #                 current_size = 0
 
-                for line in content.split("\n"):
-                    line_size = len(line)
-                    if current_size + line_size > chunk_size and current_chunk:
-                        chunks.append("\n".join(current_chunk))
-                        current_chunk = [line]
-                        current_size = line_size
-                    else:
-                        current_chunk.append(line)
-                        current_size += line_size
+        #                 for line in content.split("\n"):
+        #                     line_size = len(line)
+        #                     if current_size + line_size > chunk_size and current_chunk:
+        #                         chunks.append("\n".join(current_chunk))
+        #                         current_chunk = [line]
+        #                         current_size = line_size
+        #                     else:
+        #                         current_chunk.append(line)
+        #                         current_size += line_size
 
-                if current_chunk:
-                    chunks.append("\n".join(current_chunk))
-                chunk_time = time.time() - chunk_start
+        #                 if current_chunk:
+        #                     chunks.append("\n".join(current_chunk))
+        #                 chunk_time = time.time() - chunk_start
 
-                # Process chunks in parallel
-                parallel_start = time.time()
+        #                 # Process chunks in parallel
+        #                 parallel_start = time.time()
 
-                # Structured data extraction prompt
-                chunk_prompt = """You convert websites into structured information. Extract information from this webpage chunk based on the query. Focus only on content relevant to the query. If
-1. The query is vague
-2. Does not make sense for the page
-3. Some/all of the information is not available
+        #                 # Structured data extraction prompt
+        #                 chunk_prompt = """You convert websites into structured information. Extract information from this webpage chunk based on the query. Focus only on content relevant to the query. If
+        # 1. The query is vague
+        # 2. Does not make sense for the page
+        # 3. Some/all of the information is not available
 
-Explain the content of the chunk and that the requested information is not available in the chunk. Respond in JSON format.\nQuery: {query}\n Website chunk:\n{chunk}"""
+        # Explain the content of the chunk and that the requested information is not available in the chunk. Respond in JSON format.\nQuery: {query}\n Website chunk:\n{chunk}"""
 
-                # Use provided model or fallback
-                extraction_model = self.llm_model or page_extraction_llm
-                if not extraction_model:
-                    return ActionResult(
-                        success=False, error="No LLM model available for extraction"
-                    )
+        #                 # Use provided model or fallback
+        #                 extraction_model = self.llm_model or page_extraction_llm
+        #                 if not extraction_model:
+        #                     return ActionResult(
+        #                         success=False, error="No LLM model available for extraction"
+        #                     )
 
-                # Create user messages for each chunk
-                user_messages = []
-                for chunk in chunks:
-                    formatted_prompt = chunk_prompt.format(query=query, chunk=chunk)
-                    user_messages.append([UserMessage(content=formatted_prompt)])
+        #                 # Create user messages for each chunk
+        #                 user_messages = []
+        #                 for chunk in chunks:
+        #                     formatted_prompt = chunk_prompt.format(query=query, chunk=chunk)
+        #                     user_messages.append([UserMessage(content=formatted_prompt)])
 
-                # Process all chunks in parallel using asyncio.gather
-                tasks = [extraction_model.ainvoke(message) for message in user_messages]
-                parallel_results = await asyncio.gather(*tasks)
-                parallel_time = time.time() - parallel_start
+        #                 # Process all chunks in parallel using asyncio.gather
+        #                 tasks = [extraction_model.ainvoke(message) for message in user_messages]
+        #                 parallel_results = await asyncio.gather(*tasks)
+        #                 parallel_time = time.time() - parallel_start
 
-                # Helper function to merge JSON objects
-                def merge_json(d1: dict, d2: dict) -> dict:
-                    result = d1.copy()
-                    for k, v in d2.items():
-                        if k in result:
-                            if isinstance(result[k], dict) and isinstance(v, dict):
-                                result[k] = merge_json(result[k], v)
-                            elif isinstance(result[k], list) and isinstance(v, list):
-                                result[k].extend(v)
-                            elif isinstance(result[k], list):
-                                result[k].append(v)
-                            elif isinstance(v, list):
-                                result[k] = [result[k]] + v
-                            else:
-                                result[k] = [result[k], v]
-                        else:
-                            result[k] = v
-                    return result
+        #                 # Helper function to merge JSON objects
+        #                 def merge_json(d1: dict, d2: dict) -> dict:
+        #                     result = d1.copy()
+        #                     for k, v in d2.items():
+        #                         if k in result:
+        #                             if isinstance(result[k], dict) and isinstance(v, dict):
+        #                                 result[k] = merge_json(result[k], v)
+        #                             elif isinstance(result[k], list) and isinstance(v, list):
+        #                                 result[k].extend(v)
+        #                             elif isinstance(result[k], list):
+        #                                 result[k].append(v)
+        #                             elif isinstance(v, list):
+        #                                 result[k] = [result[k]] + v
+        #                             else:
+        #                                 result[k] = [result[k], v]
+        #                         else:
+        #                             result[k] = v
+        #                     return result
 
-                # Process and merge results
-                merged_json = {}
-                text_results = []
+        #                 # Process and merge results
+        #                 merged_json = {}
+        #                 text_results = []
 
-                for i, result in enumerate(parallel_results):
-                    try:
-                        chunk_json = json.loads(result.completion)
-                        merged_json = merge_json(merged_json, chunk_json)
-                    except json.JSONDecodeError:
-                        text_results.append(result.completion)
+        #                 for i, result in enumerate(parallel_results):
+        #                     try:
+        #                         chunk_json = json.loads(result.completion)
+        #                         merged_json = merge_json(merged_json, chunk_json)
+        #                     except json.JSONDecodeError:
+        #                         text_results.append(result.completion)
 
-                # Format the final extracted content
-                extracted_content = (
-                    f"Page Link: {page.url}\nQuery: {query}\nExtracted Content:\n"
-                )
+        #                 # Format the final extracted content
+        #                 extracted_content = (
+        #                     f"Page Link: {page.url}\nQuery: {query}\nExtracted Content:\n"
+        #                 )
 
-                if merged_json:
-                    extracted_content += json.dumps(merged_json, indent=2)
+        #                 if merged_json:
+        #                     extracted_content += json.dumps(merged_json, indent=2)
 
-                if text_results:
-                    extracted_content += (
-                        "\n\nAdditional extracted content:\n" + "\n".join(text_results)
-                    )
+        #                 if text_results:
+        #                     extracted_content += (
+        #                         "\n\nAdditional extracted content:\n" + "\n".join(text_results)
+        #                     )
 
-                # Determine memory handling based on content size
-                MAX_MEMORY_SIZE = 600
-                if len(extracted_content) < MAX_MEMORY_SIZE:
-                    memory = extracted_content
-                    include_extracted_content_only_once = False
-                else:
-                    # Find lines until MAX_MEMORY_SIZE
-                    lines = extracted_content.splitlines()
-                    display = ""
-                    display_lines_count = 0
-                    for line in lines:
-                        if len(display) + len(line) < MAX_MEMORY_SIZE:
-                            display += line + "\n"
-                            display_lines_count += 1
-                        else:
-                            break
-                    memory = f"Extracted content from {page.url}\n<query>{query}\n</query>\n<extracted_content>\n{display}{len(lines) - display_lines_count} more lines...\n</extracted_content>"
-                    include_extracted_content_only_once = True
+        #                 # Determine memory handling based on content size
+        #                 MAX_MEMORY_SIZE = 600
+        #                 if len(extracted_content) < MAX_MEMORY_SIZE:
+        #                     memory = extracted_content
+        #                     include_extracted_content_only_once = False
+        #                 else:
+        #                     # Find lines until MAX_MEMORY_SIZE
+        #                     lines = extracted_content.splitlines()
+        #                     display = ""
+        #                     display_lines_count = 0
+        #                     for line in lines:
+        #                         if len(display) + len(line) < MAX_MEMORY_SIZE:
+        #                             display += line + "\n"
+        #                             display_lines_count += 1
+        #                         else:
+        #                             break
+        #                     memory = f"Extracted content from {page.url}\n<query>{query}\n</query>\n<extracted_content>\n{display}{len(lines) - display_lines_count} more lines...\n</extracted_content>"
+        #                     include_extracted_content_only_once = True
 
-                # Log timing info
-                overall_time = time.time() - overall_start
-                logger.info(
-                    f"📄 Extracted structured content in {overall_time:.2f}s (content: {content_time:.2f}s, chunking: {chunk_time:.2f}s, parallel processing: {parallel_time:.2f}s)"
-                )
+        #                 # Log timing info
+        #                 overall_time = time.time() - overall_start
+        #                 logger.info(
+        #                     f"📄 Extracted structured content in {overall_time:.2f}s (content: {content_time:.2f}s, chunking: {chunk_time:.2f}s, parallel processing: {parallel_time:.2f}s)"
+        #                 )
 
-                return ActionResult(
-                    extracted_content=extracted_content,
-                    include_extracted_content_only_once=include_extracted_content_only_once,
-                    long_term_memory=memory,
-                )
+        #                 return ActionResult(
+        #                     extracted_content=extracted_content,
+        #                     include_extracted_content_only_once=include_extracted_content_only_once,
+        #                     long_term_memory=memory,
+        #                 )
 
-            except Exception as e:
-                logger.error(f"Error extracting structured content: {e}")
-                return ActionResult(
-                    success=False,
-                    error=f"Failed to extract structured content: {str(e)}",
-                )
+        #             except Exception as e:
+        #                 logger.error(f"Error extracting structured content: {e}")
+        #                 return ActionResult(
+        #                     success=False,
+        #                     error=f"Failed to extract structured content: {str(e)}",
+        #                 )
 
         @self.controller.action("Get result(s) of subtask(s)")
         async def get_subtask_results(

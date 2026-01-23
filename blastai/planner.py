@@ -35,8 +35,12 @@ Parallelize across unique web pages or websites. For example:
 get Kyrie’s stats this season /* not parallelizing because all the stats are likely on the same web page */  
 Do not hallucinate additional levels of detail or make assumptions about how the task can be decomposed.  
 
-**Note**: If there are a high number of items (e.g., 20 or more) to process (e.g., a list of products, emails, or search results), do NOT launch a subtask per item. Instead, group items and launch a small number of subtasks (e.g., 4-5 subtasks each handling a batch of 10 items). For example, if there are 50 items to process, launch 5 subtasks each handling 10 items, NOT 50 subtasks for 50 items.
-Otherwise, launch a subtask per item.
+**Note**: Only in the case where there are a high number of total items (e.g., 20 or more) to process (e.g., a list of products, emails, or search results), group items and launch a small number of subtasks (e.g., 4-5 subtasks each handling a batch of 10 items). For example, if there are 50 items to process, launch 5 subtasks each handling 10 items, NOT 50 subtasks for 50 items.
+Do not batch items if the total number of items is less than 20, you should still launch a subtask per item. Do not worry about sessions.
+
+**Important**: Do not use randomly generated order IDs. Use a single product/entity/item name or dates etc that do not shift to help the subtask uniquely identify the item.
+e.g., for $order in <date1, date2, date3>
+Clearly tell the subtask which tab on the page it should navigate to first, if the url does not directly take it there.
 
 Launch a subtask only if it is doing some work in parallel with the main task or another task. Otherwise, use the main task.
 
@@ -180,6 +184,8 @@ Plan: launch_subtask(create ticket for $project, initial search for $project) fo
         IMPORTANT:
         - View the content after "Execute:" carefully. Unless it indicates sequential execution, you MUST use the launch_subtask tool to parallelize this task. Do NOT attempt to complete parallelizable items sequentially yourself - delegate them to subtasks. For each item you need to process in parallel: 
             1. Call launch_subtask once for each item with the specific details 
+                - do not include order IDs or other randomly generated IDs; use a single product/entity/item name or dates etc that do not shift to help the subtask uniquely identify the item.
+                - clearly tell the subtask which tab on the page it should navigate to first, if the url does not directly take it there. If the information is on tab "y" of the page, tell it so to the subtask (on tab "y" of the page, do ...).
             2. After launching all subtasks, use get_subtask_results to collect and aggregate their results 
             3. Only proceed sequentially if the task genuinely cannot be parallelized
         - If the initial URL for the subtask is not available or confirmed, you should set optional_initial_search_or_url to the current page url.

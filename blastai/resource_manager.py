@@ -93,6 +93,8 @@ class ResourceManager:
         self._start_time = time.time()  # Track when the resource manager was created
         self._prev_not_allocated = 0  # Track previous not_allocated count
         self._prev_completed_with_executor = 0
+        # Track previous scheduler status per group to avoid log spam
+        self._prev_scheduler_status: Dict[str, Tuple[int, int, int]] = {}
         # Track LLM timing from evicted executors
         self._total_llm_timing_evicted = {
             "llm_total_seconds": 0.0,
@@ -157,6 +159,7 @@ class ResourceManager:
         }
         self._prev_not_allocated = 0
         self._prev_completed_with_executor = 0
+        self._prev_scheduler_status.clear()
 
     def _get_total_memory_usage(self) -> float:
         """Get total memory usage for all browser processes created since engine start.
@@ -660,6 +663,26 @@ class ResourceManager:
 
         while self._running:
             try:
+                for task in self.scheduler.tasks.values():
+                    if (
+                        not task.is_completed
+                        and task.executor_run_task
+                        and task.executor_run_task.done()
+                    ):
+                        try:
+                            # Get the result from the completed asyncio task
+                            result = task.executor_run_task.result()
+                            await self.scheduler.complete_task(task.id, result)
+                            logger.debug(
+                                f"Auto-completed task {task.id} (executor finished)"
+                            )
+                        except asyncio.CancelledError:
+                            await self.scheduler.complete_task(task.id, success=False)
+                            logger.debug(f"Auto-completed cancelled task {task.id}")
+                        except Exception as e:
+                            await self.scheduler.complete_task(task.id, success=False)
+                            logger.debug(f"Auto-completed failed task {task.id}: {e}")
+
                 # Get tasks ready for allocation
                 ready_tasks = []
                 for task in self.scheduler.tasks.values():
@@ -774,24 +797,35 @@ class ResourceManager:
                     pending_in_group = len(group.task_ids)
                     max_parallel_workers = self.constraints.max_parallel_workers
 
-                    if is_subtask_group:
-                        logger.debug(
-                            f"Scheduler status for '{group.name}': "
-                            f"pending={pending_in_group}, "
-                            f"running_subtasks={running_subtasks}/{max_parallel_workers or 'unlimited'}, "
-                            f"running_total={running_executors}/{self.constraints.max_concurrent_browsers}, "
-                            f"can_schedule={max_new_executors}"
-                        )
-                    else:
-                        logger.debug(
-                            f"Scheduler status for '{group.name}': "
-                            f"pending={pending_in_group}, "
-                            f"running_total={running_executors}/{self.constraints.max_concurrent_browsers}, "
-                            f"can_schedule={max_new_executors}"
-                        )
+                    # Track scheduler status to avoid log spam - only log when something changes
+                    current_status = (
+                        pending_in_group,
+                        running_subtasks if is_subtask_group else 0,
+                        running_executors,
+                    )
+                    prev_status = self._prev_scheduler_status.get(group.name)
+                    status_changed = prev_status != current_status
+
+                    if status_changed:
+                        self._prev_scheduler_status[group.name] = current_status
+                        if is_subtask_group:
+                            logger.debug(
+                                f"Scheduler status for '{group.name}': "
+                                f"pending={pending_in_group}, "
+                                f"running_subtasks={running_subtasks}/{max_parallel_workers or 'unlimited'}, "
+                                f"running_total={running_executors}/{self.constraints.max_concurrent_browsers}, "
+                                f"can_schedule={max_new_executors}"
+                            )
+                        else:
+                            logger.debug(
+                                f"Scheduler status for '{group.name}': "
+                                f"pending={pending_in_group}, "
+                                f"running_total={running_executors}/{self.constraints.max_concurrent_browsers}, "
+                                f"can_schedule={max_new_executors}"
+                            )
 
                     if max_new_executors <= 0:
-                        if pending_in_group > 0:
+                        if pending_in_group > 0 and status_changed:
                             logger.debug(
                                 f"Cannot schedule any tasks from '{group.name}': at capacity"
                             )
