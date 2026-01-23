@@ -4,35 +4,44 @@ tasks:
   eval_type: script
   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
   goal: 'Find the most expensive order on Returns & Orders page and cancel it.'
+  smcp_registry: experiments/tools/omnizon.json
 - id: omnizon-custom-2
   eval_type: script
   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
   goal: 'Go to Returns & Orders page and write a product review for each item in the first three orders.'
+  smcp_registry: experiments/tools/omnizon.json
 - id: omnizon-custom-3
   eval_type: script
   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
   goal: 'Cancel the three orders placed in July on the Returns & Orders page.'
+  smcp_registry: experiments/tools/omnizon.json
 - id: omnizon-custom-4
   eval_type: llm
   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
   goal: 'How many orders have not yet shipped? How many cancelled?'
+  smcp_registry: experiments/tools/omnizon.json
 - id: omnizon-custom-5
   eval_type: script
   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
   goal: 'Click on "buy now" on any product, increase its quantity to the maximum allowed, update the delivery date to the last available, and place the order.'
+  smcp_registry: experiments/tools/omnizon.json
 - id: omnizon-custom-6
   eval_type: llm
   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
   goal: 'Which of the following coffee makers has touchscreen: Gevi 10, Gevi 12, Simply Good Coffee, and BELLA Single Serve? Make sure you visit the product pages of each of them.'
+  smcp_registry: experiments/tools/omnizon.json
 - id: omnizon-custom-7
   eval_type: script
   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
   goal: 'Visit "Gift", "Toy", "Gaming", and "Cosmetic" categories on the menu bar. For each, click on the first item and report the product color.'
+  smcp_registry: experiments/tools/omnizon.json
 - id: omnizon-custom-8
   eval_type: script
   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
   goal: 'Search for "Automatic Espresso Machine," click on the cheapest one, change the quantity to 5, use "buy now" to purchase them and complete the checkout.'
+  smcp_registry: experiments/tools/omnizon.json
 - id: omnizon-custom-9
   eval_type: script
   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
   goal: 'I want to create a gaming collection - buy any gaming device under $100.'
+  smcp_registry: experiments/tools/omnizon.json
