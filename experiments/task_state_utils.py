@@ -242,6 +242,124 @@ def _merge_differences(
     return merged_differences
 
 
+def _deep_merge_state(
+    states: List[Dict[str, Any]], logger: logging.Logger
+) -> Dict[str, Any]:
+    """
+    Deep merge multiple state dictionaries, concatenating arrays and deduplicating by ID.
+
+    This handles cases where parallel browsers each have their own state (e.g., each
+    browser submitted a review, but each browser only sees its own review in its state).
+
+    Rules:
+    - Dicts: recursively merge
+    - Arrays of dicts with 'id' field: concatenate and deduplicate by ID
+    - Arrays of primitives: concatenate and deduplicate
+    - Other arrays: use the last non-empty value
+    - Primitives: use the last value
+    """
+    if not states:
+        return {}
+
+    if len(states) == 1:
+        return states[0]
+
+    result = {}
+
+    # Collect all keys from all states
+    all_keys = set()
+    for state in states:
+        if isinstance(state, dict):
+            all_keys.update(state.keys())
+
+    for key in all_keys:
+        values = [s.get(key) for s in states if isinstance(s, dict) and key in s]
+
+        if not values:
+            continue
+
+        # Check what types we have
+        first_non_none = next((v for v in values if v is not None), None)
+
+        if first_non_none is None:
+            result[key] = None
+        elif isinstance(first_non_none, dict):
+            # Recursively merge dicts
+            dict_values = [v for v in values if isinstance(v, dict)]
+            result[key] = _deep_merge_state(dict_values, logger)
+        elif isinstance(first_non_none, list):
+            # Merge arrays
+            result[key] = _merge_arrays(values, key, logger)
+        else:
+            # For primitives, use the last value
+            result[key] = values[-1]
+
+    return result
+
+
+def _merge_arrays(
+    arrays: List[Any], key_name: str, logger: logging.Logger
+) -> List[Any]:
+    """
+    Merge multiple arrays, deduplicating items.
+
+    For arrays of dicts with 'id' field: deduplicate by ID.
+    For arrays of primitives: deduplicate by value.
+    For mixed/complex arrays: concatenate all.
+    """
+    merged = []
+    seen_ids = set()
+    seen_values = set()
+
+    for arr in arrays:
+        if not isinstance(arr, list):
+            continue
+
+        for item in arr:
+            if isinstance(item, dict):
+                # Deduplicate by 'id' field if present
+                item_id = item.get("id")
+                if item_id is not None:
+                    if item_id in seen_ids:
+                        continue  # Skip duplicate
+                    seen_ids.add(item_id)
+                merged.append(item)
+            elif isinstance(item, (str, int, float, bool)):
+                # Deduplicate primitives by value
+                if item in seen_values:
+                    continue
+                seen_values.add(item)
+                merged.append(item)
+            else:
+                # For complex types, just append
+                merged.append(item)
+
+    return merged
+
+
+def _merge_finalstate(
+    final_states: Dict[str, Dict[str, Any]], state_key: str, logger: logging.Logger
+) -> Optional[Dict[str, Any]]:
+    """
+    Merge the finalstate/state section from multiple task states.
+
+    This properly combines arrays like userCreatedReviews from all parallel browsers.
+    """
+    states_to_merge = []
+    for task_id, state in final_states.items():
+        if state_key in state and isinstance(state[state_key], dict):
+            states_to_merge.append(state[state_key])
+
+    if not states_to_merge:
+        return None
+
+    if len(states_to_merge) == 1:
+        return states_to_merge[0]
+
+    logger.info(f"Deep merging {len(states_to_merge)} {state_key} sections", indent=8)
+    return _deep_merge_state(states_to_merge, logger)
+
+
 def merge_parallel_final_states(
     final_states: Dict[str, Any], logger: logging.Logger
 ) -> Dict[str, Any]:
@@ -251,8 +369,7 @@ def merge_parallel_final_states(
     Combines:
     - Action histories (sorted by timestamp)
     - Differences (added/deleted/updated items from all tasks)
-
-    Other fields are taken from the last task's state.
+    - finalstate/state sections (deep merged with array concatenation)
 
     This is only used if parallelism is enabled.
     """
@@ -283,10 +400,25 @@ def merge_parallel_final_states(
     # Merge differences from all tasks
     merged_differences = _merge_differences(final_states, logger)
 
-    # Other fields are from the last state
+    # Deep merge finalstate, state, and initialfinaldiff sections to combine arrays
+    # like userCreatedReviews from all parallel browsers
+    merged_finalstate = _merge_finalstate(final_states, "finalstate", logger)
+    merged_state_section = _merge_finalstate(final_states, "state", logger)
+    merged_initialfinaldiff = _merge_finalstate(final_states, "initialfinaldiff", logger)
+
+    # Start with the last task's state as base
     merged_state = final_states[list(final_states.keys())[-1]].copy()
     merged_state["actionhistory"] = all_actions
     merged_state["differences"] = merged_differences
+
+    # Apply merged sections if they were merged
+    if merged_finalstate is not None:
+        merged_state["finalstate"] = merged_finalstate
+    if merged_state_section is not None:
+        merged_state["state"] = merged_state_section
+    if merged_initialfinaldiff is not None:
+        merged_state["initialfinaldiff"] = merged_initialfinaldiff
+
     merged_state["_metadata"] = {
         "num_tasks_merged": len(final_states),
         "task_ids": list(final_states.keys()),

@@ -441,9 +441,7 @@ class ExperimentRunner:
                             eval_task, task_config["initial_url"], self.logger
                         )
                         if final_state is None:
-                            self.logger.warning(
-                                "Failed to fetch final state", indent=6
-                            )
+                            self.logger.warning("Failed to fetch final state", indent=6)
                     else:
                         self.logger.warning(
                             "No completed task found for state retrieval", indent=6
@@ -473,9 +471,7 @@ class ExperimentRunner:
                         valid_states_dict, self.logger
                     )
                     if not final_state:
-                        self.logger.warning(
-                            "Failed to merge final states", indent=6
-                        )
+                        self.logger.warning("Failed to merge final states", indent=6)
 
             # Save final state (with or without actual state data)
             result.final_state_path = self._save_final_state(
@@ -483,7 +479,9 @@ class ExperimentRunner:
                 final_result=result.final_result,
                 final_state=final_state,
             )
-            self.logger.info(f"Saved final state to {result.final_state_path}", indent=6)
+            self.logger.info(
+                f"Saved final state to {result.final_state_path}", indent=6
+            )
 
             # If not evaluating, return the result
             if not do_eval:
@@ -497,9 +495,7 @@ class ExperimentRunner:
                 return result
 
             if final_state is None:
-                self.logger.error(
-                    "No final state available for evaluation", indent=6
-                )
+                self.logger.error("No final state available for evaluation", indent=6)
                 return result
 
             try:
