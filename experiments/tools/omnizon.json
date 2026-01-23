@@ -1,0 +1,1178 @@
+{
+  "description": "",
+  "tools": [
+    {
+      "name": "observe_omnizon",
+      "title": "Observe Omnizon",
+      "description": "Observes the current Omnizon page, returning page type, cart count, and selected product information.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "page_type": {
+            "type": "string",
+            "description": "Type of the current page.",
+            "enum": [
+              "home",
+              "results",
+              "product",
+              "orders",
+              "checkout",
+              "review",
+              "cancellation",
+              "order_confirmation",
+              "other"
+            ]
+          },
+          "selected_product": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The currently selected product, if any; otherwise null."
+          },
+          "cart_count": {
+            "type": "number",
+            "description": "The number of items in the shopping cart."
+          },
+          "current_tab": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The currently selected tab, if any; otherwise null."
+          }
+        },
+        "required": [
+          "page_type",
+          "selected_product",
+          "cart_count",
+          "current_tab"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('.MuiBox-root[aria-label=\"Shopping Cart\"]') ? true : [false, 'Shopping Cart not loaded'];",
+      "is_completed": "return typeof output === 'object' && typeof output.page_type === 'string' && typeof output.cart_count === 'number';",
+      "execute": "let page_type = 'other'; const path = location.pathname; const bodyText = document.body.textContent; const h1 = document.querySelector('h1.MuiTypography-h1'); if (path === '/') page_type = 'home'; else if (document.querySelector('button[aria-label=\"Buy now\"]') || document.querySelector('#product-details-header')) page_type = 'product'; else if (bodyText.includes('results for') || (document.querySelectorAll('h2[role=\"link\"]').length > 3)) page_type = 'results'; else if (h1 && h1.textContent.includes('Your Orders') && document.querySelector('button[role=\"tab\"]')) page_type = 'orders'; else if (bodyText.includes('Checkout') && document.querySelector('button[aria-label=\"Place your order\"]')) page_type = 'checkout'; else if (bodyText.includes('Write a Customer Review')) page_type = 'review'; else if ((h1 && h1.textContent.includes('Cancel Order')) || document.querySelector('#cancel-reason-label')) page_type = 'cancellation'; else if (bodyText.includes('Order placed') || bodyText.includes('Order confirmed')) page_type = 'order_confirmation'; const cartCountEl = document.querySelector('p[aria-label^=\"Cart has\"]'); const cart_count = cartCountEl ? parseInt(cartCountEl.getAttribute('aria-label').match(/\\d+/)?.[0] || '0', 10) : 0; const selectedTab = document.querySelector('button[role=\"tab\"][aria-selected=\"true\"]'); const current_tab = selectedTab ? selectedTab.textContent.trim() : null; const productName = document.querySelector('#product-details-header') || document.querySelector('h1'); const selected_product = page_type === 'product' && productName ? productName.textContent.trim() : null; return {page_type, selected_product, cart_count, current_tab};",
+      "pre_path": "*vercel.app*",
+      "pre": {},
+      "post": {},
+      "type": "observe",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_home",
+      "title": "Goto Home",
+      "description": "Navigates to the Home page by clicking the Home button.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector(\"a[aria-label='Home']\") ? true : [false, 'Home button not found'];",
+      "is_completed": "return typeof output === 'object' && window.location.pathname === '/' ? true : [false, 'Not navigated to home'];",
+      "execute": "document.querySelector(\"a[aria-label='Home']\").click(); return {};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "*"
+      },
+      "post": {
+        "page_type": "home"
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_orders",
+      "title": "Goto Orders",
+      "description": "Navigates to the orders page by simulating a click on the orders button.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const ordersLink = Array.from(document.querySelectorAll('.MuiStack-root')).find(el => el.textContent.includes('Returns') && el.textContent.includes('Orders')); return ordersLink ? true : [false, 'Orders element not found'];",
+      "is_completed": "const h1 = document.querySelector('h1.MuiTypography-h1'); const hasTabs = document.querySelectorAll('button[role=\"tab\"]').length > 0; return (h1 && h1.textContent.includes('Your Orders')) || hasTabs ? true : [false, 'Not navigated to orders page'];",
+      "execute": "const ordersLink = Array.from(document.querySelectorAll('.MuiStack-root')).find(el => el.textContent.includes('Returns') && el.textContent.includes('Orders')); if (ordersLink) ordersLink.click(); return {};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "*"
+      },
+      "post": {
+        "page_type": "orders"
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_cart",
+      "title": "Goto Cart",
+      "description": "Navigates to the shopping cart page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector(\"div[aria-label='Shopping Cart']\") ? true : [false, 'Cart button not found'];",
+      "is_completed": "return typeof output === 'object' && window.location.pathname.includes('cart') ? true : [false, 'Not navigated to cart'];",
+      "execute": "document.querySelector(\"div[aria-label='Shopping Cart']\").click(); return {};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "*"
+      },
+      "post": {
+        "page_type": "checkout"
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_category",
+      "title": "Goto Category",
+      "description": "Navigates to the specified category by clicking on its name on the page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "categoryName": {
+            "type": "string",
+            "description": "The name of the category to navigate to."
+          }
+        },
+        "required": [
+          "categoryName"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether navigation to the specified category was successful."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const categories = ['Gift', 'Toy', 'Home', 'Gaming', 'Cosmetic', 'Headphones', 'Coffee', 'Kitchen']; const items = Array.from(document.querySelectorAll('p.MuiTypography-body1')).filter(p => categories.includes(p.textContent.trim())); return items.length > 0 ? true : [false, 'No categories in top menu'];",
+      "is_completed": "return document.body.textContent.includes('results for') || document.querySelectorAll('h2[role=\"link\"]').length > 0 ? true : [false, 'Not on results page'];",
+      "execute": "const items = Array.from(document.querySelectorAll('p.MuiTypography-body1')); const target = items.find(p => p.textContent.trim().toLowerCase() === inputs.categoryName.trim().toLowerCase()); if (target) { target.click(); return {success: true}; } return {success: false};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "home"
+      },
+      "post": {
+        "page_type": "results"
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_orders_tab",
+      "title": "Goto Orders Tab",
+      "description": "Switches to the 'Orders' tab on the orders page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); return tabs.length > 0 ? true : [false, 'No order tabs found'];",
+      "is_completed": "const selectedTab = document.querySelector('button[role=\"tab\"][aria-selected=\"true\"]'); return selectedTab && selectedTab.textContent.trim() === 'Orders' ? true : [false, 'Orders tab not selected'];",
+      "execute": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); for (const tab of tabs) { if (tab.textContent.trim() === 'Orders') { tab.click(); break; } } return {};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "orders"
+      },
+      "post": {
+        "page_type": "orders"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_buy_again_tab",
+      "title": "Goto Buy Again Tab",
+      "description": "Switches to the 'Buy Again' tab on the orders page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); return tabs.length > 0 ? true : [false, 'No order tabs found'];",
+      "is_completed": "const selectedTab = document.querySelector('button[role=\"tab\"][aria-selected=\"true\"]'); return selectedTab && selectedTab.textContent.trim() === 'Buy Again' ? true : [false, 'Buy Again tab not selected'];",
+      "execute": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); for (const tab of tabs) { if (tab.textContent.trim() === 'Buy Again') { tab.click(); break; } } return {};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "orders"
+      },
+      "post": {
+        "page_type": "orders"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_cancelled_orders_tab",
+      "title": "Goto Cancelled Orders Tab",
+      "description": "Switches to the 'Cancelled Orders' tab on the orders page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); return tabs.length > 0 ? true : [false, 'No order tabs found'];",
+      "is_completed": "const selectedTab = document.querySelector('button[role=\"tab\"][aria-selected=\"true\"]'); return selectedTab && selectedTab.textContent.trim() === 'Cancelled Orders' ? true : [false, 'Cancelled Orders tab not selected'];",
+      "execute": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); for (const tab of tabs) { if (tab.textContent.trim() === 'Cancelled Orders') { tab.click(); break; } } return {};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "orders"
+      },
+      "post": {
+        "page_type": "orders"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_not_yet_shipped_tab",
+      "title": "Goto Not Yet Shipped Tab",
+      "description": "Switches to the 'Not Yet Shipped' tab on the orders page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); return tabs.length > 0 ? true : [false, 'No order tabs found'];",
+      "is_completed": "const selectedTab = document.querySelector('button[role=\"tab\"][aria-selected=\"true\"]'); return selectedTab && selectedTab.textContent.trim() === 'Not Yet Shipped' ? true : [false, 'Not Yet Shipped tab not selected'];",
+      "execute": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); for (const tab of tabs) { if (tab.textContent.trim() === 'Not Yet Shipped') { tab.click(); break; } } return {};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "orders"
+      },
+      "post": {
+        "page_type": "orders"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_orders",
+      "title": "List Orders",
+      "description": "Lists all orders visible on the current orders tab (Orders, Buy Again, Cancelled Orders, or Not Yet Shipped). Returns order number, total, date, status, and each item's name and price. Returns empty list if no orders on current tab.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "order_number": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "total": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "date": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "price": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "price"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "order_number",
+                "total",
+                "date",
+                "status",
+                "items"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const h1 = document.querySelector('h1.MuiTypography-h1'); const hasTabs = document.querySelectorAll('button[role=\"tab\"]').length > 0; return (h1 && h1.textContent.includes('Your Orders')) || hasTabs ? true : [false, 'Not on orders page'];",
+      "is_completed": "return Array.isArray(output.items) ? true : [false, 'Invalid output'];",
+      "execute": "const orderCards = document.querySelectorAll('.MuiCard-root');\nconst orders = Array.from(orderCards).map(card => {\n  const text = card.innerText;\n  const orderNumberMatch = text.match(/ORDER #\\s*([\\d-]+)/);\n  const totalMatch = text.match(/TOTAL[\\s\\n]*\\$([\\d,.]+)/i);\n  const dateMatch = text.match(/ORDER PLACED[\\s\\n]*([\\d\\/]+)/i);\n  const statusMatch = text.match(/Arriving by ([^\\n]+)|Delivered on ([^\\n]+)|Cancelled/i);\n  let status = null;\n  if (statusMatch) status = statusMatch[1] || statusMatch[2] || 'Cancelled';\n  const productEls = card.querySelectorAll('img[alt=\"Product\"]');\n  const items = Array.from(productEls).map(img => {\n    const container = img.closest('.MuiBox-root')?.parentElement;\n    const nameEl = container?.querySelector('p.MuiTypography-body1');\n    const priceEl = Array.from(container?.querySelectorAll('p.MuiTypography-body1') || []).find(p => p.textContent.includes('$'));\n    return { name: nameEl?.textContent.trim() || null, price: priceEl?.textContent.match(/\\$[\\d,.]+/)?.[0] || null };\n  });\n  return { order_number: orderNumberMatch?.[1] || null, total: totalMatch ? '$' + totalMatch[1] : null, date: dateMatch?.[1] || null, status, items };\n});\nreturn {items: orders};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "orders"
+      },
+      "post": {},
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_cancel",
+      "title": "Goto Cancel",
+      "description": "Navigates to and clicks the 'Cancel order' button for a specified order by index or order number.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "order_index": {
+            "type": "number",
+            "description": "The zero-based index of the order to cancel."
+          },
+          "order_number": {
+            "type": "string",
+            "description": "The order number identifying which order to cancel."
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "True if the cancel action was performed successfully, false otherwise."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const btns = Array.from(document.querySelectorAll('button')).filter(btn => btn.textContent.trim()==='Cancel order'); return btns.length > 0 ? true : [false,'No Cancel order button'];",
+      "is_completed": "const h1 = document.querySelector('h1.MuiTypography-h1'); const hasReasonDropdown = document.querySelector('#cancel-reason-label'); return (h1 && h1.textContent.includes('Cancel Order')) || hasReasonDropdown ? true : [false,'Not on cancellation page'];",
+      "execute": "const orderCards = Array.from(document.querySelectorAll('.MuiCard-root'));\nlet targetCard = null;\nif ('order_index' in inputs && typeof inputs.order_index === 'number') {\n  targetCard = orderCards[inputs.order_index];\n} else if ('order_number' in inputs) {\n  targetCard = orderCards.find(card => card.textContent.includes(inputs.order_number));\n}\nif (targetCard) {\n  const cancelBtn = Array.from(targetCard.querySelectorAll('button')).find(btn => btn.textContent.trim() === 'Cancel order');\n  if (cancelBtn) { cancelBtn.click(); return {success: true}; }\n}\nreturn {success: false};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "orders"
+      },
+      "post": {
+        "page_type": "cancellation"
+      },
+      "type": "gotoItem",
+      "pre_tools": {
+        "order_index": [
+          "list_orders"
+        ],
+        "order_number": [
+          "list_orders"
+        ]
+      }
+    },
+    {
+      "name": "cancel_order",
+      "title": "Cancel Order",
+      "description": "Cancels an order by clicking the 'Cancel Order' button on the page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return Array.from(document.querySelectorAll('button')).some(el => el.textContent.trim().toLowerCase().includes('cancel order')) ? true : [false, 'Cancel Order button not found'];",
+      "is_completed": "return document.body.textContent.toLowerCase().includes('order cancelled') || document.body.textContent.toLowerCase().includes('cancelled order') ? true : [false, 'Cancellation not confirmed'];",
+      "execute": "const btn = Array.from(document.querySelectorAll('button')).find(el => el.textContent.trim().toLowerCase().includes('cancel order')); if(btn){btn.click(); return {success:true};} return {success:false};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "cancellation"
+      },
+      "post": {
+        "page_type": "orders"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_write_review",
+      "title": "Goto Write Review",
+      "description": "Navigates to the review section for a specified product by name or index and attempts to click its review button.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "product_name": {
+            "type": "string",
+            "description": "The name (or part of the name) of the product to select for writing a review."
+          },
+          "product_index": {
+            "type": "number",
+            "description": "The zero-based index of the product to select for writing a review."
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "True if navigation and button click succeeded, false otherwise."
+          },
+          "selected_product": {
+            "type": "string",
+            "description": "The name of the selected product, if successful."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if navigation failed or product not found."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const reviewBtns = Array.from(document.querySelectorAll('button')).filter(btn => btn.textContent.includes('Write a product review')); return reviewBtns.length > 0 ? true : [false, 'No review buttons found'];",
+      "is_completed": "return document.body.textContent.includes('Write a Customer Review') || document.body.textContent.includes('Overall Rating') ? true : [false, 'Not navigated to review page'];",
+      "execute": "const reviewBtns = Array.from(document.querySelectorAll('button')).filter(btn => btn.textContent.includes('Write a product review'));\nconst products = reviewBtns.map(btn => {\n  const container = btn.closest('.MuiBox-root')?.parentElement;\n  const nameEl = container?.querySelector('p.MuiTypography-body1');\n  return { name: nameEl?.textContent.trim() || '', button: btn };\n});\nlet targetIdx = typeof inputs.product_index === 'number' ? inputs.product_index : null;\nif (targetIdx === null && typeof inputs.product_name === 'string') {\n  targetIdx = products.findIndex(p => p.name && p.name.toLowerCase().includes(inputs.product_name.toLowerCase()));\n}\nif (targetIdx === null) targetIdx = 0;\nif (targetIdx >= 0 && products[targetIdx] && products[targetIdx].button) {\n  products[targetIdx].button.click();\n  return { success: true, selected_product: products[targetIdx].name };\n}\nreturn { success: false, error: 'Product not found or no review button.' };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "orders"
+      },
+      "post": {
+        "page_type": "review",
+        "selected_product": "$product_name"
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "set_review_rating",
+      "title": "Set Review Rating",
+      "description": "Sets the review rating by clicking the corresponding radio button on the page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "rating": {
+            "type": "number",
+            "description": "The numeric value of the rating to set (e.g., 1 to 5)."
+          }
+        },
+        "required": [
+          "rating"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const radios = document.querySelectorAll('.MuiRating-root input[type=\"radio\"]'); return radios.length >= 5 ? true : [false, 'Rating radio buttons not found'];",
+      "is_completed": "const checked = document.querySelector('.MuiRating-root input[type=\"radio\"]:checked'); return checked && checked.value == String(inputs.rating) ? true : [false, 'Rating not selected correctly'];",
+      "execute": "const rating = Number(inputs.rating); const radios = Array.from(document.querySelectorAll('.MuiRating-root input[type=\"radio\"]')); const target = radios.find(r => r.value == rating); if(target) { target.click(); return {success:true}; } else { return {success:false}; }",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "review"
+      },
+      "post": {
+        "page_type": "review"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "fill_review",
+      "title": "Fill Review",
+      "description": "Fills in the review form fields with the provided title and content.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The title of the review to fill into the form."
+          },
+          "content": {
+            "type": "string",
+            "description": "The content or experience details to fill into the review form."
+          }
+        },
+        "required": [
+          "title",
+          "content"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether both the title and content fields were found and filled successfully."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const titleInput = document.querySelector('input[placeholder*=\"title\"]'); const contentTextarea = document.querySelector('textarea[placeholder*=\"experience\"]'); return (titleInput && contentTextarea) ? true : [false, 'Title or content field not found'];",
+      "is_completed": "const titleInput = document.querySelector('input[placeholder*=\"title\"]'); const contentTextarea = document.querySelector('textarea[placeholder*=\"experience\"]'); return (titleInput && titleInput.value === inputs.title && contentTextarea && contentTextarea.value === inputs.content) ? true : [false, 'Fields not filled correctly'];",
+      "execute": "const titleInput = document.querySelector('input[placeholder*=\"title\"]'); const contentTextarea = document.querySelector('textarea[placeholder*=\"experience\"]'); const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; if (titleInput) { inputSetter.call(titleInput, inputs.title || ''); titleInput.dispatchEvent(new Event('input', {bubbles: true})); } if (contentTextarea) { textareaSetter.call(contentTextarea, inputs.content || ''); contentTextarea.dispatchEvent(new Event('input', {bubbles: true})); } return {success: !!(titleInput && contentTextarea)};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "review"
+      },
+      "post": {
+        "page_type": "review"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "submit_review",
+      "title": "Submit Review",
+      "description": "Clicks the 'Submit Review' button.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const btn = Array.from(document.querySelectorAll('button')).find(el => el.textContent.trim().toLowerCase().includes('submit review')); return btn ? true : [false, 'Submit Review button not found'];",
+      "is_completed": "const h1 = document.querySelector('h1.MuiTypography-h1'); const hasTabs = document.querySelectorAll('button[role=\"tab\"]').length > 0; return (h1 && h1.textContent.includes('Your Orders')) || hasTabs ? true : [false, 'Not navigated to orders page'];",
+      "execute": "const btn = Array.from(document.querySelectorAll('button')).find(el => el.textContent.trim().toLowerCase().includes('submit review')); if(btn){btn.click(); const interval = setInterval(() => { const onProductPage = document.querySelector('#product-details-header') || document.querySelector('button[aria-label=\"Buy now\"]'); if (onProductPage) { clearInterval(interval); const ordersLink = Array.from(document.querySelectorAll('.MuiStack-root')).find(el => el.textContent.includes('Returns') && el.textContent.includes('Orders')); if (ordersLink) ordersLink.click(); } }, 200); return {success:true};} return {success:false};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "review"
+      },
+      "post": {
+        "page_type": "orders"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "search_products",
+      "title": "Search Products",
+      "description": "Searches for products by entering the given query into the visible search bar and clicking the search button.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search term to use for finding products."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the search action was successfully performed."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the search bar was not found."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const inputsArr = document.querySelectorAll('input.MuiInputBase-input.MuiOutlinedInput-input.css-1pk1fka'); const btnsArr = document.querySelectorAll('button[aria-label=\"Search\"]'); let found=false; for(let i=0;i<inputsArr.length;i++){ if(inputsArr[i].offsetParent!==null && btnsArr[i].offsetParent!==null){found=true;break;} } return found ? true : [false,'Visible search bar/button not found'];",
+      "is_completed": "return document.body.innerText.includes('results') || window.location.href.includes('results') || document.querySelectorAll('h2[role=\"link\"]').length>0 ? true : [false,'Results page not detected'];",
+      "execute": "const query = inputs.query;\nconst searchInputs = document.querySelectorAll('input.MuiInputBase-input.MuiOutlinedInput-input');\nconst searchButtons = document.querySelectorAll('button[aria-label=\"Search\"]');\nlet input, button;\nfor (let i = 0; i < searchInputs.length; i++) {\n  if (searchInputs[i].offsetParent !== null) {\n    input = searchInputs[i];\n    button = searchButtons[i];\n    break;\n  }\n}\nif (input && button) {\n  const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;\n  inputSetter.call(input, query);\n  input.dispatchEvent(new Event('input', { bubbles: true }));\n  button.click();\n  return {success: true};\n}\nreturn {success: false, error: 'No visible search bar found'};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "*"
+      },
+      "post": {
+        "page_type": "results"
+      },
+      "type": "setFilter",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_results",
+      "title": "List Results",
+      "description": "Lists product items on the search results page, extracting their name, price, and brand. Returns empty list if no products found.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "brand": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "price",
+                "brand"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.body.textContent.includes('results for') || window.location.href.includes('results') ? true : [false,'Not on results page'];",
+      "is_completed": "return Array.isArray(output.items) ? true : [false,'Invalid output'];",
+      "execute": "const cards = Array.from(document.querySelectorAll('h2[role=\"link\"]')).map(h2 => {\n  const container = h2.closest('.MuiGrid2-root');\n  const name = h2.textContent.trim();\n  let price = null;\n  let brand = null;\n  if (container) {\n    const priceContainer = container.querySelector('[aria-label*=\"View price details\"]');\n    if (priceContainer) {\n      const priceParts = Array.from(priceContainer.querySelectorAll('p')).map(p => p.textContent.trim());\n      if (priceParts.length === 3) { price = priceParts[0] + priceParts[1] + '.' + priceParts[2]; } else { price = priceParts.join(''); }\n    }\n    const brandEl = container.querySelector('p.MuiTypography-body1');\n    if (brandEl && !brandEl.textContent.includes('$')) brand = brandEl.textContent.trim();\n  }\n  return {name, price, brand};\n});\nreturn {items: cards};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "results"
+      },
+      "post": {},
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_product",
+      "title": "Goto Product",
+      "description": "Navigates to the product details page for the specified product name.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "productName": {
+            "type": "string",
+            "description": "The name of the product to navigate to."
+          }
+        },
+        "required": [
+          "productName"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const cards = document.querySelectorAll('h2[role=\"link\"]'); return cards.length > 0 ? true : [false, 'No product cards found on page'];",
+      "is_completed": "if (output.success === false) return true; const header = document.querySelector('#product-details-header') || document.querySelector('button[aria-label=\"Buy now\"]'); return header ? true : [false, 'Did not navigate to product detail page'];",
+      "execute": "const query = inputs.productName.toLowerCase(); const h2s = Array.from(document.querySelectorAll('h2[role=\"link\"]')); const match = h2s.find(h2 => { const container = h2.closest('.MuiGrid2-root'); const title = h2.textContent.trim().toLowerCase(); if (title.includes(query)) return true; const brandEl = container?.querySelector('p.MuiTypography-body1'); const brand = brandEl?.textContent.trim().toLowerCase() || ''; if (brand.includes(query)) return true; const ariaLabel = container?.querySelector('[aria-label^=\"View details\"]')?.getAttribute('aria-label')?.toLowerCase() || ''; return ariaLabel.includes(query); }); if (match) match.click(); return {success: !!match};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "results"
+      },
+      "post": {
+        "page_type": "product",
+        "selected_product": "$productName"
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "get_product_details",
+      "title": "Get Product Details",
+      "description": "Retrieves detailed information about a product, including name, price, color, description, maximum quantity, rating, and attributes.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "price": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "max_quantity": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rating": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attributes": {
+            "type": "object",
+            "description": "Product attributes like Brand, Special Feature, Material, etc."
+          }
+        },
+        "required": [
+          "name",
+          "price",
+          "color",
+          "description",
+          "max_quantity",
+          "rating",
+          "attributes"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('#product-details-header') || document.querySelector('button[aria-label=\"Buy now\"]') ? true : [false, 'Product page not loaded'];",
+      "is_completed": "return output && typeof output.name === 'string' && output.name.length > 0 ? true : [false, 'Product details not extracted'];",
+      "execute": "const nameEl = document.querySelector('#product-details-header');\nconst name = nameEl?.textContent.trim() || '';\nconst priceContainer = document.querySelector('[aria-label=\"product price\"]');\nlet price = '';\nif (priceContainer) { const parts = Array.from(priceContainer.querySelectorAll('p')).map(p => p.textContent.trim()); if (parts.length === 3) { price = parts[0] + parts[1] + '.' + parts[2]; } else { price = parts.join(''); } }\nconst colorEl = Array.from(document.querySelectorAll('p')).find(p => p.textContent.startsWith('Color:'));\nconst color = colorEl?.querySelector('span')?.textContent.trim() || '';\nconst descEl = Array.from(document.querySelectorAll('p')).find(p => p.textContent.includes('About this item'));\nconst descList = descEl?.parentElement?.querySelector('ul');\nlet description = descList ? Array.from(descList.querySelectorAll('li')).map(li => li.textContent.trim()).join(' ') : '';\nconst qbox = document.querySelector('#quantity-select');\nconst max_quantity = qbox ? parseInt(qbox.textContent.match(/\\d+/)?.[0] || '1', 10) : null;\nconst ratingContainer = document.querySelector('[aria-labelledby=\"product-rating\"]');\nconst rating = ratingContainer?.querySelector('p')?.textContent.trim() || null;\nconst attributes = {};\nconst attrBoxes = document.querySelectorAll('.MuiBox-root.css-k008qs');\nattrBoxes.forEach(box => { const ps = box.querySelectorAll('p'); if (ps.length >= 2) { const key = ps[0].textContent.trim(); const value = ps[1].textContent.trim(); if (key && value) attributes[key] = value; } });\nconst rows = document.querySelectorAll('tr');\nrows.forEach(row => { const cells = row.querySelectorAll('td'); if (cells.length >= 2) { const key = cells[0].textContent.trim(); const value = cells[1].textContent.trim(); if (key && value) attributes[key] = value; } });\nconst attrStr = Object.entries(attributes).map(([k,v]) => k + ': ' + v).join('. ');\nif (attrStr) description = description + ' ' + attrStr;\nreturn {name, price, color, description, max_quantity, rating, attributes};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "product"
+      },
+      "post": {},
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "set_quantity",
+      "title": "Set Quantity",
+      "description": "Sets the desired quantity by selecting the corresponding option in a quantity combobox on the page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "quantity": {
+            "type": "number",
+            "description": "The desired quantity to select (1-based index)."
+          }
+        },
+        "required": [
+          "quantity"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector(\"div[role='combobox'][id='quantity-select']\") ? true : [false, 'Quantity combobox not loaded'];",
+      "is_completed": "const combobox = document.querySelector(\"div[role='combobox'][id='quantity-select']\"); if (!combobox) return [false, 'Quantity combobox missing']; const val = combobox.textContent.match(/\\d+/); return val && parseInt(val[0],10) === inputs.quantity ? true : [false, `Quantity not set to ${inputs.quantity}`];",
+      "execute": "const combobox = document.querySelector(\"div[role='combobox'][id='quantity-select']\"); if (!combobox) return {success: false, error: 'Quantity combobox not found'}; combobox.click(); const options = document.querySelectorAll('[role=\"option\"]'); let targetIdx = typeof inputs.quantity === 'number' ? inputs.quantity - 1 : 0; if (targetIdx < 0 || targetIdx >= options.length) targetIdx = 0; const option = options[targetIdx]; if (option) { option.click(); return {success: true}; } return {success: false, error: 'Desired quantity option not found'};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "product"
+      },
+      "post": {
+        "page_type": "product"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "buy_now",
+      "title": "Buy Now",
+      "description": "Clicks the 'Buy now' button on the page if it exists.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates if the 'Buy now' button was found and clicked."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the button was not found."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('button[aria-label=\"Buy now\"]') ? true : [false, 'Buy now button not found'];",
+      "is_completed": "return document.body.textContent.includes('Checkout') && document.querySelector('button[aria-label=\"Place your order\"]') ? true : [false, 'Did not reach checkout page'];",
+      "execute": "const btn = document.querySelector('button[aria-label=\"Buy now\"]'); if (btn) { btn.click(); return {success: true}; } else { return {success: false, error: 'Buy now button not found'}; }",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "product"
+      },
+      "post": {
+        "page_type": "checkout"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "add_to_cart",
+      "title": "Add To Cart",
+      "description": "Clicks the 'Add to cart' button on the page and returns the updated cart item count.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "cart_count": {
+            "type": "number",
+            "description": "The current number of items in the cart after adding."
+          }
+        },
+        "required": [
+          "cart_count"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('button[aria-label=\"Add to cart\"]') ? true : [false, 'Add to Cart button not found'];",
+      "is_completed": "const cartCountEl = document.querySelector('p[aria-label^=\"Cart has\"]'); return cartCountEl ? true : [false, 'Cart count not updated'];",
+      "execute": "const btn = document.querySelector('button[aria-label=\"Add to cart\"]'); if(btn) btn.click(); const cartCountEl = document.querySelector('p[aria-label^=\"Cart has\"]'); const cart_count = cartCountEl ? parseInt(cartCountEl.getAttribute('aria-label').match(/\\d+/)?.[0] || '0', 10) : 0; return {cart_count};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "product"
+      },
+      "post": {},
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "get_checkout_details",
+      "title": "Get Checkout Details",
+      "description": "Extracts checkout details including cart items, delivery options, and order total from the current page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "quantity": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "price",
+                "quantity"
+              ]
+            }
+          },
+          "delivery_options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "option_index": {
+                  "type": "number"
+                },
+                "date": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "option_index",
+                "date",
+                "label",
+                "price"
+              ]
+            }
+          },
+          "total": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "delivery_options",
+          "total"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('button[aria-label=\"Place your order\"]') ? true : [false,'Checkout not loaded'];",
+      "is_completed": "return typeof output === 'object' && Array.isArray(output.items) && output.items.length > 0 && typeof output.total === 'number';",
+      "execute": "const itemName = document.querySelector('div[role=\"combobox\"]')?.parentElement?.textContent.match(/^[^\\d]+/); const itemPrice = document.querySelector('div[role=\"combobox\"]')?.parentElement?.textContent.match(/\\d+\\.\\d{2}/); const quantityEl = document.querySelector('div[role=\"combobox\"]'); let quantity = 1; if (quantityEl) { const qtyMatch = quantityEl.textContent.match(/\\d+/); if (qtyMatch) quantity = parseInt(qtyMatch[0], 10); } const items = [{ name: itemName ? itemName[0].trim() : '', price: itemPrice ? parseFloat(itemPrice[0]) : null, quantity }];\nconst deliveryOptions = Array.from(document.querySelectorAll('label[aria-label$=\"delivery option\"], label[aria-label$=\"Key delivery option\"], label[aria-label*=\"Omnizon Day\"]')).map((label, idx) => {\n  const dateText = label.parentElement.querySelector('p')?.textContent || '';\n  const descs = Array.from(label.parentElement.querySelectorAll('p')).map(p=>p.textContent);\n  let date = descs.length>0 ? descs[0] : '';\n  let labelText = descs.length>1 ? descs[1] : '';\n  let priceMatch = label.getAttribute('aria-label').match(/\\d+\\.\\d{2}/);\n  let price = priceMatch ? parseFloat(priceMatch[0]) : (labelText.includes('Free') ? 0 : null);\n  return { option_index: idx, date, label: labelText, price };\n});\nconst totalMatch = document.body.textContent.match(/Order Total:\\s*([\\d,.]+)/i);\nconst total = totalMatch ? parseFloat(totalMatch[1].replace(/,/g,'')) : null;\nreturn { items, delivery_options: deliveryOptions, total };",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "checkout"
+      },
+      "post": {},
+      "type": "getFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "select_delivery_option",
+      "title": "Select Delivery Option",
+      "description": "Selects a delivery option on the page by index or by matching date text.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "option_index": {
+            "type": "number",
+            "description": "The zero-based index of the delivery option to select. Negative values count from the end."
+          },
+          "date_text": {
+            "type": "string",
+            "description": "A substring of the delivery date to match and select the corresponding option."
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const options = document.querySelectorAll('label[aria-label*=\"delivery option\"]'); return options.length > 0 ? true : [false, 'No delivery options found'];",
+      "is_completed": "const checked = document.querySelector('label[aria-label*=\"delivery option\"] input[type=radio]:checked'); return checked ? true : [false, 'No delivery option selected'];",
+      "execute": "const labels = Array.from(document.querySelectorAll('label[aria-label*=\"delivery option\"]'));\nlet target;\nif (typeof inputs.option_index === 'number') {\n  let idx = inputs.option_index;\n  if (idx < 0) idx = labels.length + idx;\n  target = labels[idx];\n} else if (inputs.date_text) {\n  target = labels.find(label => label.textContent.includes(inputs.date_text));\n}\nif (target) {\n  target.click();\n}\nreturn {success: !!target};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "checkout"
+      },
+      "post": {
+        "page_type": "checkout"
+      },
+      "type": "setFields",
+      "pre_tools": {
+        "option_index": [
+          "get_checkout_details"
+        ],
+        "date_text": [
+          "get_checkout_details"
+        ]
+      }
+    },
+    {
+      "name": "place_order",
+      "title": "Place Order",
+      "description": "Clicks the 'Place your order' button on the page and reports whether the action was successful.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('button[aria-label=\"Place your order\"]') ? true : [false, 'Place your order button not found'];",
+      "is_completed": "return document.body.textContent.includes('Order placed') || document.body.textContent.includes('Order confirmed') ? true : [false, 'Order confirmation not detected'];",
+      "execute": "const btn = document.querySelector('button[aria-label=\"Place your order\"]'); if (btn) { btn.click(); return {success: true}; } return {success: false};",
+      "pre_path": "*vercel.app*",
+      "pre": {
+        "page_type": "checkout"
+      },
+      "post": {
+        "page_type": "order_confirmation"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    }
+  ],
+  "is_ready_timeout_ms": 30000
+}
