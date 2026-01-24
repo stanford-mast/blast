@@ -56,7 +56,7 @@
       },
       "tool_executor_type": "smcp",
       "lang": "js",
-      "is_ready": "return document.querySelector('.MuiBox-root[aria-label=\"Shopping Cart\"]') ? true : [false, 'Shopping Cart not loaded'];",
+      "is_ready": "return document.querySelector('.MuiBox-root[aria-label=\"Shopping Cart\"]') || document.querySelector('button[aria-label=\"Place your order\"]') || document.body.textContent.includes('Order placed') ? true : [false, 'Page not fully loaded'];",
       "is_completed": "return typeof output === 'object' && typeof output.page_type === 'string' && typeof output.cart_count === 'number';",
       "execute": "let page_type = 'other'; const path = location.pathname; const bodyText = document.body.textContent; const h1 = document.querySelector('h1.MuiTypography-h1'); if (path === '/') page_type = 'home'; else if (document.querySelector('button[aria-label=\"Buy now\"]') || document.querySelector('#product-details-header')) page_type = 'product'; else if (bodyText.includes('results for') || (document.querySelectorAll('h2[role=\"link\"]').length > 3)) page_type = 'results'; else if (h1 && h1.textContent.includes('Your Orders') && document.querySelector('button[role=\"tab\"]')) page_type = 'orders'; else if (bodyText.includes('Checkout') && document.querySelector('button[aria-label=\"Place your order\"]')) page_type = 'checkout'; else if (bodyText.includes('Write a Customer Review')) page_type = 'review'; else if ((h1 && h1.textContent.includes('Cancel Order')) || document.querySelector('#cancel-reason-label')) page_type = 'cancellation'; else if (bodyText.includes('Order placed') || bodyText.includes('Order confirmed')) page_type = 'order_confirmation'; const cartCountEl = document.querySelector('p[aria-label^=\"Cart has\"]'); const cart_count = cartCountEl ? parseInt(cartCountEl.getAttribute('aria-label').match(/\\d+/)?.[0] || '0', 10) : 0; const selectedTab = document.querySelector('button[role=\"tab\"][aria-selected=\"true\"]'); const current_tab = selectedTab ? selectedTab.textContent.trim() : null; const productName = document.querySelector('#product-details-header') || document.querySelector('h1'); const selected_product = page_type === 'product' && productName ? productName.textContent.trim() : null; return {page_type, selected_product, cart_count, current_tab};",
       "pre_path": "*vercel.app*",
@@ -325,6 +325,7 @@
         "properties": {
           "items": {
             "type": "array",
+            "description": "List of orders on the current tab",
             "items": {
               "type": "object",
               "properties": {
@@ -332,28 +333,33 @@
                   "type": [
                     "string",
                     "null"
-                  ]
+                  ],
+                  "description": "The order identifier, e.g. '675-6026118-7931487'"
                 },
                 "total": {
                   "type": [
                     "string",
                     "null"
-                  ]
+                  ],
+                  "description": "The order total with currency symbol, e.g. '$332.89'"
                 },
                 "date": {
                   "type": [
                     "string",
                     "null"
-                  ]
+                  ],
+                  "description": "The order date in M/D/YYYY format, e.g. '7/18/2024'"
                 },
                 "status": {
                   "type": [
                     "string",
                     "null"
-                  ]
+                  ],
+                  "description": "Delivery status: expected arrival day (e.g. 'Tuesday'), 'Delivered on <date>', or 'Cancelled'"
                 },
                 "items": {
                   "type": "array",
+                  "description": "List of products in this order",
                   "items": {
                     "type": "object",
                     "properties": {
@@ -361,13 +367,15 @@
                         "type": [
                           "string",
                           "null"
-                        ]
+                        ],
+                        "description": "The product name"
                       },
                       "price": {
                         "type": [
                           "string",
                           "null"
-                        ]
+                        ],
+                        "description": "The product price with currency symbol, e.g. '$32.99'"
                       }
                     },
                     "required": [
@@ -879,13 +887,13 @@
     {
       "name": "set_quantity",
       "title": "Set Quantity",
-      "description": "Sets the desired quantity by selecting the corresponding option in a quantity combobox on the page.",
+      "description": "Sets the desired quantity by selecting the corresponding option in the quantity dropdown on the product page.",
       "input_schema": {
         "type": "object",
         "properties": {
           "quantity": {
             "type": "number",
-            "description": "The desired quantity to select (1-based index)."
+            "description": "The desired quantity value to select (e.g. 1, 2, 3, etc.)"
           }
         },
         "required": [
@@ -910,7 +918,7 @@
       "lang": "js",
       "is_ready": "return document.querySelector(\"div[role='combobox'][id='quantity-select']\") ? true : [false, 'Quantity combobox not loaded'];",
       "is_completed": "const combobox = document.querySelector(\"div[role='combobox'][id='quantity-select']\"); if (!combobox) return [false, 'Quantity combobox missing']; const val = combobox.textContent.match(/\\d+/); return val && parseInt(val[0],10) === inputs.quantity ? true : [false, `Quantity not set to ${inputs.quantity}`];",
-      "execute": "const combobox = document.querySelector(\"div[role='combobox'][id='quantity-select']\"); if (!combobox) return {success: false, error: 'Quantity combobox not found'}; combobox.click(); const options = document.querySelectorAll('[role=\"option\"]'); let targetIdx = typeof inputs.quantity === 'number' ? inputs.quantity - 1 : 0; if (targetIdx < 0 || targetIdx >= options.length) targetIdx = 0; const option = options[targetIdx]; if (option) { option.click(); return {success: true}; } return {success: false, error: 'Desired quantity option not found'};",
+      "execute": "const combobox = document.querySelector(\"div[role='combobox'][id='quantity-select']\"); if (!combobox) return {success: false, error: 'Quantity combobox not found'}; combobox.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window})); let options = []; for (let i = 0; i < 20; i++) { await new Promise(r => setTimeout(r, 100)); options = document.querySelectorAll('li[role=\"option\"], [role=\"listbox\"] [role=\"option\"], ul[role=\"listbox\"] li'); if (options.length > 0) break; } if (!options.length) return {success: false, error: 'No quantity options found in dropdown after waiting'}; const availableQtys = []; for (const opt of options) { const m = opt.textContent.match(/\\d+/); if (m) availableQtys.push(parseInt(m[0], 10)); } const targetOpt = Array.from(options).find(opt => { const m = opt.textContent.match(/\\d+/); return m && parseInt(m[0], 10) === inputs.quantity; }); if (targetOpt) { targetOpt.click(); return {success: true}; } return {success: false, error: `Quantity ${inputs.quantity} not available`, available_quantities: availableQtys};",
       "pre_path": "*vercel.app*",
       "pre": {
         "page_type": "product"
@@ -949,7 +957,7 @@
       "tool_executor_type": "smcp",
       "lang": "js",
       "is_ready": "return document.querySelector('button[aria-label=\"Buy now\"]') ? true : [false, 'Buy now button not found'];",
-      "is_completed": "return document.body.textContent.includes('Checkout') && document.querySelector('button[aria-label=\"Place your order\"]') ? true : [false, 'Did not reach checkout page'];",
+      "is_completed": "const hasCheckout = document.body.textContent.includes('Checkout') && document.querySelector('button[aria-label=\"Place your order\"]'); const notOnProduct = !document.querySelector('button[aria-label=\"Buy now\"]'); return hasCheckout && notOnProduct ? true : [false, 'Did not reach checkout page'];",
       "execute": "const btn = document.querySelector('button[aria-label=\"Buy now\"]'); if (btn) { btn.click(); return {success: true}; } else { return {success: false, error: 'Buy now button not found'}; }",
       "pre_path": "*vercel.app*",
       "pre": {
