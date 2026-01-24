@@ -23,14 +23,18 @@ Criteria:
 
 import json
 import sys
+from datetime import datetime
 from typing import Any, Dict, List, Set, Tuple
 
-# July order totals (should be cancelled)
-UNSHIPPED_ORDER_TOTALS: Set[float] = {
-    332.89,  # Order 1 (7/18/2024)
-    119.99,  # Order 2 (7/17/2024)
-    177.89,  # Order 3 (7/16/2024)
+# July order totals (should be cancelled) - keyed by (total, month, year)
+UNSHIPPED_ORDERS: Set[Tuple[float, int, int]] = {
+    (332.89, 7, 2024),
+    (119.99, 7, 2024),
+    (177.89, 7, 2024),
 }
+
+# Just totals for backwards compatibility
+UNSHIPPED_ORDER_TOTALS: Set[float] = {t[0] for t in UNSHIPPED_ORDERS}
 
 # Other order totals (should NOT be cancelled)
 SHIPPED_ORDER_TOTALS: Set[float] = {
@@ -86,6 +90,25 @@ def match_total(actual: float, expected: float, tolerance: float = 0.02) -> bool
     return abs(actual - expected) < tolerance
 
 
+def parse_order_date(date_str: str) -> Tuple[int, int]:
+    """Parse order date string and return (month, year) tuple."""
+    if not date_str:
+        return (0, 0)
+    try:
+        # Handle ISO format: "2024-07-17T14:20:00.000Z"
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        return (dt.month, dt.year)
+    except (ValueError, AttributeError):
+        return (0, 0)
+
+
+def is_july_2024_order(order: Dict) -> bool:
+    """Check if an order was placed in July 2024."""
+    date_str = order.get("date", "")
+    month, year = parse_order_date(date_str)
+    return month == 7 and year == 2024
+
+
 def evaluate(
     final_state: Dict[str, Any], final_result: str
 ) -> Tuple[bool, float, Dict[str, Any]]:
@@ -126,23 +149,35 @@ def evaluate(
         if isinstance(order, dict):
             order_num = order.get("orderNumber", order.get("orderId", ""))
             total = order.get("total", 0)
+            order_date = order.get("date", "")
+            month, year = parse_order_date(order_date)
             order_info = {
                 "orderNumber": order_num,
                 "total": total,
+                "date": order_date,
+                "month": month,
+                "year": year,
             }
             details["cancelled_orders_found"].append(order_info)
 
-            # Check if this is an unshipped order (should be cancelled)
+            # Check if this is a July 2024 unshipped order (should be cancelled)
+            # Must match BOTH total AND be from July 2024
             matched_unshipped = False
-            for expected_total in UNSHIPPED_ORDER_TOTALS:
-                if match_total(total, expected_total):
-                    unshipped_cancelled.add(expected_total)
-                    matched_unshipped = True
-                    logger.info(f"✓ Unshipped order ${expected_total} was cancelled")
-                    break
+            if is_july_2024_order(order):
+                for expected_total in UNSHIPPED_ORDER_TOTALS:
+                    if match_total(total, expected_total):
+                        unshipped_cancelled.add(expected_total)
+                        matched_unshipped = True
+                        logger.info(
+                            f"✓ Unshipped order ${expected_total} (July 2024) was cancelled"
+                        )
+                        break
 
             # Check if this is a shipped order (should NOT be cancelled)
-            if not matched_unshipped:
+            # Only count as incorrectly cancelled if it's not a pre-existing cancelled order
+            # Pre-existing cancelled orders have dates before July 2024
+            if not matched_unshipped and is_july_2024_order(order):
+                # This is a non-July-target order from July 2024 that was cancelled
                 for expected_total in SHIPPED_ORDER_TOTALS:
                     if match_total(total, expected_total):
                         shipped_incorrectly_cancelled.append(expected_total)
