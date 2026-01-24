@@ -138,7 +138,8 @@ tasks:
 
 # - id: omnizon-custom-3
 #   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
-#   goal: Cancel the six orders placed in December and July on the Returns & Orders page.
+#   goal: Cancel the three orders placed in July on the Returns & Orders page.
+#   evaluate: true
 
 # - id: omnizon-custom-4
 #   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
@@ -185,35 +186,35 @@ stages:
       # llm_model: "google:gemini-2.5-flash"
       llm_model_mini: "openai:gpt-4.1-mini"
   
-  - name: "first_of_n_only"
-    description: "Only first-of-n parallelism enabled"
-    config:
-      allow_parallelism:
-        task: false
-        data: false
-        first_of_n: true
-      first_of_n_num_copies: 4
-      max_parallelism_nesting_depth: 1
-      llm_model: "openai:gpt-4.1"
-      # llm_model: "openai:gpt-4.1-mini"
-      # llm_model: "google:gemini-2.5-pro"
-      # llm_model: "google:gemini-2.5-flash"
-      llm_model_mini: "openai:gpt-4.1-mini"
+  # - name: "first_of_n_only"
+  #   description: "Only first-of-n parallelism enabled"
+  #   config:
+  #     allow_parallelism:
+  #       task: false
+  #       data: false
+  #       first_of_n: true
+  #     first_of_n_num_copies: 4
+  #     max_parallelism_nesting_depth: 1
+  #     llm_model: "openai:gpt-4.1"
+  #     # llm_model: "openai:gpt-4.1-mini"
+  #     # llm_model: "google:gemini-2.5-pro"
+  #     # llm_model: "google:gemini-2.5-flash"
+  #     llm_model_mini: "openai:gpt-4.1-mini"
 
-  - name: "task_parallelism_only"
-    description: "Only task-level parallelism for subtasks"
-    config:
-      allow_parallelism:
-        task: true
-        data: false
-        first_of_n: false
-      max_parallel_workers: 4  # Limit number of parallel workers running simultaneously
-      max_parallelism_nesting_depth: 1
-      llm_model: "openai:gpt-4.1"
-      # llm_model: "openai:gpt-4.1-mini"
-      # llm_model: "google:gemini-2.5-pro"
-      # llm_model: "google:gemini-2.5-flash"
-      llm_model_mini: "openai:gpt-4.1-mini"
+  # - name: "task_parallelism_only"
+  #   description: "Only task-level parallelism for subtasks"
+  #   config:
+  #     allow_parallelism:
+  #       task: true
+  #       data: false
+  #       first_of_n: false
+  #     max_parallel_workers: 4  # Limit number of parallel workers running simultaneously
+  #     max_parallelism_nesting_depth: 1
+  #     llm_model: "openai:gpt-4.1"
+  #     # llm_model: "openai:gpt-4.1-mini"
+  #     # llm_model: "google:gemini-2.5-pro"
+  #     # llm_model: "google:gemini-2.5-flash"
+  #     llm_model_mini: "openai:gpt-4.1-mini"
 
   # - name: "baseline"
   #   description: "Baseline with all parallelism disabled"
