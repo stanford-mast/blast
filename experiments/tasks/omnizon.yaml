@@ -44,7 +44,7 @@ tasks:
   initial_state:
     page_type: home
 - id: omnizon-custom-7
-  eval_type: script
+  eval_type: llm
   initial_url: https://amazon-omnizon-z1-rea-lr9f-agi7-xw2-pq6s-git-b7a192-real-sites.vercel.app/
   goal: 'Visit "Gift", "Toy", "Gaming", and "Cosmetic" categories on the menu bar. For each, click on the first item and report the product color.'
   smcp_registry: experiments/tools/omnizon.json

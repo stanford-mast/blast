@@ -21,6 +21,9 @@
               "results",
               "product",
               "orders",
+              "orders_buy_again",
+              "orders_cancelled",
+              "orders_not_shipped",
               "checkout",
               "review",
               "cancellation",
@@ -58,7 +61,7 @@
       "lang": "js",
       "is_ready": "return document.querySelector('.MuiBox-root[aria-label=\"Shopping Cart\"]') || document.querySelector('button[aria-label=\"Place your order\"]') || document.body.textContent.includes('Order placed') ? true : [false, 'Page not fully loaded'];",
       "is_completed": "return typeof output === 'object' && typeof output.page_type === 'string' && typeof output.cart_count === 'number';",
-      "execute": "let page_type = 'other'; const path = location.pathname; const bodyText = document.body.textContent; const h1 = document.querySelector('h1.MuiTypography-h1'); if (path === '/') page_type = 'home'; else if (document.querySelector('button[aria-label=\"Buy now\"]') || document.querySelector('#product-details-header')) page_type = 'product'; else if (bodyText.includes('results for') || (document.querySelectorAll('h2[role=\"link\"]').length > 3)) page_type = 'results'; else if (h1 && h1.textContent.includes('Your Orders') && document.querySelector('button[role=\"tab\"]')) page_type = 'orders'; else if (bodyText.includes('Checkout') && document.querySelector('button[aria-label=\"Place your order\"]')) page_type = 'checkout'; else if (bodyText.includes('Write a Customer Review')) page_type = 'review'; else if ((h1 && h1.textContent.includes('Cancel Order')) || document.querySelector('#cancel-reason-label')) page_type = 'cancellation'; else if (bodyText.includes('Order placed') || bodyText.includes('Order confirmed')) page_type = 'order_confirmation'; const cartCountEl = document.querySelector('p[aria-label^=\"Cart has\"]'); const cart_count = cartCountEl ? parseInt(cartCountEl.getAttribute('aria-label').match(/\\d+/)?.[0] || '0', 10) : 0; const selectedTab = document.querySelector('button[role=\"tab\"][aria-selected=\"true\"]'); const current_tab = selectedTab ? selectedTab.textContent.trim() : null; const productName = document.querySelector('#product-details-header') || document.querySelector('h1'); const selected_product = page_type === 'product' && productName ? productName.textContent.trim() : null; return {page_type, selected_product, cart_count, current_tab};",
+      "execute": "let page_type = 'other'; const path = location.pathname; const bodyText = document.body.textContent; const h1 = document.querySelector('h1.MuiTypography-h1'); const selectedTab = document.querySelector('button[role=\"tab\"][aria-selected=\"true\"]'); const current_tab = selectedTab ? selectedTab.textContent.trim() : null; if (path === '/') page_type = 'home'; else if (document.querySelector('button[aria-label=\"Buy now\"]') || document.querySelector('#product-details-header')) page_type = 'product'; else if (bodyText.includes('results for') || (document.querySelectorAll('h2[role=\"link\"]').length > 3)) page_type = 'results'; else if (h1 && h1.textContent.includes('Your Orders') && document.querySelector('button[role=\"tab\"]')) { if (current_tab === 'Buy Again') page_type = 'orders_buy_again'; else if (current_tab === 'Cancelled Orders') page_type = 'orders_cancelled'; else if (current_tab === 'Not Yet Shipped') page_type = 'orders_not_shipped'; else page_type = 'orders'; } else if (bodyText.includes('Checkout') && document.querySelector('button[aria-label=\"Place your order\"]')) page_type = 'checkout'; else if (bodyText.includes('Write a Customer Review')) page_type = 'review'; else if ((h1 && h1.textContent.includes('Cancel Order')) || document.querySelector('#cancel-reason-label')) page_type = 'cancellation'; else if (bodyText.includes('Order placed') || bodyText.includes('Order confirmed')) page_type = 'order_confirmation'; const cartCountEl = document.querySelector('p[aria-label^=\"Cart has\"]'); const cart_count = cartCountEl ? parseInt(cartCountEl.getAttribute('aria-label').match(/\\d+/)?.[0] || '0', 10) : 0; const productName = document.querySelector('#product-details-header') || document.querySelector('h1'); const selected_product = page_type === 'product' && productName ? productName.textContent.trim() : null; return {page_type, selected_product, cart_count, current_tab};",
       "pre_path": "*vercel.app*",
       "pre": {},
       "post": {},
@@ -97,7 +100,7 @@
     {
       "name": "goto_orders",
       "title": "Goto Orders",
-      "description": "Navigates to the orders page by simulating a click on the orders button.",
+      "description": "Navigates to the orders page (by default, lands on the 'Orders' tab).",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -216,7 +219,7 @@
       "execute": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); for (const tab of tabs) { if (tab.textContent.trim() === 'Orders') { tab.click(); break; } } return {};",
       "pre_path": "*vercel.app*",
       "pre": {
-        "page_type": "orders"
+        "page_type": "orders|orders_buy_again|orders_cancelled|orders_not_shipped"
       },
       "post": {
         "page_type": "orders"
@@ -245,10 +248,10 @@
       "execute": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); for (const tab of tabs) { if (tab.textContent.trim() === 'Buy Again') { tab.click(); break; } } return {};",
       "pre_path": "*vercel.app*",
       "pre": {
-        "page_type": "orders"
+        "page_type": "orders|orders_buy_again|orders_cancelled|orders_not_shipped"
       },
       "post": {
-        "page_type": "orders"
+        "page_type": "orders_buy_again"
       },
       "type": "gotoField",
       "pre_tools": {}
@@ -274,10 +277,10 @@
       "execute": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); for (const tab of tabs) { if (tab.textContent.trim() === 'Cancelled Orders') { tab.click(); break; } } return {};",
       "pre_path": "*vercel.app*",
       "pre": {
-        "page_type": "orders"
+        "page_type": "orders|orders_buy_again|orders_cancelled|orders_not_shipped"
       },
       "post": {
-        "page_type": "orders"
+        "page_type": "orders_cancelled"
       },
       "type": "gotoField",
       "pre_tools": {}
@@ -303,10 +306,10 @@
       "execute": "const tabs = document.querySelectorAll('button[role=\"tab\"]'); for (const tab of tabs) { if (tab.textContent.trim() === 'Not Yet Shipped') { tab.click(); break; } } return {};",
       "pre_path": "*vercel.app*",
       "pre": {
-        "page_type": "orders"
+        "page_type": "orders|orders_buy_again|orders_cancelled|orders_not_shipped"
       },
       "post": {
-        "page_type": "orders"
+        "page_type": "orders_not_shipped"
       },
       "type": "gotoField",
       "pre_tools": {}
@@ -406,7 +409,7 @@
       "execute": "const orderCards = document.querySelectorAll('.MuiCard-root');\nconst orders = Array.from(orderCards).map(card => {\n  const text = card.innerText;\n  const orderNumberMatch = text.match(/ORDER #\\s*([\\d-]+)/);\n  const totalMatch = text.match(/TOTAL[\\s\\n]*\\$([\\d,.]+)/i);\n  const dateMatch = text.match(/ORDER PLACED[\\s\\n]*([\\d\\/]+)/i);\n  const statusMatch = text.match(/Arriving by ([^\\n]+)|Delivered on ([^\\n]+)|Cancelled/i);\n  let status = null;\n  if (statusMatch) status = statusMatch[1] || statusMatch[2] || 'Cancelled';\n  const productEls = card.querySelectorAll('img[alt=\"Product\"]');\n  const items = Array.from(productEls).map(img => {\n    const container = img.closest('.MuiBox-root')?.parentElement;\n    const nameEl = container?.querySelector('p.MuiTypography-body1');\n    const priceEl = Array.from(container?.querySelectorAll('p.MuiTypography-body1') || []).find(p => p.textContent.includes('$'));\n    return { name: nameEl?.textContent.trim() || null, price: priceEl?.textContent.match(/\\$[\\d,.]+/)?.[0] || null };\n  });\n  return { order_number: orderNumberMatch?.[1] || null, total: totalMatch ? '$' + totalMatch[1] : null, date: dateMatch?.[1] || null, status, items };\n});\nreturn {items: orders};",
       "pre_path": "*vercel.app*",
       "pre": {
-        "page_type": "orders"
+        "page_type": "orders|orders_not_shipped|orders_cancelled"
       },
       "post": {},
       "type": "listItems",
@@ -415,17 +418,17 @@
     {
       "name": "goto_cancel",
       "title": "Goto Cancel",
-      "description": "Navigates to and clicks the 'Cancel order' button for a specified order by index or order number.",
+      "description": "Navigates to the cancellation page for a specified order.",
       "input_schema": {
         "type": "object",
         "properties": {
           "order_index": {
             "type": "number",
-            "description": "The zero-based index of the order to cancel."
+            "description": "The zero-based index of the order to open cancellation for."
           },
           "order_number": {
             "type": "string",
-            "description": "The order number identifying which order to cancel."
+            "description": "The order number identifying which order to open cancellation for."
           }
         },
         "required": []
@@ -435,7 +438,7 @@
         "properties": {
           "success": {
             "type": "boolean",
-            "description": "True if the cancel action was performed successfully, false otherwise."
+            "description": "True if navigation to the cancellation page was successful."
           }
         },
         "required": [
@@ -449,7 +452,7 @@
       "execute": "const orderCards = Array.from(document.querySelectorAll('.MuiCard-root'));\nlet targetCard = null;\nif ('order_index' in inputs && typeof inputs.order_index === 'number') {\n  targetCard = orderCards[inputs.order_index];\n} else if ('order_number' in inputs) {\n  targetCard = orderCards.find(card => card.textContent.includes(inputs.order_number));\n}\nif (targetCard) {\n  const cancelBtn = Array.from(targetCard.querySelectorAll('button')).find(btn => btn.textContent.trim() === 'Cancel order');\n  if (cancelBtn) { cancelBtn.click(); return {success: true}; }\n}\nreturn {success: false};",
       "pre_path": "*vercel.app*",
       "pre": {
-        "page_type": "orders"
+        "page_type": "orders|orders_not_shipped"
       },
       "post": {
         "page_type": "cancellation"
@@ -467,7 +470,7 @@
     {
       "name": "cancel_order",
       "title": "Cancel Order",
-      "description": "Cancels an order by clicking the 'Cancel Order' button on the page.",
+      "description": "Confirms and submits the order cancellation on the cancellation page.",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -481,8 +484,8 @@
       "tool_executor_type": "smcp",
       "lang": "js",
       "is_ready": "return Array.from(document.querySelectorAll('button')).some(el => el.textContent.trim().toLowerCase().includes('cancel order')) ? true : [false, 'Cancel Order button not found'];",
-      "is_completed": "return document.body.textContent.toLowerCase().includes('order cancelled') || document.body.textContent.toLowerCase().includes('cancelled order') ? true : [false, 'Cancellation not confirmed'];",
-      "execute": "const btn = Array.from(document.querySelectorAll('button')).find(el => el.textContent.trim().toLowerCase().includes('cancel order')); if(btn){btn.click(); return {success:true};} return {success:false};",
+      "is_completed": "const h1 = document.querySelector('h1.MuiTypography-h1'); const hasTabs = document.querySelectorAll('button[role=\"tab\"]').length > 0; return (h1 && h1.textContent.includes('Your Orders')) || hasTabs ? true : [false, 'Not back on orders page'];",
+      "execute": "const btn = Array.from(document.querySelectorAll('button')).find(el => el.textContent.trim().toLowerCase().includes('cancel order')); if(btn){btn.click(); for(let i=0;i<20;i++){await new Promise(r=>setTimeout(r,250)); if(document.body.textContent.includes('Cancellation Confirmed')){break;}} await new Promise(r=>setTimeout(r,500)); const ordersLink = Array.from(document.querySelectorAll('p')).find(p=>p.textContent.includes('See my orders')); if(ordersLink){ordersLink.click();} return {success:true};} return {success:false};",
       "pre_path": "*vercel.app*",
       "pre": {
         "page_type": "cancellation"
@@ -496,7 +499,7 @@
     {
       "name": "goto_write_review",
       "title": "Goto Write Review",
-      "description": "Navigates to the review section for a specified product by name or index and attempts to click its review button.",
+      "description": "Navigates to the review page for a specified product. Only works on the 'Orders' tab where 'Write a product review' buttons are available (not on 'Buy Again' or other tabs).",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -681,7 +684,7 @@
         "properties": {
           "query": {
             "type": "string",
-            "description": "The search term to use for finding products."
+            "description": "The search term to use for finding products, e.g., chair"
           }
         },
         "required": [
@@ -823,7 +826,7 @@
     {
       "name": "get_product_details",
       "title": "Get Product Details",
-      "description": "Retrieves detailed information about a product, including name, price, color, description, maximum quantity, rating, and attributes.",
+      "description": "Retrieves detailed information about a product, including name, price, color, description, max_quantity (maximum orderable quantity), rating, and attributes.",
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -845,10 +848,8 @@
             "type": "string"
           },
           "max_quantity": {
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer",
+            "description": "Maximum orderable quantity for this product (e.g., 30)"
           },
           "rating": {
             "type": [
@@ -875,7 +876,7 @@
       "lang": "js",
       "is_ready": "return document.querySelector('#product-details-header') || document.querySelector('button[aria-label=\"Buy now\"]') ? true : [false, 'Product page not loaded'];",
       "is_completed": "return output && typeof output.name === 'string' && output.name.length > 0 ? true : [false, 'Product details not extracted'];",
-      "execute": "const nameEl = document.querySelector('#product-details-header');\nconst name = nameEl?.textContent.trim() || '';\nconst priceContainer = document.querySelector('[aria-label=\"product price\"]');\nlet price = '';\nif (priceContainer) { const parts = Array.from(priceContainer.querySelectorAll('p')).map(p => p.textContent.trim()); if (parts.length === 3) { price = parts[0] + parts[1] + '.' + parts[2]; } else { price = parts.join(''); } }\nconst colorEl = Array.from(document.querySelectorAll('p')).find(p => p.textContent.startsWith('Color:'));\nconst color = colorEl?.querySelector('span')?.textContent.trim() || '';\nconst descEl = Array.from(document.querySelectorAll('p')).find(p => p.textContent.includes('About this item'));\nconst descList = descEl?.parentElement?.querySelector('ul');\nlet description = descList ? Array.from(descList.querySelectorAll('li')).map(li => li.textContent.trim()).join(' ') : '';\nconst qbox = document.querySelector('#quantity-select');\nconst max_quantity = qbox ? parseInt(qbox.textContent.match(/\\d+/)?.[0] || '1', 10) : null;\nconst ratingContainer = document.querySelector('[aria-labelledby=\"product-rating\"]');\nconst rating = ratingContainer?.querySelector('p')?.textContent.trim() || null;\nconst attributes = {};\nconst attrBoxes = document.querySelectorAll('.MuiBox-root.css-k008qs');\nattrBoxes.forEach(box => { const ps = box.querySelectorAll('p'); if (ps.length >= 2) { const key = ps[0].textContent.trim(); const value = ps[1].textContent.trim(); if (key && value) attributes[key] = value; } });\nconst rows = document.querySelectorAll('tr');\nrows.forEach(row => { const cells = row.querySelectorAll('td'); if (cells.length >= 2) { const key = cells[0].textContent.trim(); const value = cells[1].textContent.trim(); if (key && value) attributes[key] = value; } });\nconst attrStr = Object.entries(attributes).map(([k,v]) => k + ': ' + v).join('. ');\nif (attrStr) description = description + ' ' + attrStr;\nreturn {name, price, color, description, max_quantity, rating, attributes};",
+      "execute": "const nameEl = document.querySelector('#product-details-header');\nconst name = nameEl?.textContent.trim() || '';\nconst priceContainer = document.querySelector('[aria-label=\"product price\"]');\nlet price = '';\nif (priceContainer) { const parts = Array.from(priceContainer.querySelectorAll('p')).map(p => p.textContent.trim()); if (parts.length === 3) { price = parts[0] + parts[1] + '.' + parts[2]; } else { price = parts.join(''); } }\nconst colorEl = Array.from(document.querySelectorAll('p')).find(p => p.textContent.startsWith('Color:'));\nconst color = colorEl?.querySelector('span')?.textContent.trim() || '';\nconst descEl = Array.from(document.querySelectorAll('p')).find(p => p.textContent.includes('About this item'));\nconst descList = descEl?.parentElement?.querySelector('ul');\nlet description = descList ? Array.from(descList.querySelectorAll('li')).map(li => li.textContent.trim()).join(' ') : '';\nlet max_quantity = 1;\nconst qtySelect = document.querySelector('#quantity-select');\nif (qtySelect) {\n  qtySelect.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));\n  await new Promise(r=>setTimeout(r,300));\n  const options = document.querySelectorAll('li[role=\"option\"]');\n  if (options.length > 0) {\n    const nums = Array.from(options).map(o => parseInt(o.textContent.match(/\\d+/)?.[0] || '0', 10)).filter(n => n > 0);\n    max_quantity = Math.max(...nums, 1);\n  }\n  document.body.click();\n  await new Promise(r=>setTimeout(r,100));\n}\nconst ratingContainer = document.querySelector('[aria-labelledby=\"product-rating\"]');\nconst rating = ratingContainer?.querySelector('p')?.textContent.trim() || null;\nconst attributes = {};\nconst attrBoxes = document.querySelectorAll('.MuiBox-root.css-k008qs');\nattrBoxes.forEach(box => { const ps = box.querySelectorAll('p'); if (ps.length >= 2) { const key = ps[0].textContent.trim(); const value = ps[1].textContent.trim(); if (key && value) attributes[key] = value; } });\nconst rows = document.querySelectorAll('tr');\nrows.forEach(row => { const cells = row.querySelectorAll('td'); if (cells.length >= 2) { const key = cells[0].textContent.trim(); const value = cells[1].textContent.trim(); if (key && value) attributes[key] = value; } });\nconst attrStr = Object.entries(attributes).map(([k,v]) => k + ': ' + v).join('. ');\nif (attrStr) description = description + ' ' + attrStr;\nreturn {name, price, color, description, max_quantity, rating, attributes};",
       "pre_path": "*vercel.app*",
       "pre": {
         "page_type": "product"
@@ -1085,7 +1086,7 @@
       "tool_executor_type": "smcp",
       "lang": "js",
       "is_ready": "return document.querySelector('button[aria-label=\"Place your order\"]') ? true : [false,'Checkout not loaded'];",
-      "is_completed": "return typeof output === 'object' && Array.isArray(output.items) && output.items.length > 0 && typeof output.total === 'number';",
+      "is_completed": "return typeof output === 'object' && Array.isArray(output.items) && Array.isArray(output.delivery_options);",
       "execute": "const itemName = document.querySelector('div[role=\"combobox\"]')?.parentElement?.textContent.match(/^[^\\d]+/); const itemPrice = document.querySelector('div[role=\"combobox\"]')?.parentElement?.textContent.match(/\\d+\\.\\d{2}/); const quantityEl = document.querySelector('div[role=\"combobox\"]'); let quantity = 1; if (quantityEl) { const qtyMatch = quantityEl.textContent.match(/\\d+/); if (qtyMatch) quantity = parseInt(qtyMatch[0], 10); } const items = [{ name: itemName ? itemName[0].trim() : '', price: itemPrice ? parseFloat(itemPrice[0]) : null, quantity }];\nconst deliveryOptions = Array.from(document.querySelectorAll('label[aria-label$=\"delivery option\"], label[aria-label$=\"Key delivery option\"], label[aria-label*=\"Omnizon Day\"]')).map((label, idx) => {\n  const dateText = label.parentElement.querySelector('p')?.textContent || '';\n  const descs = Array.from(label.parentElement.querySelectorAll('p')).map(p=>p.textContent);\n  let date = descs.length>0 ? descs[0] : '';\n  let labelText = descs.length>1 ? descs[1] : '';\n  let priceMatch = label.getAttribute('aria-label').match(/\\d+\\.\\d{2}/);\n  let price = priceMatch ? parseFloat(priceMatch[0]) : (labelText.includes('Free') ? 0 : null);\n  return { option_index: idx, date, label: labelText, price };\n});\nconst totalMatch = document.body.textContent.match(/Order Total:\\s*([\\d,.]+)/i);\nconst total = totalMatch ? parseFloat(totalMatch[1].replace(/,/g,'')) : null;\nreturn { items, delivery_options: deliveryOptions, total };",
       "pre_path": "*vercel.app*",
       "pre": {
