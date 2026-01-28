@@ -1,0 +1,1182 @@
+{
+  "description": "",
+  "tools": [
+    {
+      "name": "search",
+      "title": "Search",
+      "description": "Performs a search.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search term or keywords to filter results by."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query that was submitted."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('#js-header-search #search') || document.querySelector('#js-header-search input[name=\"search\"]') ? true : [false, 'Search input not found'];",
+      "is_completed": "return location.pathname.includes('/search') ? true : [false, 'Did not navigate to search results'];",
+      "execute": "const host = document.querySelector('#js-header-search'); const input = host.querySelector('#search') || host.querySelector('input[name=\"search\"]'); if (!input) throw new Error('Search input not found'); input.value = inputs.query; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); const form = host.querySelector('form'); if (form) { form.submit(); } else { input.closest('form')?.submit(); } return {query: inputs.query};",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "*"
+      },
+      "post": {
+        "page_type": "search_results"
+      },
+      "type": "setFilter",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_project",
+      "title": "Goto Project",
+      "description": "Navigates to the specific project.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "project_path": {
+            "type": "string",
+            "description": "The full project path (e.g. 'primer/design') or partial name to fuzzy match (e.g. 'a11yproject')."
+          }
+        },
+        "required": [
+          "project_path"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the navigation command was successfully initiated."
+          },
+          "matched_path": {
+            "type": "string",
+            "description": "The actual project path that was navigated to (may differ from input if fuzzy matched)."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "const input = inputs.project_path.toLowerCase(); const path = location.pathname.toLowerCase(); return (path.includes(input) || path.split('/').filter(Boolean).length >= 2) ? true : [false, 'Navigation to project failed'];",
+      "execute": "const input = inputs.project_path; if (input.includes('/')) { window.location.href = `http://localhost:8023/${input}`; return {success: true, matched_path: input}; } const query = input.toLowerCase(); const projectLinks = Array.from(document.querySelectorAll('a[href]')).filter(a => { const href = a.getAttribute('href'); return href && href.startsWith('/') && href.split('/').filter(Boolean).length >= 2 && !href.includes('/-/'); }); const match = projectLinks.find(a => a.getAttribute('href').toLowerCase().includes(query)); if (match) { const matchedPath = match.getAttribute('href').substring(1); window.location.href = match.href; return {success: true, matched_path: matchedPath}; } window.location.href = `http://localhost:8023/${input}`; return {success: true, matched_path: input};",
+      "pre_path": "*localhost:8023*",
+      "pre": {},
+      "post": {
+        "page_type": "project",
+        "project_path": "$project_path"
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_home",
+      "title": "Goto Home",
+      "description": "Navigates to the home page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the navigation command was successfully initiated."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "const path = window.location.pathname; return (path === '/' || path === '/dashboard/projects' || path === '/users/sign_in' || path === '/explore') ? true : [false, 'Failed to navigate to a home-like page'];",
+      "execute": "window.location.href = '/'; return {success: true};",
+      "pre_path": "*localhost:8023*",
+      "pre": {},
+      "post": {
+        "page_type": "home"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_create_blank_project",
+      "title": "Goto Create Blank Project",
+      "description": "Navigates to the create blank project page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "return (window.location.pathname === '/projects/new' && window.location.hash === '#blank_project') ? true : [false, 'Not on blank project page'];",
+      "execute": "window.location.href = '/projects/new#blank_project';",
+      "pre_path": "*localhost:8023*",
+      "pre": {},
+      "post": {
+        "page_type": "create_project"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "set_create_project_details",
+      "title": "Set Create Project Details",
+      "description": "Sets the project name and visibility level.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The desired name for the new project."
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "description": "The visibility level of the project (public, internal, or private)."
+          }
+        },
+        "required": [
+          "name",
+          "visibility"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The value successfully set in the project name input field."
+          },
+          "path": {
+            "type": "string",
+            "description": "The slugified path generated from the project name."
+          }
+        },
+        "required": [
+          "name",
+          "path"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('#blank-project-pane #project_name') ? true : [false, 'Project name input not found'];",
+      "is_completed": "return document.querySelector('#blank-project-pane #project_name').value === inputs.name ? true : [false, 'Field not updated'];",
+      "execute": "const nameInput = document.querySelector('#blank-project-pane #project_name'); const pathInput = document.querySelector('#blank-project-pane #project_path'); if (nameInput) { nameInput.value = inputs.name; nameInput.dispatchEvent(new Event('input', { bubbles: true })); nameInput.dispatchEvent(new Event('change', { bubbles: true })); } if (pathInput) { pathInput.value = inputs.name.toLowerCase().replace(/\\s+/g, '-'); pathInput.dispatchEvent(new Event('input', { bubbles: true })); pathInput.dispatchEvent(new Event('change', { bubbles: true })); } const val = inputs.visibility === 'public' ? '20' : (inputs.visibility === 'internal' ? '10' : '0'); const radio = document.querySelector(`#blank-project-pane input[name=\"project[visibility_level]\"][value=\"${val}\"]`); if (radio) radio.click(); return {name: nameInput?.value, path: pathInput?.value};",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "create_project"
+      },
+      "post": {
+        "page_type": "create_project"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "submit_create_project",
+      "title": "Submit Create Project",
+      "description": "Submits the creation of a new project.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "clicked": {
+            "type": "boolean",
+            "description": "Indicates whether the create project button was found and clicked."
+          }
+        },
+        "required": [
+          "clicked"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('#blank-project-pane .js-create-project-button') ? true : [false, 'Submit button not found'];",
+      "is_completed": "const notOnNew = !location.href.includes('/projects/new'); const path = location.pathname; const segments = path.split('/').filter(Boolean); const isProjectPage = segments.length >= 2 && !path.includes('/-/'); const hasProjectContent = document.querySelector('.project-home-panel, .project-overview, .tree-holder, [data-qa-selector=\"project_name\"]'); return (notOnNew && (isProjectPage || hasProjectContent)) ? true : [false, 'Project page not fully loaded'];",
+      "execute": "const btn = document.querySelector('#blank-project-pane .js-create-project-button'); if (btn) { btn.disabled = false; btn.classList.remove('disabled'); btn.click(); } return {clicked: !!btn};",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "create_project"
+      },
+      "post": {
+        "page_type": "project"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "observe_gitlab",
+      "title": "Observe Gitlab",
+      "description": "Observes the current GitLab page to identify the page type, project path, and the currently logged-in user.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "page_type": {
+            "type": "string",
+            "enum": [
+              "home",
+              "project",
+              "search_results",
+              "create_project",
+              "project_members",
+              "invite_modal",
+              "project_issues",
+              "new_issue",
+              "issue_detail",
+              "editor",
+              "contributors",
+              "commits",
+              "status_modal",
+              "unknown"
+            ],
+            "description": "The type of GitLab page currently being viewed."
+          },
+          "project_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The full path of the GitLab project, if applicable."
+          },
+          "current_user": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The username of the authenticated user."
+          }
+        },
+        "required": [
+          "page_type",
+          "project_path",
+          "current_user"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "return true;",
+      "execute": "const path = window.location.pathname; const hash = window.location.hash; let page_type = 'unknown'; let project_path = null; const inviteModal = document.querySelector('#invite-members-modal-3___BV_modal_content_') || document.querySelector('[id*=\"invite-members-modal\"]'); const inviteModalVisible = inviteModal && inviteModal.offsetParent !== null; const statusModal = document.querySelector('#set-user-status-modal___BV_modal_content_') || document.querySelector('.modal-content .modal-title'); if (inviteModalVisible) { page_type = 'invite_modal'; if (path.includes('/-/project_members')) { project_path = path.split('/-/')[0].substring(1); } } else if (statusModal && (statusModal.id === 'set-user-status-modal___BV_modal_content_' || (statusModal.textContent && statusModal.textContent.includes('status')))) { page_type = 'status_modal'; } else if (path === '/' || path.startsWith('/dashboard') || path === '/explore') { page_type = 'home'; } else if (path.includes('/search')) { page_type = 'search_results'; } else if (path === '/projects/new' || path.startsWith('/projects/new')) { page_type = 'create_project'; } else if (path.includes('/-/project_members')) { page_type = 'project_members'; project_path = path.split('/-/')[0].substring(1); } else if (path.includes('/-/issues/new')) { page_type = 'new_issue'; project_path = path.split('/-/')[0].substring(1); } else if (path.match(/\\/-\\/issues\\/\\d+/)) { page_type = 'issue_detail'; project_path = path.split('/-/')[0].substring(1); } else if (path.match(/\\/-\\/issues\\/?$/) || path.includes('/-/issues?')) { page_type = 'project_issues'; project_path = path.split('/-/')[0].substring(1); } else if (path.includes('/-/graphs/')) { page_type = 'contributors'; project_path = path.split('/-/')[0].substring(1); } else if (path.includes('/-/commits/')) { page_type = 'commits'; project_path = path.split('/-/')[0].substring(1); } else if (path.includes('/-/new/') || path.includes('/-/edit/')) { page_type = 'editor'; project_path = path.split('/-/')[0].substring(1); } else if (path.includes('/-/blob/') || path.includes('/-/tree/')) { page_type = 'project'; project_path = path.split('/-/')[0].substring(1); } else { const segments = path.split('/').filter(Boolean); const hasProjectContent = document.querySelector('.project-home-panel, .project-overview, .empty-state, .file-holder, .tree-holder, [data-qa-selector=\"project_name\"]'); if (segments.length >= 2 && !path.includes('/-/')) { page_type = 'project'; project_path = segments.slice(0, 2).join('/'); } else if (path.includes('/-/') && segments.length >= 2) { page_type = 'project'; project_path = path.split('/-/')[0].substring(1); } else if (hasProjectContent) { page_type = 'project'; const match = path.match(/^\\/([^\\/]+\\/[^\\/]+)/); if (match) project_path = match[1]; } } const current_user = document.querySelector('[data-user]')?.getAttribute('data-user') || document.querySelector('[data-testid=\"user-menu\"] a[data-user]')?.getAttribute('data-user') || null; return { page_type, project_path, current_user };",
+      "pre_path": "*localhost:8023*",
+      "pre": {},
+      "post": {},
+      "type": "observe",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_project_members",
+      "title": "Goto Project Members",
+      "description": "Navigates to the project members page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the navigation action was initiated successfully."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "const onPage = location.pathname.includes('/project_members'); const hasContent = document.querySelector('[data-qa-selector=\"invite_members_button\"]') || document.querySelector('button[data-testid=\"invite-members-button\"]') || document.querySelector('.js-invite-members-modal-trigger') || document.querySelector('[data-qa-selector=\"member_row\"]'); return (onPage && hasContent) ? true : [false, 'Members page not fully loaded'];",
+      "execute": "const membersLink = document.querySelector('#js-onboarding-members-link') || Array.from(document.querySelectorAll('a')).find(el => el.textContent.trim() === 'Members'); if (membersLink) { membersLink.click(); return { success: true }; } const path = location.pathname.split('/-/')[0]; if (path && path !== '/' && !path.includes('/projects/new')) { location.href = path + '/-/project_members'; return { success: true }; } return { success: false, error: 'Cannot determine project path' };",
+      "pre_path": "*localhost:8023*",
+      "pre": {},
+      "post": {
+        "page_type": "project_members"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_project_members",
+      "title": "List Project Members",
+      "description": "Lists the project members, including their names, usernames, and assigned roles.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "The full display name of the project member"
+                },
+                "username": {
+                  "type": "string",
+                  "description": "The unique username of the project member"
+                },
+                "role": {
+                  "type": "string",
+                  "description": "The maximum role or permission level assigned to the member"
+                }
+              },
+              "required": [
+                "name",
+                "username",
+                "role"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('tr[data-qa-selector=\"member_row\"]') ? true : [false, 'No member rows found'];",
+      "is_completed": "return true;",
+      "execute": "const rows = Array.from(document.querySelectorAll('tr[data-qa-selector=\"member_row\"]')); return { items: rows.map(row => { const nameEl = row.querySelector('.gl-avatar-labeled-label'); const userEl = row.querySelector('.gl-avatar-labeled-sublabel'); const roleEl = row.querySelector('[data-label=\"Max role\"] .gl-badge, [data-label=\"Max role\"] .gl-dropdown-button-text, [data-label=\"Max role\"]'); return { name: nameEl ? nameEl.textContent.trim() : '', username: userEl ? userEl.textContent.trim().replace('@', '') : '', role: roleEl ? roleEl.textContent.trim() : '' }; }) };",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "project_members"
+      },
+      "post": {
+        "page_type": "project_members"
+      },
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "open_invite_modal",
+      "title": "Open Invite Modal",
+      "description": "Opens the invite members modal.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const inviteBtn = document.querySelector('[data-qa-selector=\"invite_members_button\"]') || document.querySelector('button[data-testid=\"invite-members-button\"]') || Array.from(document.querySelectorAll('button')).find(b => b.querySelector('.gl-button-text')?.textContent.trim() === 'Invite members'); return inviteBtn ? true : [false, 'Invite button not visible yet'];",
+      "is_completed": "const modal = document.querySelector('[data-qa-selector=\"members_token_select_input\"]') || document.querySelector('#invite-members-modal-3_search'); return modal ? true : [false, 'Invite modal not open'];",
+      "execute": "const inviteBtn = document.querySelector('[data-qa-selector=\"invite_members_button\"]') || document.querySelector('button[data-testid=\"invite-members-button\"]') || Array.from(document.querySelectorAll('button')).find(b => b.querySelector('.gl-button-text')?.textContent.trim() === 'Invite members') || Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Invite members')); if (inviteBtn) { inviteBtn.click(); await new Promise(r => setTimeout(r, 500)); return { success: true }; } return { success: false, error: 'Invite button not found' };",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "project_members"
+      },
+      "post": {
+        "page_type": "invite_modal"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "invite_project_member",
+      "title": "Invite Project Member",
+      "description": "Invites a new member to a project.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "The username or handle of the user to invite."
+          },
+          "role": {
+            "type": "string",
+            "description": "The access level or role to assign to the user (e.g., Guest, Reporter, Developer, Maintainer, Owner)."
+          }
+        },
+        "required": [
+          "username",
+          "role"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the invitation process was initiated successfully."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('#invite-members-modal-3_search, [data-qa-selector=\"members_token_select_input\"]') ? true : [false, 'Invite modal not open'];",
+      "is_completed": "const modal = document.querySelector('#invite-members-modal-3___BV_modal_content_') || document.querySelector('[id*=\"invite-members-modal\"]'); const isVisible = modal && modal.offsetParent !== null; return !isVisible ? true : [false, 'Modal still open'];",
+      "execute": "const username = inputs.username; const role = inputs.role; const input = document.querySelector('[data-qa-selector=\"members_token_select_input\"]') || document.querySelector('#invite-members-modal-3_search'); if (!input) throw new Error('Input not found'); input.value = username; input.dispatchEvent(new Event('input', { bubbles: true })); return new Promise((resolve) => { const tryClickSuggestion = (attempts) => { if (attempts > 15) { resolve({ success: false, error: 'No matching user found for: ' + username }); return; } const dropdown = document.querySelector('.dropdown-menu.show, .dropdown-menu.gl-absolute'); if (dropdown) { const buttons = dropdown.querySelectorAll('button.dropdown-item:not([disabled])'); for (const btn of buttons) { const sublabel = btn.querySelector('.gl-avatar-labeled-sublabel'); const label = btn.querySelector('.gl-avatar-labeled-label'); const text = (sublabel?.textContent || '') + ' ' + (label?.textContent || '') + ' ' + (btn.textContent || ''); if (text.toLowerCase().includes(username.toLowerCase()) && !text.includes('No matches')) { btn.click(); setTimeout(() => { const roleDropdown = document.querySelector('[data-qa-selector=\"access_level_dropdown\"]') || document.querySelector('select#invite-members-modal-3_dropdown'); if (roleDropdown && roleDropdown.tagName === 'SELECT') { const roleValues = { 'Guest': '10', 'Reporter': '20', 'Developer': '30', 'Maintainer': '40', 'Owner': '50' }; const targetValue = roleValues[role] || Object.entries(roleValues).find(([k]) => k.toLowerCase().includes(role.toLowerCase()))?.[1] || '30'; roleDropdown.value = targetValue; roleDropdown.dispatchEvent(new Event('change', { bubbles: true })); } const inviteBtn = document.querySelector('[data-qa-selector=\"invite_button\"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Invite'); if (inviteBtn) inviteBtn.click(); resolve({ success: true }); }, 300); return; } } } setTimeout(() => tryClickSuggestion(attempts + 1), 200); }; setTimeout(() => tryClickSuggestion(0), 300); });",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "invite_modal"
+      },
+      "post": {
+        "page_type": "project_members"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_add_license",
+      "title": "Goto Add License",
+      "description": "Navigates to the license creation page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the navigation or click action was initiated successfully."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "const hasLicenseSelector = document.querySelector('.license-selector') || document.querySelector('.js-license-selector') || document.querySelector('.js-license-selector-wrap'); return hasLicenseSelector ? true : [false, 'Not on license selection page'];",
+      "execute": "const projectPath = window.location.pathname.split('/-/')[0] || window.location.pathname; window.location.href = window.location.origin + projectPath + '/-/new/main?file_name=LICENSE&commit_message=Add+LICENSE'; return {success: true};",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "project"
+      },
+      "post": {
+        "page_type": "editor"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_license_templates",
+      "title": "List License Templates",
+      "description": "Lists available license templates.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "The display name of the license template."
+                },
+                "key": {
+                  "type": "string",
+                  "description": "The unique identifier or data-key for the license template."
+                }
+              },
+              "required": [
+                "name",
+                "key"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('.js-license-selector, .license-selector button') ? true : [false, 'License selector not found'];",
+      "is_completed": "return true;",
+      "execute": "try { const btn = document.querySelector('.js-license-selector') || document.querySelector('.license-selector button'); if (!btn) return {items: [], error: 'License selector not found'}; const dataAttr = btn.getAttribute('data-data'); if (!dataAttr) return {items: [], error: 'No license data found'}; const data = JSON.parse(dataAttr); const items = []; for (const category of Object.values(data)) { if (Array.isArray(category)) { for (const lic of category) { items.push({ name: lic.name, key: lic.key || lic.id }); } } } return {items}; } catch(e) { return {items: [], error: e.message}; }",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "editor"
+      },
+      "post": {
+        "page_type": "editor"
+      },
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "select_license_template",
+      "title": "Select License Template",
+      "description": "Selects and applies a specific license template.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "template_name": {
+            "type": "string",
+            "description": "The name of the license template to select (e.g., 'MIT License', 'Apache License 2.0')."
+          }
+        },
+        "required": [
+          "template_name"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the template was successfully found and clicked."
+          },
+          "selected": {
+            "type": "string",
+            "description": "The exact text content of the template that was selected."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('.js-license-selector, .js-license-selector-wrap') ? true : [false, 'License selector not found'];",
+      "is_completed": "const editor = document.querySelector('.monaco-editor'); const hasContent = editor && editor.textContent && editor.textContent.length > 100; return hasContent ? true : [false, 'License text not populated in editor'];",
+      "execute": "const btn = document.querySelector('.js-license-selector'); if (!btn) return {success: false, error: 'License selector button not found'}; btn.click(); await new Promise(r => setTimeout(r, 300)); const container = document.querySelector('.js-license-selector-wrap'); const items = container ? Array.from(container.querySelectorAll('.dropdown-content a[data-group]')) : []; const target = items.find(el => el.textContent.trim().toLowerCase().includes(inputs.template_name.toLowerCase()) || inputs.template_name.toLowerCase().includes(el.textContent.trim().toLowerCase())); if (target) { target.click(); return { success: true, selected: target.textContent.trim() }; } return {success: false, error: 'Template not found: ' + inputs.template_name + '. Available: ' + items.map(i => i.textContent.trim()).join(', ')};",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "editor"
+      },
+      "post": {
+        "page_type": "editor"
+      },
+      "type": "setFields",
+      "pre_tools": {
+        "template_name": [
+          "list_license_templates"
+        ]
+      }
+    },
+    {
+      "name": "commit_license",
+      "title": "Commit License",
+      "description": "Commits the license changes.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the commit button was successfully found and clicked."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the commit button was not found."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const btn = document.querySelector('#commit-changes') || document.querySelector('button[data-qa-selector=\"commit_button\"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Commit changes')); return btn ? true : [false, 'Commit button not visible'];",
+      "is_completed": "const hasFlash = document.querySelector('.flash-notice') || document.querySelector('.gl-alert-info'); const flashText = hasFlash && hasFlash.textContent; const isSuccess = flashText && flashText.includes('successfully'); const onBlobPage = location.pathname.includes('/-/blob/'); return (isSuccess || onBlobPage) ? true : [false, 'Commit not yet complete'];",
+      "execute": "const btn = document.querySelector('#commit-changes') || document.querySelector('button[data-qa-selector=\"commit_button\"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Commit changes')); if (btn) { btn.click(); return {success: true}; } return {success: false, error: 'Commit button not found'};",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "editor"
+      },
+      "post": {
+        "page_type": "project"
+      },
+      "type": "setFields",
+      "pre_tools": {
+        "template": [
+          "select_license_template"
+        ]
+      }
+    },
+    {
+      "name": "goto_project_issues",
+      "title": "Goto Project Issues",
+      "description": "Navigates to the issues section.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the issues link was found and clicked successfully."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "return window.location.pathname.includes('/-/issues') ? true : [false, 'Not on issues list page'];",
+      "execute": "const projectPath = window.location.pathname.split('/-/')[0] || window.location.pathname; window.location.href = window.location.origin + projectPath + '/-/issues'; return {success: true};",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "project"
+      },
+      "post": {
+        "page_type": "project_issues"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_new_issue",
+      "title": "Goto New Issue",
+      "description": "Navigates to the new issue creation page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the new issue button was found and clicked successfully."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return (document.querySelector('a[title=\"New issue\"]') || document.querySelector('a[href$=\"/-/issues/new\"]')) ? true : [false, 'New issue button not found'];",
+      "is_completed": "return window.location.pathname.endsWith('/issues/new') ? true : [false, 'Not on new issue page'];",
+      "execute": "const btn = document.querySelector('a[title=\"New issue\"]') || document.querySelector('a[href$=\"/-/issues/new\"]'); if (btn) btn.click(); return {success: !!btn};",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "project_issues"
+      },
+      "post": {
+        "page_type": "new_issue"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "set_issue_title",
+      "title": "Set Issue Title",
+      "description": "Sets the title of the issue.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The title of the issue."
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('#issue_title') ? true : [false, 'Issue title input not found'];",
+      "is_completed": "const input = document.querySelector('#issue_title'); const val = input ? input.value : ''; return val && val.length > 0 ? true : [false, 'Title not set, current value: ' + val];",
+      "execute": "const input = document.querySelector('#issue_title'); input.value = inputs.title; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); return { success: true };",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "new_issue"
+      },
+      "post": {},
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "set_issue_assignee",
+      "title": "Set Issue Assignee",
+      "description": "Sets the assignee for the issue.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "myself": {
+            "type": "boolean",
+            "description": "If true, assigns the issue to the current user by clicking 'Assign to me' link."
+          },
+          "username": {
+            "type": "string",
+            "description": "The username to assign the issue to (ignored if myself is true)."
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "assigned_to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('.assign-to-me-link') || document.querySelector('.js-assignee-search') ? true : [false, 'Assignee controls not found'];",
+      "is_completed": "const assigneeBlock = document.querySelector('.js-sidebar-assignee-data') || document.querySelector('.block.assignee'); const text = assigneeBlock ? assigneeBlock.textContent : ''; const hasAssignee = !text.includes('None') && !text.includes('assign yourself'); return hasAssignee ? true : [false, 'Assignee not set, current: ' + text.substring(0, 50)];",
+      "execute": "if (inputs.myself) { const link = document.querySelector('.assign-to-me-link') || document.querySelector('a[data-qa-selector=\"assign_to_me_link\"]'); if (link) { link.click(); await new Promise(r => setTimeout(r, 500)); return { success: true, assigned_to: 'myself' }; } return { success: false, error: 'Assign to me link not found' }; } else if (inputs.username) { const search = document.querySelector('.js-assignee-search'); if (search) { search.click(); await new Promise(r => setTimeout(r, 500)); const input = document.querySelector('.dropdown-menu-assignee .dropdown-input-field'); if (input) { input.value = inputs.username; input.dispatchEvent(new Event('input', { bubbles: true })); await new Promise(r => setTimeout(r, 500)); const result = Array.from(document.querySelectorAll('.dropdown-menu-assignee .dropdown-content li a')).find(el => el.textContent.includes(inputs.username)); if (result) { result.click(); return { success: true, assigned_to: inputs.username }; } } } return { success: false, error: 'Could not assign to ' + inputs.username }; } return { success: false, error: 'No assignee specified' };",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "new_issue"
+      },
+      "post": {},
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "set_issue_due_date",
+      "title": "Set Issue Due Date",
+      "description": "Sets the due date for the issue.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "due_date": {
+            "type": "string",
+            "description": "The due date in YYYY-MM-DD format (e.g., 2030-01-03)."
+          }
+        },
+        "required": [
+          "due_date"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "date_value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('#issuable-due-date') ? true : [false, 'Due date input not found'];",
+      "is_completed": "const input = document.querySelector('#issuable-due-date'); const val = input ? input.value : ''; return val && val.length > 0 ? true : [false, 'Due date not set, current value: ' + val];",
+      "execute": "const dateInput = document.querySelector('#issuable-due-date'); if (!dateInput) return { success: false, error: 'Date input not found' }; const [year, month, day] = inputs.due_date.split('-').map(Number); const dateObj = new Date(year, month - 1, day); const pika = dateInput._pika || dateInput._pikaday || dateInput.pikaday; if (pika && typeof pika.setDate === 'function') { pika.setDate(dateObj); await new Promise(r => setTimeout(r, 300)); return { success: true, date_value: dateInput.value, method: 'pika_api' }; } if (window.jQuery) { const $input = jQuery(dateInput); const pikadata = $input.data('pikaday') || $input.data('datepicker'); if (pikadata && typeof pikadata.setDate === 'function') { pikadata.setDate(dateObj); await new Promise(r => setTimeout(r, 300)); return { success: true, date_value: dateInput.value, method: 'jquery_data' }; } } dateInput.click(); await new Promise(r => setTimeout(r, 500)); const picker = document.querySelector('.pika-single'); if (picker) { const yearSelect = picker.querySelector('.pika-select-year'); const monthSelect = picker.querySelector('.pika-select-month'); if (yearSelect && monthSelect) { yearSelect.value = String(year); const yearEvt = new Event('change', { bubbles: true }); yearSelect.dispatchEvent(yearEvt); await new Promise(r => setTimeout(r, 600)); monthSelect.value = String(month - 1); const monthEvt = new Event('change', { bubbles: true }); monthSelect.dispatchEvent(monthEvt); await new Promise(r => setTimeout(r, 600)); } const dayBtn = document.querySelector(`.pika-button[data-pika-day=\"${day}\"]`); if (dayBtn) { dayBtn.click(); await new Promise(r => setTimeout(r, 300)); return { success: true, date_value: dateInput.value, method: 'day_click' }; } } dateInput.value = inputs.due_date; dateInput.dispatchEvent(new Event('change', { bubbles: true })); return { success: true, date_value: dateInput.value, method: 'fallback_value', warning: 'Used fallback - date may not be saved' };",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "new_issue"
+      },
+      "post": {},
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "submit_issue",
+      "title": "Submit Issue",
+      "description": "Submits the new issue form. Requires title to be set first.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const title = document.querySelector('#issue_title'); const hasTitle = title && title.value && title.value.length > 0; const btn = document.querySelector('button[data-qa-selector=\"issuable_create_button\"]'); return hasTitle && btn ? true : [false, 'Title not set or submit button not found'];",
+      "is_completed": "return !document.querySelector('#issue_title') ? true : [false, 'Still on issue creation page'];",
+      "execute": "const btn = document.querySelector('button[data-qa-selector=\"issuable_create_button\"]'); if (btn) { btn.click(); return { success: true }; } return { success: false, error: 'Submit button not found' };",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "new_issue"
+      },
+      "post": {
+        "page_type": "issue_detail"
+      },
+      "type": "setFields",
+      "pre_tools": {
+        "title": [
+          "set_issue_title"
+        ]
+      }
+    },
+    {
+      "name": "goto_edit_status",
+      "title": "Goto Edit Status",
+      "description": "Opens the user status edit modal.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return (document.querySelector('[data-testid=\"user-menu\"] .header-user-dropdown-toggle') || document.querySelector('.header-user-dropdown-toggle')) ? true : [false, 'User menu toggle not found'];",
+      "is_completed": "const modal = document.querySelector('#set-user-status-modal___BV_modal_content_') || document.querySelector('[id*=\"set-user-status-modal\"]') || document.querySelector('.modal-content'); const title = modal?.querySelector('.modal-title'); return (modal && title && title.textContent.toLowerCase().includes('status')) ? true : [false, 'Status modal not visible'];",
+      "execute": "const toggle = document.querySelector('[data-testid=\"user-menu\"] .header-user-dropdown-toggle') || document.querySelector('.header-user-dropdown-toggle'); if (toggle) { toggle.click(); await new Promise(r => setTimeout(r, 800)); } const statusBtn = document.querySelector('.js-set-status-modal-trigger') || document.querySelector('button.js-set-status-modal-trigger'); if (statusBtn) { statusBtn.click(); await new Promise(r => setTimeout(r, 500)); } return {success: true};",
+      "pre_path": "*localhost:8023*",
+      "pre": {},
+      "post": {
+        "page_type": "status_modal"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "set_status_details",
+      "title": "Set Status Details",
+      "description": "Sets the user's status message and emoji.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "The status message text to be displayed."
+          },
+          "emoji": {
+            "type": "string",
+            "description": "The emoji shortcode to associate with the status."
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the status was successfully updated."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the operation failed."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const modal = document.querySelector('#set-user-status-modal___BV_modal_content_') || document.querySelector('[id*=\"set-user-status-modal\"]') || document.querySelector('.modal-content'); const title = modal?.querySelector('.modal-title'); return (modal && title && title.textContent.toLowerCase().includes('status')) ? true : [false, 'Status modal not found'];",
+      "is_completed": "const modal = document.querySelector('#set-user-status-modal___BV_modal_content_') || document.querySelector('[id*=\"set-user-status-modal\"]'); const visible = modal && modal.offsetParent !== null; return !visible ? true : [false, 'Modal still open'];",
+      "execute": "try { const modal = document.querySelector('#set-user-status-modal___BV_modal_content_') || document.querySelector('[id*=\"set-user-status-modal\"]') || document.querySelector('.modal-content'); if (!modal) throw new Error('Modal not found'); const input = modal.querySelector('input[placeholder*=\"status\"]') || modal.querySelector('input.gl-form-input') || modal.querySelector('input[type=\"text\"]'); if (!input) throw new Error('Status input not found'); const clearBtn = modal.querySelector('button[title=\"Clear status\"]') || modal.querySelector('.js-clear-user-status-button'); if (clearBtn) { clearBtn.click(); await new Promise(r => setTimeout(r, 200)); } input.value = inputs.message; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); await new Promise(r => setTimeout(r, 300)); const submitBtn = modal.querySelector('.js-modal-action-primary') || Array.from(modal.querySelectorAll('button')).find(b => b.textContent.trim() === 'Set status'); if (submitBtn) { submitBtn.click(); } return { success: true }; } catch (e) { return { success: false, error: e.message }; }",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "status_modal"
+      },
+      "post": {},
+      "type": "setFields",
+      "pre_tools": {
+        "modal": [
+          "goto_edit_status"
+        ]
+      }
+    },
+    {
+      "name": "goto_project_contributors",
+      "title": "Goto Project Contributors",
+      "description": "Navigates to the contributors page of the project.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "const onPage = location.pathname.includes('/-/graphs/'); const hasContent = document.querySelectorAll('h4.gl-mb-2.gl-mt-0').length > 0; return (onPage && hasContent) ? true : [false, 'Contributors page not fully loaded'];",
+      "execute": "const contributorsLink = document.querySelector('a[data-qa-menu-item=\"Contributors\"]') || Array.from(document.querySelectorAll('a')).find(a => a.textContent.trim() === 'Contributors'); if (contributorsLink) { contributorsLink.click(); return {success: true}; } const projectPath = window.location.pathname.split('/-/')[0] || window.location.pathname; window.location.href = window.location.origin + projectPath + '/-/graphs/main'; return {success: true};",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "project"
+      },
+      "post": {
+        "page_type": "contributors"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_project_contributors",
+      "title": "List Project Contributors",
+      "description": "Lists the top contributors of the current project with their names and commit counts.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "top_n": {
+            "type": "integer",
+            "description": "Number of top contributors to return. Defaults to 10.",
+            "default": 10
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "contributors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "commits": {
+                  "type": "integer"
+                },
+                "email": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "contributors"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "const hasContributors = document.querySelectorAll('h4.gl-mb-2.gl-mt-0').length > 0; return hasContributors ? true : [false, 'Contributors not loaded yet'];",
+      "is_completed": "return true;",
+      "execute": "const topN = inputs.top_n || 10; const h4Elements = document.querySelectorAll('h4.gl-mb-2.gl-mt-0'); const contributors = []; for (let i = 0; i < Math.min(topN, h4Elements.length); i++) { const h4 = h4Elements[i]; const name = h4.textContent.trim(); const infoEl = h4.nextElementSibling; if (infoEl && infoEl.tagName === 'P') { const infoText = infoEl.textContent.trim(); const match = infoText.match(/(\\d+)\\s+commits?\\s*\\(([^)]+)\\)/); if (match) { contributors.push({ name: name, commits: parseInt(match[1]), email: match[2] }); } } } return { contributors };",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "contributors"
+      },
+      "post": {},
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_project_commits",
+      "title": "Goto Project Commits",
+      "description": "Navigates to the commits page of the project.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "const onPage = location.pathname.includes('/-/commits/'); const hasContent = document.querySelectorAll('.commit-content').length > 0; return (onPage && hasContent) ? true : [false, 'Commits page not fully loaded'];",
+      "execute": "const commitsLink = document.querySelector('a[data-qa-menu-item=\"Commits\"]') || Array.from(document.querySelectorAll('a')).find(a => a.textContent.trim() === 'Commits' && a.href.includes('/-/commits/')); if (commitsLink) { commitsLink.click(); return {success: true}; } const projectPath = window.location.pathname.split('/-/')[0] || window.location.pathname; window.location.href = window.location.origin + projectPath + '/-/commits/main'; return {success: true};",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "project"
+      },
+      "post": {
+        "page_type": "commits"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "get_commits",
+      "title": "Get Commits",
+      "description": "Gets all commits on a specific date from the commits.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "The date in month/day format (e.g., '3/2' for March 2)."
+          }
+        },
+        "required": [
+          "date"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "commits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "author": {
+                  "type": "string"
+                },
+                "author_email": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "commits"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelectorAll('.commit-content').length > 0 ? true : [false, 'No commits found on page'];",
+      "is_completed": "return true;",
+      "execute": "const [targetMonth, targetDay] = inputs.date.split('/').map(Number); const commitElements = document.querySelectorAll('.commit-content'); const matchingCommits = []; for (const commitEl of commitElements) { const authorEl = commitEl.querySelector('.commit-author-link'); const timeEl = commitEl.querySelector('time[datetime]'); const titleEl = commitEl.querySelector('.commit-row-message'); if (timeEl) { const datetime = timeEl.getAttribute('datetime'); const commitDate = new Date(datetime); const commitMonth = commitDate.getMonth() + 1; const commitDay = commitDate.getDate(); if (commitMonth === targetMonth && commitDay === targetDay) { const authorEmail = authorEl && authorEl.href ? authorEl.href.replace('mailto:', '') : ''; matchingCommits.push({ title: titleEl ? titleEl.textContent.trim() : '', author: authorEl ? authorEl.textContent.trim() : '', author_email: authorEmail, date: datetime }); } } } return { commits: matchingCommits };",
+      "pre_path": "*localhost:8023*",
+      "pre": {
+        "page_type": "commits"
+      },
+      "post": {},
+      "type": "listItems",
+      "pre_tools": {}
+    }
+  ],
+  "is_ready_timeout_ms": 30000
+}
