@@ -1,0 +1,755 @@
+{
+  "description": "",
+  "tools": [
+    {
+      "name": "observe_reddit",
+      "title": "Observe Reddit",
+      "description": "Observes the current state of the Reddit-like interface to identify the page type, current forum, active user, and submission details.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "page_type": {
+            "type": "string",
+            "enum": [
+              "home",
+              "forum",
+              "submission",
+              "user_profile",
+              "create_forum",
+              "my_account",
+              "forums_list",
+              "edit_biography",
+              "unknown"
+            ],
+            "description": "The category of the current page being viewed."
+          },
+          "current_forum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name of the current forum (subreddit) if applicable."
+          },
+          "current_user": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The username of the currently logged-in user."
+          },
+          "submission_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The title of the submission if viewing a specific post."
+          }
+        },
+        "required": [
+          "page_type",
+          "current_forum",
+          "current_user",
+          "submission_title"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "return true;",
+      "execute": "const path = window.location.pathname; let page_type = 'unknown'; let current_forum = null; let submission_title = null; if (path === '/' || path === '/featured' || path === '/all') { page_type = 'home'; } else if (path.startsWith('/f/')) { const parts = path.split('/'); if (parts.length === 3) { page_type = 'forum'; current_forum = parts[2]; } else if (parts.length > 3) { if (/^\\d+$/.test(parts[3])) { page_type = 'submission'; submission_title = document.querySelector('h1')?.textContent.trim() || null; } else { page_type = 'forum'; } current_forum = parts[2]; } } else if (path === '/forums') { page_type = 'forums_list'; } else if (path.includes('/edit_biography')) { page_type = 'edit_biography'; } else if (path.includes('/preferences')) { page_type = 'my_account'; } else if (path.startsWith('/user/')) { page_type = 'user_profile'; } else if (path === '/create_forum') { page_type = 'create_forum'; } const userEl = document.querySelector('.site-nav__user-menu .dropdown__toggle strong.no-mobile'); const current_user = userEl ? userEl.textContent.trim() : null; return { page_type, current_forum, current_user, submission_title };",
+      "pre_path": "*localhost:9999*",
+      "pre": {},
+      "post": {},
+      "type": "observe",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_home",
+      "title": "Goto Home",
+      "description": "Navigates to the home page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the navigation command was successfully initiated."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "return window.location.pathname === '/' ? true : [false, 'Failed to reach home'];",
+      "execute": "window.location.href = '/';",
+      "pre_path": "*localhost:9999*",
+      "pre": {},
+      "post": {
+        "page_type": "home"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_forums_list",
+      "title": "Goto Forums List",
+      "description": "Navigates to the forums list page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the navigation was successful."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the link was not found."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('a[href=\"/forums\"]') ? true : [false, 'Forums link not found'];",
+      "is_completed": "return window.location.pathname === '/forums' ? true : [false, 'Not on forums list page'];",
+      "execute": "const link = document.querySelector('a[href=\"/forums\"]'); if (link) { link.click(); return {success: true}; } return {success: false, error: 'Link not found'};",
+      "pre_path": "*localhost:9999*",
+      "pre": {},
+      "post": {
+        "page_type": "forums_list"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_forum",
+      "title": "Goto Forum",
+      "description": "Navigates to a specific forum (default submissions sort order: 'Hot').",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "forum_name": {
+            "type": "string",
+            "description": "The unique identifier or slug of the forum to navigate to."
+          }
+        },
+        "required": [
+          "forum_name"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the navigation command was successfully initiated."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return !!inputs.forum_name;",
+      "is_completed": "return window.location.pathname.toLowerCase().includes('/f/' + inputs.forum_name.toLowerCase()) ? true : [false, 'Failed to reach forum'];",
+      "execute": "window.location.href = '/f/' + inputs.forum_name.toLowerCase();",
+      "pre_path": "*localhost:9999*",
+      "pre": {},
+      "post": {
+        "page_type": "forum",
+        "current_forum": "$forum_name"
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "change_submission_order",
+      "title": "Change Submission Order",
+      "description": "Changes the sorting order of submissions. Default is 'Hot' (most popular). Use 'New' to get the latest/newest/most recent submissions. Valid options: 'Hot', 'New', 'Active', 'Top', 'Controversial', 'Most commented'.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "type": "string",
+            "description": "The specific sorting criteria to apply."
+          }
+        },
+        "required": [
+          "order"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the sort order was successfully changed."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the specified order option could not be found."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('button[aria-label^=\"Sort by:\"]') ? true : [false, 'Sort button not found'];",
+      "is_completed": "const currentSort = document.querySelector('button[aria-label^=\"Sort by:\"]')?.textContent.trim().toLowerCase(); return currentSort === inputs.order.toLowerCase() ? true : [false, `Sort order is ${currentSort}, expected ${inputs.order}`];",
+      "execute": "const order = inputs.order.toLowerCase(); const links = Array.from(document.querySelectorAll('.dropdown__menu .menu-item')); const targetLink = links.find(el => el.textContent.trim().toLowerCase() === order); if (targetLink) { targetLink.click(); return { success: true }; } else { const sortBtn = document.querySelector('button[aria-label^=\"Sort by:\"]'); if (sortBtn) { sortBtn.click(); await new Promise(r => setTimeout(r, 500)); const linksAfterClick = Array.from(document.querySelectorAll('.dropdown__menu .menu-item')); const targetAfterClick = linksAfterClick.find(el => el.textContent.trim().toLowerCase() === order); if (targetAfterClick) { targetAfterClick.click(); return { success: true }; } } return { success: false, error: 'Order option not found' }; }",
+      "pre_path": "*localhost:9999*",
+      "pre": {
+        "page_type": "forum"
+      },
+      "post": {
+        "page_type": "forum"
+      },
+      "type": "setFilter",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_submissions",
+      "title": "List Submissions",
+      "description": "Lists all submissions on the page with the selected sort order.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "description": "The title of the submission"
+                },
+                "user": {
+                  "type": "string",
+                  "description": "The username of the person who submitted the post"
+                },
+                "date": {
+                  "type": "string",
+                  "description": "The timestamp or relative date of the submission"
+                },
+                "score": {
+                  "type": "number",
+                  "description": "The net vote score (can be negative)"
+                },
+                "url": {
+                  "type": "string",
+                  "description": "The direct URL to the submission"
+                }
+              },
+              "required": [
+                "title",
+                "user",
+                "date",
+                "score",
+                "url"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelectorAll('article.submission').length > 0 ? true : [false, 'No submissions found'];",
+      "is_completed": "return true;",
+      "execute": "const submissions = Array.from(document.querySelectorAll('article.submission')); return { items: submissions.map(sub => { const scoreText = sub.querySelector('.vote__net-score')?.textContent.trim() || '0'; const score = parseInt(scoreText, 10); return { title: sub.querySelector('.submission__title')?.textContent.trim() || '', user: sub.querySelector('.submission__submitter strong')?.textContent.trim() || '', date: sub.querySelector('.submission__timestamp')?.textContent.trim() || '', score: Number.isNaN(score) ? 0 : score, url: sub.querySelector('.submission__nav a')?.href || '' }; }) };",
+      "pre_path": "*localhost:9999*",
+      "pre": {
+        "page_type": "home|forum|user_profile"
+      },
+      "post": {},
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_user",
+      "title": "Goto User",
+      "description": "Navigates to a user's profile page, showing submissions and comments.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "The unique username of the person whose profile page should be loaded."
+          }
+        },
+        "required": [
+          "username"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the navigation command was successfully initiated."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "return location.pathname.includes('/user/' + inputs.username) ? true : [false, 'Failed to navigate to user profile'];",
+      "execute": "window.location.href = '/user/' + inputs.username; return {success: true};",
+      "pre_path": "*localhost:9999*",
+      "pre": {},
+      "post": {
+        "page_type": "user_profile",
+        "current_user_profile": "$username"
+      },
+      "type": "gotoItem",
+      "pre_tools": {}
+    },
+    {
+      "name": "list_comments",
+      "title": "List Comments",
+      "description": "Lists all comments on the page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user": {
+                  "type": "string",
+                  "description": "The username of the commenter."
+                },
+                "reply_to": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The username of the person being replied to, if applicable."
+                },
+                "date": {
+                  "type": "string",
+                  "description": "The timestamp or relative date of the comment."
+                },
+                "score": {
+                  "type": "number",
+                  "description": "The net vote score (can be negative)."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "A truncated preview of the comment text."
+                }
+              },
+              "required": [
+                "user",
+                "reply_to",
+                "date",
+                "score",
+                "text"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "return true;",
+      "execute": "const normalizeMinus = s => (s || '').replace(/[\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212\\u002D]/g, '-');\nconst rows = Array.from(document.querySelectorAll('.comment__row'));\nconst candidates = rows.map(row => row.closest('article.comment, div.comment, li.comment') || row)\n  .filter(el => el.querySelector('.comment__header') && el.querySelector('.comment__body'));\nconst comments = candidates.map(el => {\n  const user = el.querySelector('.comment__header .comment__info a strong')?.textContent.trim() || 'unknown';\n  const reply_to = el.querySelector('.comment__context a strong')?.textContent.trim() || null;\n  const date = el.querySelector('.comment__header time')?.getAttribute('title') || el.querySelector('.comment__header time')?.textContent.trim() || '';\n  const dataVal = normalizeMinus(el.querySelector('form.vote')?.dataset.voteScoreValue);\n  const scoreFromData = parseInt(dataVal, 10);\n  let score = scoreFromData;\n  if (Number.isNaN(score)) {\n    const scoreEl = el.querySelector('.vote__net-score');\n    const firstChild = scoreEl?.firstChild;\n    const rawText = firstChild?.nodeType === Node.TEXT_NODE ? firstChild.textContent : (scoreEl?.textContent || '0');\n    const scoreText = normalizeMinus(rawText.trim());\n    score = parseInt(scoreText.replace(/[^0-9-]/g, ''), 10) || 0;\n  }\n  const text = el.querySelector('.comment__body')?.textContent.trim().substring(0, 100) || '';\n  return {\n    user,\n    reply_to,\n    date,\n    score,\n    text\n  };\n});\nreturn { items: comments };",
+      "pre_path": "*localhost:9999*",
+      "pre": {
+        "page_type": "home|forum|user_profile|submission"
+      },
+      "post": {},
+      "type": "listItems",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_submission",
+      "title": "Goto Submission",
+      "description": "Navigates directly to a submission URL.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "submission_url": {
+            "type": "string",
+            "description": "The absolute URL of the submission to open."
+          }
+        },
+        "required": [
+          "submission_url"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether a matching submission link was found and clicked."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return !!inputs.submission_url ? true : [false, 'Submission URL is required'];",
+      "is_completed": "return window.location.pathname.match(/\\/f\\/[^/]+\\/\\d+/) || document.querySelector('.submission__vote') || document.querySelector('.submission__title') ? true : [false, 'Not on submission page'];",
+      "execute": "window.location.href = inputs.submission_url; return { success: true };",
+      "pre_path": "*localhost:9999*",
+      "pre": {
+        "page_type": "home|forum|user_profile"
+      },
+      "post": {
+        "page_type": "submission"
+      },
+      "type": "gotoItem",
+      "pre_tools": {
+        "submission_url": [
+          "list_submissions"
+        ]
+      }
+    },
+    {
+      "name": "upvote",
+      "title": "Upvote",
+      "description": "Cast a positive vote for current submission.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the upvote button was successfully found and clicked."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the upvote button could not be found."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return !!document.querySelector('.submission__vote .vote__up');",
+      "is_completed": "const form = document.querySelector('.submission__vote form.vote'); if (!form) { return [false, 'Vote form not found']; } return form.classList.contains(form.dataset.voteUpvotedClass || 'vote--user-upvoted') || form.dataset.voteChoiceValue === '1' ? true : [false, 'Vote not registered'];",
+      "execute": "const form = document.querySelector('.submission__vote form.vote'); if (!form) { return { success: false, error: 'Vote form not found' }; } if (form.classList.contains(form.dataset.voteUpvotedClass || 'vote--user-upvoted') || form.dataset.voteChoiceValue === '1') { return { success: true }; } const token = form.querySelector('input[name=\\\"token\\\"]')?.value; if (!token) { return { success: false, error: 'Vote token not found' }; } const params = new URLSearchParams(); params.set('token', token); params.set('choice', '1'); const response = await fetch(form.action, { method: 'POST', body: params, credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' } }); if (!response.ok) { return { success: false, error: 'Vote failed: ' + response.status }; } form.dataset.voteChoiceValue = '1'; form.classList.add(form.dataset.voteUpvotedClass || 'vote--user-upvoted'); return { success: true };",
+      "pre_path": "*localhost:9999*",
+      "pre": {
+        "page_type": "submission"
+      },
+      "post": {
+        "page_type": "submission"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "downvote",
+      "title": "Downvote",
+      "description": "Casts a negative vote for current submission.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the downvote button was successfully found and clicked."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the button was not found."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return !!document.querySelector('.submission__vote .vote__down');",
+      "is_completed": "const form = document.querySelector('.submission__vote form.vote'); if (!form) { return [false, 'Vote form not found']; } return form.classList.contains(form.dataset.voteDownvotedClass || 'vote--user-downvoted') || form.dataset.voteChoiceValue === '-1' ? true : [false, 'Vote not registered'];",
+      "execute": "const form = document.querySelector('.submission__vote form.vote'); if (!form) { return { success: false, error: 'Vote form not found' }; } if (form.classList.contains(form.dataset.voteDownvotedClass || 'vote--user-downvoted') || form.dataset.voteChoiceValue === '-1') { return { success: true }; } const token = form.querySelector('input[name=\\\"token\\\"]')?.value; if (!token) { return { success: false, error: 'Vote token not found' }; } const params = new URLSearchParams(); params.set('token', token); params.set('choice', '-1'); const response = await fetch(form.action, { method: 'POST', body: params, credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' } }); if (!response.ok) { return { success: false, error: 'Vote failed: ' + response.status }; } form.dataset.voteChoiceValue = '-1'; form.classList.add(form.dataset.voteDownvotedClass || 'vote--user-downvoted'); return { success: true };",
+      "pre_path": "*localhost:9999*",
+      "pre": {
+        "page_type": "submission"
+      },
+      "post": {
+        "page_type": "submission"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_create_forum",
+      "title": "Goto Create Forum",
+      "description": "Navigates to the forum creation page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the forum creation link was found and clicked successfully."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the link was not found."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('a[href=\"/create_forum\"]') ? true : [false, 'Create forum link not found on page'];",
+      "is_completed": "return window.location.pathname === '/create_forum' ? true : [false, 'Failed to navigate to create forum page'];",
+      "execute": "const link = document.querySelector('a[href=\"/create_forum\"]'); if (link) { link.click(); return {success: true}; } return {success: false, error: 'Link not found'};",
+      "pre_path": "*localhost:9999*",
+      "pre": {
+        "page_type": "forums_list"
+      },
+      "post": {
+        "page_type": "create_forum"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "fill_forum_info",
+      "title": "Fill Forum Info",
+      "description": "Fills out the name, display name, description, and sidebar fields for a forum creation form.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The internal name or slug for the forum."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "The public-facing title of the forum."
+          },
+          "description": {
+            "type": "string",
+            "description": "A brief summary or tagline for the forum."
+          },
+          "sidebar": {
+            "type": "string",
+            "description": "The content or markdown to be displayed in the forum's sidebar."
+          }
+        },
+        "required": [
+          "name",
+          "display_name",
+          "description",
+          "sidebar"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the form fields were successfully populated."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('#forum_name') && document.querySelector('#forum_title') ? true : [false, 'Forum creation fields not found'];",
+      "is_completed": "const normalize = (value) => (value || '').replace(/[\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212]/g, '-'); return document.querySelector('#forum_name').value === inputs.name && document.querySelector('#forum_title').value === inputs.display_name && normalize(document.querySelector('#forum_description').value) === normalize(inputs.description) && normalize(document.querySelector('#forum_sidebar').value) === normalize(inputs.sidebar) ? true : [false, 'Fields not filled correctly'];",
+      "execute": "const normalize = (value) => (value || '').replace(/[\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212]/g, '-'); document.querySelector('#forum_name').value = normalize(inputs.name); document.querySelector('#forum_title').value = normalize(inputs.display_name); document.querySelector('#forum_description').value = normalize(inputs.description); document.querySelector('#forum_sidebar').value = normalize(inputs.sidebar); return {success: true};",
+      "pre_path": "*localhost:9999*",
+      "pre": {
+        "page_type": "create_forum"
+      },
+      "post": {
+        "page_type": "create_forum"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "submit_forum",
+      "title": "Submit Forum",
+      "description": "Submits the forum creation form.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the button was successfully found and clicked"
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the button was not found"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return Array.from(document.querySelectorAll('button')).some(el => el.textContent.trim() === 'Create forum') ? true : [false, 'Create forum button not found'];",
+      "is_completed": "return !window.location.pathname.includes('create_forum') ? true : [false, 'Still on creation page'];",
+      "execute": "const btn = Array.from(document.querySelectorAll('button')).find(el => el.textContent.trim() === 'Create forum'); if (btn) { btn.click(); return {success: true}; } return {success: false, error: 'Button not found'};",
+      "pre_path": "*localhost:9999*",
+      "pre": {
+        "page_type": "create_forum"
+      },
+      "post": {
+        "page_type": "forum"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    },
+    {
+      "name": "goto_edit_biography",
+      "title": "Goto Edit Biography",
+      "description": "Navigates to the user's biography editing page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the navigation action was initiated successfully."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return true;",
+      "is_completed": "return window.location.pathname.includes('/edit_biography') ? true : [false, 'Not on edit biography page'];",
+      "execute": "const link = document.querySelector('a[href$=\"/edit_biography\"]'); if (link) { link.click(); return {success: true}; } else { window.location.href = '/user/MarvelsGrantMan136/edit_biography'; return {success: true}; }",
+      "pre_path": "*localhost:9999*",
+      "pre": {},
+      "post": {
+        "page_type": "edit_biography"
+      },
+      "type": "gotoField",
+      "pre_tools": {}
+    },
+    {
+      "name": "edit_biography",
+      "title": "Edit Biography",
+      "description": "Updates the user's biography text and clicks the save button to persist changes.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "bio": {
+            "type": "string",
+            "description": "The new biography text to be entered into the profile field."
+          }
+        },
+        "required": [
+          "bio"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates whether the biography was successfully updated and saved."
+          },
+          "error": {
+            "type": "string",
+            "description": "Contains error details if the operation failed."
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "tool_executor_type": "smcp",
+      "lang": "js",
+      "is_ready": "return document.querySelector('#user_biography_biography') ? true : [false, 'Biography textarea not found'];",
+      "is_completed": "return true;",
+      "execute": "try { const area = document.querySelector('#user_biography_biography'); if (area) { area.value = inputs.bio; area.dispatchEvent(new Event('input', { bubbles: true })); } const saveBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Save'); if (saveBtn) { saveBtn.click(); return {success: true}; } return {success: false, error: 'Save button not found'}; } catch(e) { return {success: false, error: e.message}; }",
+      "pre_path": "*localhost:9999*",
+      "pre": {
+        "page_type": "edit_biography"
+      },
+      "post": {
+        "page_type": "edit_biography"
+      },
+      "type": "setFields",
+      "pre_tools": {}
+    }
+  ],
+  "is_ready_timeout_ms": 30000
+}
