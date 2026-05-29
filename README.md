@@ -17,13 +17,13 @@
   <img src="website/assets/blast_ui_gif.gif" alt="BLAST UI Demo" width="80%">
 </div>
 
-## ❓ Use Cases
+## Use Cases
 
 1. **I want to add web browsing AI to my app...** BLAST serves web browsing AI with an OpenAI-compatible API and concurrency and streaming baked in.
 2. **I need to automate workflows...** BLAST will automatically cache and parallelize to keep costs down and enable interactive-level latencies.
 3. **Just want to use this locally...** BLAST makes sure you stay under budget and not hog your computer's memory.
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
 pip install blastai && blastai serve
@@ -49,21 +49,21 @@ for event in stream:
         print(event.delta if " " in event.delta else "<screenshot>", end="", flush=True)
 ```
 
-## ✨ Features
+## Features
 
-- 🔄 **OpenAI-Compatible API** Drop-in replacement for OpenAI's API
-- 🚄 **High Performance** Automatic parallelism and prefix caching
-- 📡 **Streaming** Stream browser-augmented LLM output to users
-- 📊 **Concurrency** Out-of-the-box support many users with efficient resource management
+- **OpenAI-Compatible API** Drop-in replacement for OpenAI's API
+- **High Performance** Automatic parallelism and prefix caching
+- **Streaming** Stream browser-augmented LLM output to users
+- **Concurrency** Out-of-the-box support many users with efficient resource management
 
-## 📚 Documentation
+## Documentation
 
 Visit [documentation](https://docs.blastproject.org) to learn more.
 
-## 🤝 Contributing
+## Contributing
 
 Awesome! See our [Contributing Guide](https://docs.blastproject.org/development/contributing) for details.
 
-## 📄 MIT License
+## MIT License
 
 As it should be!
