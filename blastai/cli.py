@@ -13,6 +13,7 @@ os.environ["BROWSER_USE_DISABLE_LOGGING"] = "true"
 import asyncio
 import logging
 import sys
+from importlib.metadata import version
 from pathlib import Path
 from typing import Optional
 
@@ -43,7 +44,7 @@ console = Console()
 
 
 @click.group(invoke_without_command=True)
-@click.version_option("0.1.6", "-V", "--version", prog_name="BLAST")
+@click.version_option(version("blastai"), "-V", "--version", prog_name="BLAST")
 @click.pass_context
 def cli(ctx):
     """🚀  Browser-LLM Auto-Scaling Technology"""

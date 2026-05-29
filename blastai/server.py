@@ -8,6 +8,7 @@ os.environ["ANONYMIZED_TELEMETRY"] = "false"
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from importlib.metadata import version
 from typing import Dict, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -91,7 +92,7 @@ async def lifespan(app: FastAPI):
             await handle_shutdown()
 
 
-app = FastAPI(title="BlastAI API", version="0.1.6", lifespan=lifespan)
+app = FastAPI(title="BlastAI API", version=version("blastai"), lifespan=lifespan)
 
 # Configure CORS for development
 app.add_middleware(
