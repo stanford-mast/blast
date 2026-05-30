@@ -180,10 +180,10 @@ async def handle_chat_completions(request: ChatCompletionRequest, engine: Engine
                 result = await engine.run(tasks, cache_control=cache_controls, mode="stream")
                 return StreamingResponse(format_chat_stream(result, request.model), media_type="text/event-stream")
             except asyncio.TimeoutError:
-                logger.error("Task failed in stream_task_events: timeout")
+                logger.error("Task failed in stream_task_events: timeout", exc_info=True)
                 raise HTTPException(status_code=504, detail="Request timed out")
             except Exception as e:
-                logger.error(f"Task failed in stream_task_events: {e}")
+                logger.error(f"Task failed in stream_task_events: {e}", exc_info=True)
                 raise HTTPException(status_code=500, detail=str(e))
         else:
             try:
@@ -207,13 +207,13 @@ async def handle_chat_completions(request: ChatCompletionRequest, engine: Engine
                     }
                 )
             except asyncio.TimeoutError:
-                logger.error("Task failed in get_task_result: timeout")
+                logger.error("Task failed in get_task_result: timeout", exc_info=True)
                 raise HTTPException(status_code=504, detail="Request timed out")
             except Exception as e:
-                logger.error(f"Task failed in get_task_result: {e}")
+                logger.error(f"Task failed in get_task_result: {e}", exc_info=True)
                 raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"Task failed: {e}")
+        logger.error(f"Task failed: {e}", exc_info=True)
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(status_code=500, detail=str(e))

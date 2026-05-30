@@ -258,7 +258,7 @@ class Executor:
                     # Get cost from agent's token cost service
                     await self._get_cost_from_agent(self.agent)
                 except Exception as e:
-                    logger.error(f"Error running agent: {e}")
+                    logger.error(f"Error running agent: {e}", exc_info=True)
                     raise
                 return self._history
 
@@ -288,13 +288,13 @@ class Executor:
                     # Get cost from agent's token cost service
                     await self._get_cost_from_agent(self.agent)
                 except Exception as e:
-                    logger.error(f"Error rerunning history: {e}")
+                    logger.error(f"Error rerunning history: {e}", exc_info=True)
                     raise
                 return self._history
 
         except Exception as e:
-            # logger.error(f"Task {self.task_id} failed: {str(e)}")
-            raise RuntimeError(f"Failed to execute task: {str(e)}")
+            logger.error(f"Task {self.task_id} failed: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to execute task: {str(e)}") from e
         finally:
             self._running = False
 

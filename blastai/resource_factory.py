@@ -93,7 +93,7 @@ async def create_executor(
                 return executor
 
             except Exception as e:
-                logger.error(f"Failed to create VNC executor: {e}")
+                logger.error(f"Failed to create VNC executor: {e}", exc_info=True)
                 # Clean up VNC session if it exists
                 if vnc_session:
                     try:
@@ -169,7 +169,7 @@ async def create_executor(
         )
 
     except Exception as e:
-        logger.error(f"Failed to create executor: {e}")
+        logger.error(f"Failed to create executor: {e}", exc_info=True)
         # Clean up resources on failure (non-VNC path only)
         if constraints.require_patchright and not constraints.require_human_in_loop:
             try:

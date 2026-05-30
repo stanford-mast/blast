@@ -121,12 +121,12 @@ class RealtimeMessage(BaseModel):
                     else:
                         data["final_result"] = "Task completed"
             except Exception as e:
-                logger.error(f"Error extracting final result: {e}")
+                logger.error(f"Error extracting final result: {e}", exc_info=True)
                 data["final_result"] = "Task completed with an error"
 
             return cls(type=MessageType.TASK_RESULT, data=data)
         except Exception as e:
-            logger.error(f"Error creating task result message: {e}")
+            logger.error(f"Error creating task result message: {e}", exc_info=True)
             # Return a fallback error message
             return cls(type=MessageType.ERROR, data={"error": f"Failed to process task result: {str(e)}"})
 
@@ -234,7 +234,7 @@ class RealtimeConnection:
                         self.current_task_id = None
                         break
                     except Exception as e:
-                        logger.error(f"Error sending task result: {e}")
+                        logger.error(f"Error sending task result: {e}", exc_info=True)
                         await self.websocket.send_json(
                             RealtimeMessage.error(f"Error processing task result: {str(e)}").model_dump()
                         )
@@ -246,7 +246,7 @@ class RealtimeConnection:
                     await self.websocket.send_json(RealtimeMessage.from_human_request(event).model_dump())
 
         except Exception as e:
-            logger.error(f"Error forwarding engine events: {e}")
+            logger.error(f"Error forwarding engine events: {e}", exc_info=True)
             await self.websocket.send_json(RealtimeMessage.error(str(e)).model_dump())
 
     async def cleanup(self):
@@ -435,7 +435,7 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
                         # Start forwarding in background
                         asyncio.create_task(connection.forward_engine_events())
                     except Exception as e:
-                        logger.error(f"Error executing task: {str(e)}")
+                        logger.error(f"Error executing task: {str(e)}", exc_info=True)
                         raise
 
                 elif message.type == MessageType.STOP:
@@ -474,7 +474,7 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
                                     raise
 
                         except Exception as e:
-                            logger.error(f"Error processing stop request: {e}")
+                            logger.error(f"Error processing stop request: {e}", exc_info=True)
                             try:
                                 await websocket.send_json(
                                     RealtimeMessage.error(f"Error stopping task: {str(e)}").model_dump()
@@ -528,7 +528,7 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
                 await websocket.send_json(RealtimeMessage.error(str(e)).model_dump())
             except Exception as e:
                 # Handle other errors
-                logger.error(f"Error handling message: {e}")
+                logger.error(f"Error handling message: {e}", exc_info=True)
                 await websocket.send_json(RealtimeMessage.error(str(e)).model_dump())
 
     except WebSocketDisconnect:
@@ -571,7 +571,7 @@ async def handle_realtime_connection(websocket: WebSocket, engine: Engine, conne
                 del connections[connection_id]
 
     except Exception as e:
-        logger.error(f"Error in WebSocket connection: {e}")
+        logger.error(f"Error in WebSocket connection: {e}", exc_info=True)
         try:
             await websocket.send_json(RealtimeMessage.error(str(e)).model_dump())
         except:
