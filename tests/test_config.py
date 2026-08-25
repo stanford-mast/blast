@@ -2,8 +2,11 @@
 
 import pytest
 import yaml
+from browser_use.browser import BrowserSession
 
 from blastai import Engine
+from blastai.config import Constraints, Settings
+from blastai.resource_factory import _build_browser_args
 
 
 @pytest.mark.asyncio
@@ -16,8 +19,42 @@ async def test_default_config():
         #   first_of_n: false
         assert engine.constraints.allow_parallelism["first_of_n"] is False
         assert engine.constraints.first_of_n_num_copies == 3
+        assert engine.settings.browser_cdp_url is None
     finally:
         await engine.stop()
+
+
+def test_external_browser_cdp_url():
+    """Accept both HTTP discovery URLs and direct WebSocket URLs."""
+    assert Settings(browser_cdp_url="https://browser.example/cdp").browser_cdp_url == "https://browser.example/cdp"
+    assert Settings(browser_cdp_url="wss://browser.example/cdp").browser_cdp_url == "wss://browser.example/cdp"
+
+
+def test_external_browser_cdp_url_reaches_browser_session_args():
+    settings = Settings(browser_cdp_url="wss://browser.example/cdp")
+    constraints = Constraints(require_patchright=True, allowed_domains=["example.com"])
+
+    browser_args = _build_browser_args("external-browser-test", constraints, settings)
+
+    assert browser_args["cdp_url"] == "wss://browser.example/cdp"
+    assert browser_args["allowed_domains"] == ["example.com"]
+    assert browser_args["user_data_dir"] is None
+    assert "executable_path" not in browser_args
+
+    browser_session = BrowserSession(**browser_args)
+    assert browser_session.cdp_url == "wss://browser.example/cdp"
+    assert browser_session.is_local is False
+
+
+@pytest.mark.parametrize("cdp_url", ["browser.example/cdp", "ftp://browser.example/cdp"])
+def test_external_browser_cdp_url_rejects_unsupported_schemes(cdp_url):
+    with pytest.raises(ValueError, match="browser_cdp_url must start"):
+        Settings(browser_cdp_url=cdp_url)
+
+
+def test_external_browser_cannot_also_launch_local_binary():
+    with pytest.raises(ValueError, match="cannot be set together"):
+        Settings(browser_cdp_url="wss://browser.example/cdp", local_browser_path="auto")
 
 
 @pytest.mark.asyncio

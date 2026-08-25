@@ -1,5 +1,6 @@
 settings:
   local_browser_path: "none"  # Path to Chrome/Chromium binary: "none" (default), "auto" for auto-detect, or specific path
+  browser_cdp_url: null  # Existing local or remote Chromium: http(s):// or ws(s):// CDP URL
   persist_cache: false
   browser_use_log_level: "debug"  # Logging level for browser-use module
   blastai_log_level: "debug"  # Logging level for blastai module

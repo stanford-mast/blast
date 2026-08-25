@@ -22,6 +22,47 @@ from .browser_session_patch import apply_all_patches
 _patches_applied = False
 
 
+def _build_browser_args(task_id: str, constraints: Constraints, settings: Settings) -> Dict[str, Any]:
+    """Build BrowserSession arguments without starting a browser."""
+    browser_args: Dict[str, Any] = {
+        "headless": constraints.require_headless,
+        "user_data_dir": None,
+        "keep_alive": True,
+        "highlight_elements": False,
+    }
+
+    if constraints.allowed_domains is not None:
+        browser_args["allowed_domains"] = constraints.allowed_domains
+
+    if settings.browser_cdp_url:
+        browser_args["cdp_url"] = settings.browser_cdp_url
+    elif settings.local_browser_path != "none":
+        if settings.local_browser_path == "auto":
+            browser_path = find_local_browser()
+            if browser_path:
+                browser_args["executable_path"] = browser_path
+                logger.debug(f"Using auto-detected browser at: {browser_path}")
+        else:
+            browser_path = settings.local_browser_path
+            if not os.path.exists(browser_path):
+                raise FileNotFoundError(f"Specified local browser path does not exist: {browser_path}")
+            browser_args["executable_path"] = browser_path
+
+    if constraints.require_patchright and not settings.browser_cdp_url:
+        logger.info(
+            "Patchright is no longer supported starting in Browser Use v0.6.0rc1. Creating browser session without patchright."
+        )
+        stealth_dir = get_stealth_profile_dir(task_id)
+        browser_args["user_data_dir"] = stealth_dir
+        browser_args["disable_security"] = False
+        browser_args["deterministic_rendering"] = False
+        logger.debug(f"Using patchright for browser automation with profile: {stealth_dir}")
+    elif constraints.require_patchright:
+        logger.info("External CDP browser controls its own browser binary and profile")
+
+    return browser_args
+
+
 async def create_executor(
     task_id: str,
     constraints: Constraints,
@@ -110,44 +151,8 @@ async def create_executor(
             f"Task {task_id}: is_interactive={is_interactive}, has_queues={task.interactive_queues is not None if task else False}"
         )
 
-        # Configure regular browser session
-        browser_args = {
-            "headless": constraints.require_headless,
-            "user_data_dir": None,  # Use ephemeral profile for security
-            "keep_alive": True,
-            "highlight_elements": False,  # Disable element highlighting
-        }
-
-        # Add allowed domains if configured
-        if constraints.allowed_domains is not None:
-            browser_args["allowed_domains"] = constraints.allowed_domains
-
-        # Handle local browser path if not "none"
-        if settings.local_browser_path != "none":
-            if settings.local_browser_path == "auto":
-                browser_path = find_local_browser()
-                if browser_path:
-                    browser_args["executable_path"] = browser_path
-                    logger.debug(f"Using auto-detected browser at: {browser_path}")
-            else:
-                browser_path = settings.local_browser_path
-                if not os.path.exists(browser_path):
-                    logger.error(f"Specified local browser path does not exist: {browser_path}")
-                    return None
-                browser_args["executable_path"] = browser_path
-
-        # Initialize patchright if required
-        if constraints.require_patchright:
-            logger.info(
-                "Patchright is no longer supported starting in Browser Use v0.6.0rc1. Creating browser session without patchright."
-            )
-
-            # Get stealth profile directory path
-            stealth_dir = get_stealth_profile_dir(task_id)
-            browser_args["user_data_dir"] = stealth_dir
-            browser_args["disable_security"] = False
-            browser_args["deterministic_rendering"] = False
-            logger.debug(f"Using patchright for browser automation with profile: {stealth_dir}")
+        # Configure regular browser session.
+        browser_args = _build_browser_args(task_id, constraints, settings)
 
         # Create and start browser session
         browser_session = BrowserSession(**browser_args)
@@ -171,7 +176,8 @@ async def create_executor(
     except Exception as e:
         logger.error(f"Failed to create executor: {e}")
         # Clean up resources on failure (non-VNC path only)
-        if constraints.require_patchright and not constraints.require_human_in_loop:
+        stealth_dir = browser_args.get("user_data_dir") if "browser_args" in locals() else None
+        if constraints.require_patchright and not constraints.require_human_in_loop and stealth_dir:
             try:
                 cleanup_stealth_profile_dir(stealth_dir)
             except Exception as cleanup_error:
