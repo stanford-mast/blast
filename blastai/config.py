@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Settings(BaseModel):
@@ -11,6 +11,11 @@ class Settings(BaseModel):
     local_browser_path: str = Field(
         default="none",
         description="Path to local Chrome/Chromium browser binary. Set to 'auto' to auto-detect, 'none' to use default, or provide specific path",
+    )
+
+    browser_cdp_url: Optional[str] = Field(
+        default=None,
+        description="HTTP(S) or WebSocket CDP URL for an existing local or remote Chromium browser",
     )
 
     persist_cache: bool = Field(default=False, description="Whether to persist cache between runs")
@@ -30,6 +35,25 @@ class Settings(BaseModel):
     server_port: int = Field(default=8000, description="Port number for the BLAST server")
 
     web_port: int = Field(default=3000, description="Port number for the web UI")
+
+    @field_validator("browser_cdp_url")
+    @classmethod
+    def validate_browser_cdp_url(cls, value: Optional[str]) -> Optional[str]:
+        """Only accept URL forms supported by Browser Use's CDP connector."""
+        if value is None:
+            return None
+
+        value = value.strip()
+        if not value.startswith(("http://", "https://", "ws://", "wss://")):
+            raise ValueError("browser_cdp_url must start with http://, https://, ws://, or wss://")
+        return value
+
+    @model_validator(mode="after")
+    def validate_browser_source(self):
+        """A session cannot launch a local executable and connect over CDP."""
+        if self.browser_cdp_url and self.local_browser_path != "none":
+            raise ValueError("browser_cdp_url and local_browser_path cannot be set together")
+        return self
 
     @classmethod
     def create(cls, **kwargs):
