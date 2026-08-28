@@ -2,136 +2,167 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Color tokens copied from arker.ai's actual design system, not eyeballed:
+ *   cloudflare/src/app/globals.css:73   --page: #121212;
+ *   cloudflare/src/app/globals.css:75   --surface: #1c1c1d;
+ *   cloudflare/src/app/globals.css:76   --surface-hover: #262626;
+ *   cloudflare/src/app/globals.css:82   --border: #2a2a2a;
+ *   cloudflare/src/app/globals.css:85   --primary: #f2ff2d;
+ *   cloudflare/src/app/globals.css:112  --marketing-text: #fafafa;
+ *   cloudflare/src/app/globals.css:113  --marketing-secondary: #c8c8c8;
+ *   cloudflare/src/app/globals.css:114  --marketing-tertiary: #808080;
+ *
+ * `--page` (not `--background`) is what arker.ai's actual marketing/landing
+ * page renders against: cloudflare/src/app/page.tsx:50 sets
+ * `bg-[var(--page)]` on the page root, and
+ * cloudflare/src/components/landing/nav-client.tsx:47 does the same for the
+ * fixed nav. `--background` (#171717) is the *app/console* surface, a
+ * different token used behind the signed-in product, not this site.
+ */
 :root {
-  --blast-yellow: #ffe067;
-  --blast-dark: #1f1f1f;
-  --blast-input: #262626;
-  --blast-input-hover: #282828;
-  --blast-input-focus: #2a2a2a;
+  --page: #121212;
+  --surface: #1c1c1d;
+  --surface-hover: #262626;
+  --border: #2a2a2a;
+  --marketing-text: #fafafa;
+  --marketing-secondary: #c8c8c8;
+  --marketing-tertiary: #808080;
+  --brand: #f2ff2d;
 }
 
 body {
-  @apply bg-[#1f1f1f] text-white;
+  @apply bg-page text-ink;
 }
 
-.fade-in {
-  animation: fadeIn 0.5s ease-in forwards;
+/* Selection highlight: the real BLAST mark's own yellow (#ffe067, from
+ * blast_icon_only.svg) rather than arker.ai's brand lime (#f2ff2d) --
+ * distinct enough tones that reusing arker's exact accent here would clash
+ * with the logo now on the page. */
+::selection {
+  background: #ffe067;
+  color: #0b0b0b;
+}
+::-moz-selection {
+  background: #ffe067;
+  color: #0b0b0b;
 }
 
-.fade-out {
-  animation: fadeOut 0.5s ease-in forwards;
-}
-
-.fade-in-slow {
-  animation: fadeIn 1s ease-in forwards;
-}
-
-.fade-out-slow {
-  animation: fadeOut 1s ease-in forwards;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes fadeOut {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
-
-.pulse {
-  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.8;
-    transform: scale(1.05);
-  }
-}
-
-.task-box {
-  @apply bg-[#262626] rounded-lg p-4 transition-all duration-100;
-}
-
-.task-box:hover {
-  @apply bg-[#282828];
-}
-
-.chat-input {
-  @apply text-white transition-colors duration-150;
-}
-
-.chat-input:hover {
-  background-color: var(--blast-input-hover);
-}
-
-.chat-input:focus {
-  background-color: var(--blast-input-focus);
-}
-
-.chat-input[contenteditable]:empty:before {
-  content: attr(placeholder);
-  @apply text-gray-400;
-}
-
-.submit-button {
-  @apply rounded-full transition-all duration-150 disabled:opacity-40;
-}
-
-.submit-button:not(:disabled):hover {
-  @apply opacity-80;
-}
-
-.modal-overlay {
-  @apply fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-100;
-}
-
-.modal-content {
-  @apply fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 
-         bg-[#262626] rounded-lg p-6 max-w-4xl w-full max-h-[90vh] overflow-hidden 
-         transition-all duration-100 shadow-xl;
-}
-
-/* Remove default outline styles */
-:focus {
-  outline: none !important;
-}
-
-/* Custom scrollbar */
-::-webkit-scrollbar {
+/* Custom scrollbar, matching arker.ai's thin dark treatment
+ * (cloudflare/src/app/globals.css:1503-1521). */
+*::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
-
-::-webkit-scrollbar-track {
-  @apply bg-transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  @apply bg-gray-700/30 rounded-full;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-600/30;
-}
-
-/* Hide scrollbar when not hovering */
-.chat-input:not(:hover)::-webkit-scrollbar-thumb {
+*::-webkit-scrollbar-track {
   background: transparent;
 }
-
-/* Text cursor color */
-.chat-input {
-  caret-color: white;
+*::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a transparent;
 }
 
-/* Code blocks */
-pre code {
-  @apply block whitespace-pre overflow-x-auto;
+/* ─── Documentation content ─────────────────────────────────────────────
+ * Adapted from arker.ai/docs's .doc-content typography
+ * (cloudflare/src/app/globals.css:855-1023), using this site's own font
+ * variables (--font-inter / --font-sometype-mono / --font-zalando-semi-expanded
+ * from pages/_app.tsx) in place of arker.ai's --font-display, and without the
+ * wide-table / rehype-pretty-code / catalog-table variants BLAST's small docs
+ * set doesn't need. */
+
+.link {
+  color: var(--marketing-secondary);
+  text-decoration-line: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: #393939;
+  transition:
+    color 150ms ease-out,
+    text-decoration-color 150ms ease-out;
+  cursor: pointer;
+}
+.link:hover {
+  color: var(--marketing-text);
+  text-decoration-color: var(--marketing-text);
+}
+
+.doc-content {
+  color: var(--marketing-text);
+  line-height: 1.7;
+  font-size: 0.9375rem;
+  font-family: var(--font-inter), sans-serif;
+}
+
+.doc-content h1 {
+  font-family: var(--font-zalando-semi-expanded), var(--font-inter), sans-serif;
+  font-size: 2rem;
+  font-weight: 500;
+  margin-top: 0.5rem;
+  margin-bottom: 1.75rem;
+}
+
+.doc-content h2 {
+  font-family: var(--font-zalando-semi-expanded), var(--font-inter), sans-serif;
+  font-size: 1.375rem;
+  font-weight: 500;
+  margin-top: 3rem;
+  margin-bottom: 1rem;
+  scroll-margin-top: 5rem;
+}
+
+.doc-content h3 {
+  font-family: var(--font-zalando-semi-expanded), var(--font-inter), sans-serif;
+  font-size: 1.0625rem;
+  font-weight: 500;
+  margin-top: 2.25rem;
+  margin-bottom: 0.75rem;
+  scroll-margin-top: 5rem;
+}
+
+.doc-content p {
+  margin-bottom: 1.1rem;
+  color: var(--marketing-secondary);
+}
+
+.doc-content > p:first-of-type {
+  font-size: 1rem;
+  color: var(--marketing-text);
+  line-height: 1.65;
+}
+
+.doc-content ul,
+.doc-content ol {
+  margin: 0 0 1.1rem 1.25rem;
+  color: var(--marketing-secondary);
+}
+.doc-content ul {
+  list-style: disc;
+}
+.doc-content ol {
+  list-style: decimal;
+}
+.doc-content li {
+  margin-bottom: 0.5rem;
+}
+.doc-content li > strong {
+  color: var(--marketing-text);
+}
+
+/* Links inside docs use the unified .link class, applied directly on each
+ * <a> (no MDX `a` mapping in this plain-JSX docs set). */
+
+.doc-content :not(pre) > code {
+  font-family: var(--font-sometype-mono), monospace;
+  font-size: 0.84em;
+  background: var(--surface);
+  color: var(--marketing-text);
+  padding: 0.12em 0.4em;
+  border: 1px solid var(--border);
+  font-weight: 400;
+  word-break: break-word;
 }

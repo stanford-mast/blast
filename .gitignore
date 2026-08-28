@@ -1,76 +1,9 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
-venv/
-env/
-ENV/
-.env
-secrets.env
-secrets_full.env
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Misc
-.DS_Store
-.coverage
-htmlcov/
-.pytest_cache/
-blast-logs/
+target/
+blast.toml
+/var/lib/blast/
 *.log
 
-docs/instructions/
-blast-venv/
-
-# Next.js
-blastai/frontend/node_modules/
-blastai/frontend/.next/
-blastai/frontend/out/
-blastai/frontend/.next-env.d.ts
-blastai/frontend/*.tsbuildinfo
-
-# Website
+# website/ (Next.js)
 website/node_modules/
 website/.next/
 website/out/
-website/.next-env.d.ts
-website/*.tsbuildinfo
-
-# npm
-blastai/frontend/package-lock.json
-blastai/frontend/.npm
-blastai/frontend/.env*.local
-blastai/frontend/.vercel
-website/package-lock.json
-website/.npm
-website/.env*.local
-website/.vercel
-
-browser-use/**
-
-ourera/
-
-todo.md

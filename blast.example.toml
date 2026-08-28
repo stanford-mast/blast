@@ -1,0 +1,44 @@
+port = 7240
+data_dir = "/var/lib/blast"
+
+[backend]
+kind = "smolvm"       # recommended: libkrun-based microVMs, real hardware-isolated
+binary = "smolvm"     # memory snapshotting (fork/snapshot/restore) via fork_snapshot/resume.
+                       # Bare "smolvm" resolves via PATH; use an absolute path if it isn't on it.
+
+# [backend]
+# kind = "docker"     # uses Docker daemon on this host; snapshot is commit-based, not a
+#                      # real memory snapshot
+
+# [backend]
+# kind = "hypeman"
+# endpoint = "http://localhost:4973"
+# token = "eyJhbGciOi..."   # a hypeman JWT; mint one with hypeman's `gen-jwt` tool
+#                            # (JWT_SECRET=... gen-jwt -user-id blast -duration 720h),
+#                            # or see hypeman's own docs for issuing longer-lived tokens.
+# cli_binary = "hypeman"     # path to the hypeman CLI, used for run() (exec has no
+#                            # plain REST endpoint, only a WebSocket one the CLI drives).
+#                            # Bare "hypeman" resolves via PATH; use an absolute path
+#                            # if it isn't on it.
+
+[worker]
+# Leave these unset to run standalone (no external control plane).
+control_plane_endpoint = "https://api.arker.ai"
+# api_key: a worker_registration-scoped key (POST /api/v1/api-keys with worker_registration=true)
+api_key = "ark_..."
+# registration_token: optional single-use token from POST /api/v1/regions.
+# When set, validates the org+region binding on first registration.
+# registration_token = "wrt_..."
+provider = "byoc"
+region = "customer-acme-us-east"
+# platform = "linux/aarch64"   # auto-detected if absent
+
+[lifecycle]
+pause_ttl_secs   = 60      # idle before pausing   (CPU freed)
+suspend_ttl_secs = 300     # idle before suspending (CPU + memory freed)
+evict_ttl_secs   = 3600    # idle before evicting   (CPU + memory + disk freed)
+dirty_sync_ttl_secs = 60   # interval between dirty-sync snapshots (only when registered)
+
+memory_pressure_thresh = 0.15   # suspend when available mem < 15% of total
+disk_pressure_thresh   = 0.10   # evict when available disk < 10% of total
+max_snapshot_disk_mib  = 50000

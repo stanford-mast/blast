@@ -1,69 +1,52 @@
 <div align="center">
-  <img src="docs/assets/blast_icon_only.png" width="200" height="200" alt="BLAST Logo">
+  <img src="website/public/blast_icon_only.ico" width="200" height="200" alt="BLAST Logo">
 </div>
 
-<p align="center" style="font-size: 24px">A high-performance serving engine for web browsing AI.</p>
+<p align="center" style="font-size: 24px">Open-source VMs-as-a-service</p>
 
 <div align="center">
 
 [![Website](https://img.shields.io/badge/blastproject.org-FFE067)](https://blastproject.org)
-[![Documentation](https://img.shields.io/badge/Docs-FFE067)](https://docs.blastproject.org)
+[![Documentation](https://img.shields.io/badge/Docs-FFE067)](https://blastproject.org/docs)
 [![Discord](https://img.shields.io/badge/Discord-FFE067)](https://discord.gg/NqrkJwYYh4)
-[![Twitter Follow](https://img.shields.io/twitter/follow/realcalebwin?style=social)](https://x.com/realcalebwin)
 
 </div>
-
-<div align="center">
-  <img src="website/assets/blast_ui_gif.gif" alt="BLAST UI Demo" width="80%">
-</div>
-
-## Use Cases
-
-1. **I want to add web browsing AI to my app...** BLAST serves web browsing AI with an OpenAI-compatible API and concurrency and streaming baked in.
-2. **I need to automate workflows...** BLAST will automatically cache and parallelize to keep costs down and enable interactive-level latencies.
-3. **Just want to use this locally...** BLAST makes sure you stay under budget and not hog your computer's memory.
 
 ## Quick Start
 
 ```bash
-pip install blastai && blastai serve
+cargo install blast_core
+blast
 ```
 
-```python
-from openai import OpenAI
+```bash
+VM1=$(curl -s -X POST localhost:7240/v1/fork \
+  -H "Content-Type: application/json" \
+  -d '{"image":"ubuntu:24.04"}' | jq -r .vm_id)
 
-client = OpenAI(
-    api_key="not-needed",
-    base_url="http://127.0.0.1:8000"
-)
+VM2=$(curl -s -X POST localhost:7240/v1/fork \
+  -H "Content-Type: application/json" \
+  -d "{\"source_vm_id\":\"$VM1\",\"name\":\"feature-xyz\"}" | jq -r .vm_id)
 
-# Stream real-time browser actions
-stream = client.responses.create(
-    model="not-needed",
-    input="Compare fried chicken reviews for top 10 fast food restaurants",
-    stream=True
-)
-
-for event in stream:
-    if event.type == "response.output_text.delta":
-        print(event.delta if " " in event.delta else "<screenshot>", end="", flush=True)
+curl -X POST localhost:7240/v1/vms/$VM2/runs \
+  -H "Content-Type: application/json" \
+  -d '{"command":"echo hello from fork"}'
 ```
+
+## Purpose
+
+BLAST is a single binary for local sandbox orchestration given a pool of CPU, memory, disk. More precisely, BLAST abstracts over local sandboxes such as SmolVM, Hypeman, Docker to provides a simple API to fork and run sandboxed commands, sync data, and monitor VMs, sessions, runs while automatically scheduling and placing forks and runs, snapshots, syncing snapshots to durable storage, migration, and managing resource pressure.
 
 ## Features
 
-- **OpenAI-Compatible API** Drop-in replacement for OpenAI's API
-- **High Performance** Automatic parallelism and prefix caching
-- **Streaming** Stream browser-augmented LLM output to users
-- **Concurrency** Out-of-the-box support many users with efficient resource management
+Compared to existing solutions for local sandboxing or BYOC sandbox compute, BLAST features:
+
+* **Single 7 MB binary.** No Terraform. No Packer. No extra dependencies.
+* **Most permissible license.** Code is MIT-licensed and just 3,586 lines, built to keep enterprise security reviews as simple as possible.
+* **Full orchestration.** Unlike other solutions that simply provide utilities for creating sandboxes, BLAST takes a given pool of CPU, memory, disk and optimally serves forking and running sandboxed commands.
+* **Compatible with VM providers.** For a unified control plane across bursty cloud compute and user-provided compute, BLAST is built to integrate with a control plane.
+* Built and actively maintained by a growing team of open-source sandboxing and orchestration enthusiasts
 
 ## Documentation
 
-Visit [documentation](https://docs.blastproject.org) to learn more.
-
-## Contributing
-
-Awesome! See our [Contributing Guide](https://docs.blastproject.org/development/contributing) for details.
-
-## MIT License
-
-As it should be!
+Visit [documentation](https://blastproject.org/docs) to learn more.
