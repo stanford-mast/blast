@@ -24,5 +24,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/vms/:vm_id/sync", post(handlers::post_sync))
         .route("/v1/live", get(handlers::get_live))
+        // Bare `/metrics`, not `/v1/metrics`: every Prometheus-compatible
+        // scraper defaults to this path, and there's no `/v1/`-versioned API
+        // contract at stake here the way there is for the VM-management
+        // routes above.
+        .route("/metrics", get(handlers::get_metrics))
         .with_state(state)
 }

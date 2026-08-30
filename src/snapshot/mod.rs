@@ -34,6 +34,47 @@ impl SnapshotStore {
         Ok(dir)
     }
 
+    /// Filename for the backend-kind marker `write_backend_marker`/
+    /// `check_backend_marker` share. Lives inside `snap_dir` itself so it
+    /// travels with the snapshot through `upload_via_presigned`/
+    /// `download_via_presigned` -- the same round trip that would carry a
+    /// snapshot to wherever it's next resumed.
+    const BACKEND_MARKER_FILE: &'static str = ".blast-backend";
+
+    /// Records which backend produced this snapshot. A Docker commit-based
+    /// image, a SmolVM memory snapshot, and a Hypeman snapshot are mutually
+    /// unreadable formats -- called right after a successful `suspend()` so
+    /// a later `resume()` (possibly by a different backend, if this snapshot
+    /// is ever synced elsewhere) can refuse before misinterpreting the
+    /// directory contents instead of failing confusingly mid-restore.
+    pub async fn write_backend_marker(&self, vm_id: &str, kind: &str) -> Result<()> {
+        let path = self.snap_dir(vm_id).join(Self::BACKEND_MARKER_FILE);
+        fs::write(&path, kind).await.context("write backend marker")
+    }
+
+    /// Refuses with a clear error if `snap_dir` was written by a different
+    /// backend than `kind`. A snapshot with no marker at all predates this
+    /// check (or was written by a build that doesn't have it yet) and is let
+    /// through -- absence isn't evidence of a mismatch, and failing every
+    /// pre-existing snapshot would be worse than the corruption this guards
+    /// against actually happening.
+    pub async fn check_backend_marker(&self, vm_id: &str, kind: &str) -> Result<()> {
+        let path = self.snap_dir(vm_id).join(Self::BACKEND_MARKER_FILE);
+        let recorded = match fs::read_to_string(&path).await {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).context("read backend marker"),
+        };
+        if recorded != kind {
+            anyhow::bail!(
+                "snapshot for {vm_id} was written by backend '{recorded}', \
+                 but this worker runs backend '{kind}' -- refusing to resume \
+                 a snapshot this backend cannot read"
+            );
+        }
+        Ok(())
+    }
+
     /// Upload every file in `snap_dir` to the given presigned PUT URLs
     /// obtained from the control plane. Returns content hashes.
     ///

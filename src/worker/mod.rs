@@ -53,15 +53,17 @@ pub async fn start(cfg: WorkerConfig, state: AppState) -> Result<Option<WorkerCl
         return Ok(None);
     };
 
-    let total = cfg.resources.as_ref().map_or(
-        Resources { vcpu: 0, memory_mib: 0, disk_mib: 0 },
-        |r| Resources { vcpu: r.vcpu, memory_mib: r.memory_mib, disk_mib: r.disk_mib },
-    );
+    // The same resolved pool total `AppState::total_resources` carries
+    // everywhere else (see its doc comment in `api::handlers`) -- `cfg`
+    // (`WorkerConfig`) no longer has its own `resources` field to derive
+    // this from since the `[resources]` section moved to the top level.
+    let total = state.total_resources.clone();
 
     let reg = WorkerRegisterRequest {
         worker_provider: cfg.provider.clone(),
         worker_region: cfg.region.clone().unwrap_or_else(|| "default".into()),
         platform: state.backend.platform().to_owned(),
+        backend: state.backend.kind().to_owned(),
         vcpu: total.vcpu,
         memory_mib: total.memory_mib,
         disk_mib: total.disk_mib,

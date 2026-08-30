@@ -275,50 +275,119 @@ async fn dirty_sync_loop(
         ticker.tick().await;
         for vm in store.all().await {
             if vm.state != VmState::Running { continue; }
-            let Some(handle) = vm.handle.clone() else { continue };
-            let snap_dir = snapshots.snap_dir(&vm.vm_id);
-            if let Err(e) = snapshots.ensure_dir(&vm.vm_id).await {
-                warn!(vm_id = %vm.vm_id, err = %e, "dirty-sync: mkdir failed");
-                continue;
-            }
-            // Same guard as api::handlers::resolve_fork_handle's
-            // fork-from-running-source snapshot: mark the VM busy for the
-            // duration so pause_vm/suspend_vm's TTL sweep of this same loop
-            // iteration can't race a transition against the handle this
-            // snapshot call is using.
-            let guard_id = format!("dirty_sync_guard_{}", ulid::Ulid::new());
-            store
-                .update(&vm.vm_id, |r| {
-                    r.sessions.insert(
-                        guard_id.clone(),
-                        SessionRecord {
-                            session_id: guard_id.clone(),
-                            session_idx: u32::MAX,
-                            cwd: "/".into(),
-                            env: HashMap::new(),
-                            state: SessionState::Running,
-                        },
-                    );
-                })
-                .await;
-            let snapshot_result = backend.snapshot(&handle, &snap_dir).await;
-            store.update(&vm.vm_id, |r| { r.sessions.remove(&guard_id); }).await;
-            if let Err(e) = snapshot_result {
-                warn!(vm_id = %vm.vm_id, err = %e, "dirty-sync: snapshot failed");
-                continue;
-            }
-            let upload_fn = upload_url_fn.clone();
-            let vm_id = vm.vm_id.clone();
-            if let Err(e) = snapshots
-                .upload_via_presigned(&snap_dir, |hash| {
-                    let f = upload_fn.clone();
-                    let vid = vm_id.clone();
-                    f(vid, hash)
-                })
-                .await
-            {
-                warn!(vm_id = %vm.vm_id, err = %e, "dirty-sync: upload failed");
-            }
+            dirty_sync_one(&store, &backend, &snapshots, &upload_url_fn, &vm.vm_id).await;
         }
+    }
+}
+
+/// One VM's worth of `dirty_sync_loop`'s body, factored out so [`drain`] can
+/// force the exact same snapshot+upload for every running VM once, on
+/// shutdown, instead of waiting out `interval`.
+async fn dirty_sync_one(
+    store: &Store,
+    backend: &Arc<dyn VmBackend>,
+    snapshots: &Arc<SnapshotStore>,
+    upload_url_fn: &UploadUrlFn,
+    vm_id: &str,
+) {
+    let Some(vm) = store.get(vm_id).await else { return };
+    let Some(handle) = vm.handle.clone() else { return };
+    let snap_dir = snapshots.snap_dir(&vm.vm_id);
+    if let Err(e) = snapshots.ensure_dir(&vm.vm_id).await {
+        warn!(vm_id = %vm.vm_id, err = %e, "dirty-sync: mkdir failed");
+        return;
+    }
+    // Same guard as api::handlers::resolve_fork_handle's fork-from-running-
+    // source snapshot: mark the VM busy for the duration so a concurrent
+    // pause_vm/suspend_vm can't race a transition against the handle this
+    // snapshot call is using.
+    let guard_id = format!("dirty_sync_guard_{}", ulid::Ulid::new());
+    store
+        .update(&vm.vm_id, |r| {
+            r.sessions.insert(
+                guard_id.clone(),
+                SessionRecord {
+                    session_id: guard_id.clone(),
+                    session_idx: u32::MAX,
+                    cwd: "/".into(),
+                    env: HashMap::new(),
+                    state: SessionState::Running,
+                },
+            );
+        })
+        .await;
+    let snapshot_result = backend.snapshot(&handle, &snap_dir).await;
+    store.update(&vm.vm_id, |r| { r.sessions.remove(&guard_id); }).await;
+    if let Err(e) = snapshot_result {
+        warn!(vm_id = %vm.vm_id, err = %e, "dirty-sync: snapshot failed");
+        return;
+    }
+    let upload_fn = upload_url_fn.clone();
+    let vm_id = vm.vm_id.clone();
+    if let Err(e) = snapshots
+        .upload_via_presigned(&snap_dir, |hash| {
+            let f = upload_fn.clone();
+            let vid = vm_id.clone();
+            f(vid, hash)
+        })
+        .await
+    {
+        warn!(vm_id = %vm.vm_id, err = %e, "dirty-sync: upload failed");
+    }
+}
+
+/// Runs once, in response to an external shutdown signal (SIGTERM from a k8s
+/// pod termination, `systemctl stop`, a node drain), rather than on the TTL
+/// or pressure loops' own schedule: force everything those loops would
+/// EVENTUALLY do anyway, right now, so an operator-driven shutdown doesn't
+/// just kill blast mid-flight and strand state those loops hadn't gotten
+/// around to persisting yet. See `main::shutdown_signal`, the one caller.
+///
+/// Standalone (no control plane, so no durable off-box copy of anything):
+/// nothing safe to do here. Suspending/evicting would destroy the last copy
+/// of a VM's state for no gain, so this is a deliberate no-op -- local VM
+/// state is lost on exit, exactly as it already is today without this
+/// function existing at all. Draining is only meaningful once there's
+/// somewhere durable to drain *to*.
+pub async fn drain(
+    store: &Store,
+    backend: &Arc<dyn VmBackend>,
+    snapshots: &Arc<SnapshotStore>,
+    upload_url_fn: Option<UploadUrlFn>,
+    is_standalone: bool,
+) {
+    if is_standalone {
+        warn!(
+            "drain: standalone (no control plane) has no durable off-box storage to drain to; \
+             skipping -- local VM state will be lost on exit, same as any other shutdown"
+        );
+        return;
+    }
+
+    if let Some(upload_fn) = &upload_url_fn {
+        let running: Vec<_> =
+            store.all().await.into_iter().filter(|v| v.state == VmState::Running).map(|v| v.vm_id).collect();
+        for vm_id in running {
+            dirty_sync_one(store, backend, snapshots, upload_fn, &vm_id).await;
+        }
+    }
+
+    // Cascade every VM down to Suspended (its state now durably uploaded
+    // above) or fully evicted -- same transitions ttl_loop/pressure_loop
+    // already make, just all of them, right now, instead of only the ones
+    // whose individual TTL/pressure happened to already be due.
+    let running: Vec<_> =
+        store.all().await.into_iter().filter(|v| v.state == VmState::Running).collect();
+    for vm in running {
+        pause_vm(store, backend, &vm).await;
+    }
+    let paused: Vec<_> = store.all().await.into_iter().filter(|v| v.state == VmState::Paused).collect();
+    for vm in paused {
+        suspend_vm(store, backend, snapshots, &vm, "drain").await;
+    }
+    let suspended: Vec<_> =
+        store.all().await.into_iter().filter(|v| v.state == VmState::Suspended).collect();
+    for vm in suspended {
+        evict_vm(store, &vm, is_standalone, "drain").await;
     }
 }

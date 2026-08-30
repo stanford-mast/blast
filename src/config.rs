@@ -18,6 +18,18 @@ pub struct Config {
 
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
+
+    /// Total resource pool this worker makes available for VMs + snapshots.
+    /// Running and paused VMs hold vcpu + memory; all states hold disk.
+    /// If absent, the worker registers with zero capacity upstream
+    /// (standalone mode) -- and, just as importantly, `handle_fork` skips
+    /// local admission control entirely (unlimited, matching pre-existing
+    /// behavior for dev/standalone use). Set this to get BOTH: upstream
+    /// advertises real capacity, AND `fork` is admission-controlled and
+    /// queues locally against it, on every backend uniformly. Top-level
+    /// (not under `[worker]`) because it applies whether or not a control
+    /// plane is configured at all.
+    pub resources: Option<ResourcesConfig>,
 }
 
 // Every field below carries its own `#[serde(default)]`, not just the
@@ -73,10 +85,16 @@ impl Default for BackendConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct WorkerResources {
+pub struct ResourcesConfig {
     pub vcpu: u32,
     pub memory_mib: u64,
     pub disk_mib: u64,
+    /// How long a fork request waits for pool headroom to free up (via a
+    /// VM being deleted/paused/suspended elsewhere) before giving up. A
+    /// request whose own size exceeds this pool outright fails immediately
+    /// regardless of this -- no amount of waiting ever makes it fit.
+    #[serde(default = "default_admission_queue_secs")]
+    pub admission_queue_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -89,23 +107,6 @@ pub struct WorkerConfig {
     #[serde(default = "default_provider")]
     pub provider: String,
     pub region: Option<String>,
-    /// Total resource pool this worker makes available for VMs + snapshots.
-    /// Running and paused VMs hold vcpu + memory; all states hold disk.
-    /// If absent, the worker registers with zero capacity upstream
-    /// (standalone mode) -- and, just as importantly, `handle_fork` skips
-    /// local admission control entirely (unlimited, matching pre-existing
-    /// behavior for dev/standalone use). Set this to get BOTH: upstream
-    /// advertises real capacity, AND `fork` is admission-controlled and
-    /// queues locally against it, on every backend uniformly.
-    pub resources: Option<WorkerResources>,
-    /// How long a fork request waits for pool headroom to free up (via a
-    /// VM being deleted/paused/suspended elsewhere) before giving up, when
-    /// `resources` is configured and momentarily exhausted. A request whose
-    /// own size exceeds `resources` outright fails immediately regardless
-    /// of this -- no amount of waiting ever makes it fit. Ignored when
-    /// `resources` is absent.
-    #[serde(default = "default_admission_queue_secs")]
-    pub admission_queue_secs: u64,
 }
 
 impl Default for WorkerConfig {
@@ -116,8 +117,6 @@ impl Default for WorkerConfig {
             registration_token: None,
             provider: default_provider(),
             region: None,
-            resources: None,
-            admission_queue_secs: default_admission_queue_secs(),
         }
     }
 }
@@ -206,5 +205,10 @@ impl Config {
             .build()?
             .try_deserialize()?;
         Ok(cfg)
+    }
+
+    /// Ignored when `resources` is absent, since there's no pool to wait on.
+    pub fn admission_queue_secs(&self) -> u64 {
+        self.resources.as_ref().map_or(default_admission_queue_secs(), |r| r.admission_queue_secs)
     }
 }

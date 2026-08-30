@@ -241,4 +241,6 @@ impl VmBackend for DockerBackend {
     }
 
     fn platform(&self) -> &str { super::host_platform() }
+
+    fn kind(&self) -> &'static str { "docker" }
 }

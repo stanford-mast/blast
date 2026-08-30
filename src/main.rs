@@ -69,9 +69,9 @@ async fn main() -> Result<()> {
     // `{0,0,0}` means no pool configured -- `handle_fork`'s admission
     // control and `lifecycle`'s pressure loop both treat that as unlimited
     // (their `total.x > 0` guards skip straight through), so this single
-    // resolution of `worker.resources` is the one thing both consult; see
+    // resolution of `resources` is the one thing both consult; see
     // `api::handlers::reserve_pool_capacity` and `lifecycle::pressure_loop`.
-    let total_resources = cfg.worker.resources.as_ref().map_or(
+    let total_resources = cfg.resources.as_ref().map_or(
         Resources { vcpu: 0, memory_mib: 0, disk_mib: 0 },
         |r| Resources { vcpu: r.vcpu, memory_mib: r.memory_mib, disk_mib: r.disk_mib },
     );
@@ -150,6 +150,7 @@ async fn main() -> Result<()> {
     // see lifecycle::transitions::evict_vm.
     let is_standalone = cfg.worker.control_plane_endpoint.is_none();
 
+    let shutdown_upload_url_fn = upload_url_fn.clone();
     lifecycle::spawn(
         &cfg.lifecycle,
         store.clone(),
@@ -166,7 +167,51 @@ async fn main() -> Result<()> {
     let addr = format!("0.0.0.0:{}", cfg.port);
     let listener = TcpListener::bind(&addr).await?;
     info!(addr, "blast listening");
-    axum::serve(listener, router).await?;
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal(
+            store,
+            backend,
+            snapshots,
+            shutdown_upload_url_fn,
+            is_standalone,
+        ))
+        .await?;
 
     Ok(())
+}
+
+/// Waits for SIGTERM (the signal a k8s pod termination, `systemctl stop`, or
+/// a node drain sends) or Ctrl-C, then runs `lifecycle::drain` once before
+/// resolving -- so the axum server it gates keeps serving in-flight and new
+/// requests for the whole drain (a `run`/`delete` call still works normally
+/// while this is in progress), and only stops accepting connections once
+/// drain has actually finished, not the instant the signal arrived.
+async fn shutdown_signal(
+    store: Store,
+    backend: Arc<dyn VmBackend>,
+    snapshots: Arc<SnapshotStore>,
+    upload_url_fn: Option<lifecycle::UploadUrlFn>,
+    is_standalone: bool,
+) {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+
+    info!("shutdown signal received, draining");
+    lifecycle::drain(&store, &backend, &snapshots, upload_url_fn, is_standalone).await;
+    info!("drain complete");
 }

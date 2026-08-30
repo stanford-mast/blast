@@ -33,6 +33,15 @@ provider = "byoc"
 region = "customer-acme-us-east"
 # platform = "linux/aarch64"   # auto-detected if absent
 
+# Total pool this worker makes available for VMs + snapshots. Leave the whole
+# section out to run unlimited (no local admission control, zero capacity
+# advertised upstream) -- this applies whether or not [worker] is configured.
+[resources]
+vcpu = 8
+memory_mib = 16384
+disk_mib = 102400
+admission_queue_secs = 120   # how long a fork waits for pool headroom before giving up
+
 [lifecycle]
 pause_ttl_secs   = 60      # idle before pausing   (CPU freed)
 suspend_ttl_secs = 300     # idle before suspending (CPU + memory freed)

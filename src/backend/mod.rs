@@ -103,4 +103,12 @@ pub trait VmBackend: Send + Sync + 'static {
 
     /// e.g. "linux/aarch64".
     fn platform(&self) -> &str;
+
+    /// e.g. "docker", "smolvm", "hypeman". Unlike `platform` (CPU
+    /// architecture, identical across backends on the same host) this
+    /// identifies the snapshot FORMAT: a Docker commit-based image, a
+    /// SmolVM memory snapshot, and a Hypeman snapshot are mutually
+    /// unreadable, so a snapshot written by one backend can never be
+    /// resumed by another. See `SnapshotStore::{write,check}_backend_marker`.
+    fn kind(&self) -> &'static str;
 }

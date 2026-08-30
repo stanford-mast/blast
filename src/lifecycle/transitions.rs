@@ -72,6 +72,13 @@ pub async fn suspend_vm(
     let snap_dir = snapshots.snap_dir(&vm.vm_id);
     match backend.suspend(handle, &snap_dir).await {
         Ok(()) => {
+            // Best-effort: a failure here shouldn't undo an otherwise-good
+            // suspend. `check_backend_marker` treats a missing marker as
+            // "predates this check", not as a mismatch, so the worst case of
+            // losing this write is the same as never having had it.
+            if let Err(e) = snapshots.write_backend_marker(&vm.vm_id, backend.kind()).await {
+                warn!(vm_id = %vm.vm_id, err = %e, "failed to record backend marker on suspend");
+            }
             let now = std::time::Instant::now();
             store
                 .update(&vm.vm_id, |r| {

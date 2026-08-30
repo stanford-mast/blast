@@ -29,7 +29,7 @@ pub struct AppState {
     /// The same resolved pool total `lifecycle::spawn` drives its pressure
     /// loop against (see `main.rs`) -- `{0,0,0}` means no pool configured,
     /// matching `pressure_loop`'s own `total.x > 0` guards. Kept as one
-    /// canonical resolution of `config.worker.resources` rather than a
+    /// canonical resolution of `config.resources` rather than a
     /// second copy derived independently in the fork handler.
     pub total_resources: Resources,
 }
@@ -52,16 +52,15 @@ fn not_found(e: anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {
 
 pub async fn get_regions(State(s): State<AppState>) -> ApiResult<ListRegionsResponse> {
     let cfg = &s.config.worker;
-    let resources = cfg.resources.as_ref();
     Ok(Json(ListRegionsResponse {
         regions: vec![RegionEntry {
             provider: cfg.provider.clone(),
             region: cfg.region.clone().unwrap_or_else(|| "local".into()),
             endpoint: format!("http://localhost:{}", s.config.port),
             platform: s.backend.platform().to_owned(),
-            vcpu: resources.map_or(0, |r| r.vcpu),
-            memory_mib: resources.map_or(0, |r| r.memory_mib),
-            disk_mib: resources.map_or(0, |r| r.disk_mib),
+            vcpu: s.total_resources.vcpu,
+            memory_mib: s.total_resources.memory_mib,
+            disk_mib: s.total_resources.disk_mib,
         }],
     }))
 }
@@ -115,14 +114,14 @@ pub async fn handle_fork(s: &AppState, req: ForkRequest) -> anyhow::Result<VmObj
     let name = req.name.clone();
 
     // Local admission control: when this worker declares a pool
-    // (`[worker].resources`), a fork must actually fit in it. No pool
+    // (`[resources]`), a fork must actually fit in it. No pool
     // configured keeps pre-existing unlimited behavior (returns `None`).
     // See `admission` for the single wait/queue/fail-fast implementation
     // shared with the resume path in `ensure_running_handle`.
     let pool = crate::admission::acquire_for_fork(
         &s.store,
         &s.total_resources,
-        s.config.worker.admission_queue_secs,
+        s.config.admission_queue_secs(),
         &vm_id,
         name.clone(),
         &resources,
@@ -385,7 +384,7 @@ async fn ensure_running_handle(
         crate::admission::acquire_for_resume(
             &s.store,
             &s.total_resources,
-            s.config.worker.admission_queue_secs,
+            s.config.admission_queue_secs(),
             vm_id,
             &vm.resources,
         )
@@ -426,6 +425,13 @@ async fn ensure_running_handle(
                 .snapshot_dir
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("VM is idle but has no snapshot"))?;
+            // Fail before spending an admission reservation on a restore
+            // that's going to fail anyway: a Docker commit-based image, a
+            // SmolVM memory snapshot, and a Hypeman snapshot are mutually
+            // unreadable formats.
+            s.snapshots
+                .check_backend_marker(vm_id, s.backend.kind())
+                .await?;
             admit().await?;
             match s.backend.resume(&snap, &vm.resources).await {
                 Ok(h) => {
@@ -896,4 +902,78 @@ fn shell_escape(s: &str) -> String {
 
 pub async fn get_live() -> axum::http::StatusCode {
     axum::http::StatusCode::OK
+}
+
+/// Prometheus text exposition (no client library dependency: this is a
+/// handful of gauges, not worth pulling in the `prometheus` crate for). The
+/// one metric this exists for is `blast_pool_utilization_ratio` -- the
+/// signal a custom-metrics HPA or any other autoscaler needs to scale
+/// *before* new forks start failing, rather than reacting to unschedulable
+/// pods after the fact. `{0,0,0}` (no pool configured) skips ratio/total
+/// output entirely for that dimension, same as `lifecycle::pressure_loop`'s
+/// own `total.x > 0` guards -- an undefined ratio is worse than an absent one.
+pub async fn get_metrics(State(s): State<AppState>) -> (axum::http::HeaderMap, String) {
+    let total = &s.total_resources;
+    let in_use = s.store.resources_in_use().await;
+    let vms = s.store.all().await;
+
+    let mut out = String::new();
+    // Prometheus text format requires HELP/TYPE to precede that metric
+    // family's samples, and both must name the bare metric (no `{...}`
+    // label matcher) even when every sample below carries labels.
+    let mut metric = |name: &str, help: &str, samples: &[(String, String)]| {
+        out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} gauge\n"));
+        for (labels, value) in samples {
+            out.push_str(&format!("{name}{labels} {value}\n"));
+        }
+    };
+
+    // Collected across all three dimensions and emitted as one metric family
+    // at the end (not one `metric()` call per dimension): Prometheus text
+    // format declares HELP/TYPE for a given metric name exactly once, with
+    // every sample for it grouped contiguously -- three separate same-named
+    // HELP/TYPE blocks is what most exporters that get this wrong produce,
+    // and real scrapers are lenient about it, but it's not valid output.
+    let mut utilization_ratios: Vec<(String, String)> = Vec::new();
+
+    if total.vcpu > 0 {
+        metric("blast_pool_vcpu_total", "Total vcpu configured for this worker's pool.", &[(String::new(), total.vcpu.to_string())]);
+        metric("blast_pool_vcpu_used", "Vcpu currently reserved by VMs on this worker.", &[(String::new(), in_use.vcpu.to_string())]);
+        utilization_ratios.push(("{dimension=\"vcpu\"}".to_string(), (f64::from(in_use.vcpu) / f64::from(total.vcpu)).to_string()));
+    }
+    if total.memory_mib > 0 {
+        metric("blast_pool_memory_mib_total", "Total memory (MiB) configured for this worker's pool.", &[(String::new(), total.memory_mib.to_string())]);
+        metric("blast_pool_memory_mib_used", "Memory (MiB) currently reserved by VMs on this worker.", &[(String::new(), in_use.memory_mib.to_string())]);
+        utilization_ratios.push(("{dimension=\"memory\"}".to_string(), (in_use.memory_mib as f64 / total.memory_mib as f64).to_string()));
+    }
+    if total.disk_mib > 0 {
+        metric("blast_pool_disk_mib_total", "Total disk (MiB) configured for this worker's pool.", &[(String::new(), total.disk_mib.to_string())]);
+        metric("blast_pool_disk_mib_used", "Disk (MiB) currently reserved by VMs on this worker.", &[(String::new(), in_use.disk_mib.to_string())]);
+        utilization_ratios.push(("{dimension=\"disk\"}".to_string(), (in_use.disk_mib as f64 / total.disk_mib as f64).to_string()));
+    }
+    if !utilization_ratios.is_empty() {
+        metric("blast_pool_utilization_ratio", "Fraction of the pool currently reserved, per dimension.", &utilization_ratios);
+    }
+
+    let vm_counts: Vec<(String, String)> = [VmState::Pending, VmState::Running, VmState::Paused, VmState::Suspended]
+        .into_iter()
+        .map(|state| {
+            let count = vms.iter().filter(|v| v.state == state).count();
+            let label = match state {
+                VmState::Pending => "pending",
+                VmState::Running => "running",
+                VmState::Paused => "paused",
+                VmState::Suspended => "suspended",
+            };
+            (format!("{{state=\"{label}\"}}"), count.to_string())
+        })
+        .collect();
+    metric("blast_vms", "Number of VMs on this worker by internal lifecycle state.", &vm_counts);
+
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+    );
+    (headers, out)
 }

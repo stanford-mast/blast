@@ -402,4 +402,8 @@ impl VmBackend for HypemanBackend {
     fn platform(&self) -> &str {
         super::host_platform()
     }
+
+    fn kind(&self) -> &'static str {
+        "hypeman"
+    }
 }

@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "blast_core"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "async-trait",

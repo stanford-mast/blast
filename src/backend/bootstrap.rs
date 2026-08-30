@@ -373,7 +373,7 @@ async fn ensure_hypeman(
     let cli_bin = managed_bin(data_dir, "hypeman-cli");
     let genjwt_bin = managed_bin(data_dir, "gen-jwt");
 
-    let have_all = binary_is_usable(&server_bin).await
+    let have_all = hypeman_server_binary_present(&server_bin)
         && binary_is_usable(&cli_bin).await
         && binary_is_usable(&genjwt_bin).await;
     if have_all {
@@ -414,7 +414,7 @@ async fn ensure_hypeman(
     .await
     .context("write hypeman config")?;
 
-    spawn_hypeman_server(&server_bin, &secret, &config_path, &hm_data_dir).await?;
+    spawn_hypeman_server(&server_bin, &secret, &config_path, &hm_data_dir, port).await?;
 
     wait_for_endpoint(endpoint, Duration::from_secs(30))
         .await
@@ -498,7 +498,12 @@ async fn build_hypeman(
     run_logged(
         shell(
             "git",
-            &["clone", "--depth", "1", "https://github.com/kernel/hypeman", &server_src.to_string_lossy()],
+            // calebwin/hypeman, not upstream kernel/hypeman directly: carries
+            // a subnet-conflict-detection fix upstream doesn't have yet
+            // (the default SubnetCIDR silently swallows the DNS resolver on
+            // any k8s cluster whose service CIDR matches it -- see that
+            // fork's commit history for the reproduction).
+            &["clone", "--depth", "1", "https://github.com/calebwin/hypeman", &server_src.to_string_lossy()],
         ),
         "hypeman: git clone (server)",
     )
@@ -695,6 +700,7 @@ async fn spawn_hypeman_server(
     secret: &str,
     config_path: &Path,
     hm_data_dir: &Path,
+    port: u16,
 ) -> Result<()> {
     let strategy = cap_net_admin_strategy(server_bin).await;
     if matches!(strategy, CapStrategy::Unavailable) {
@@ -724,11 +730,21 @@ async fn spawn_hypeman_server(
     // entirely for everything except JWT_SECRET, which we already pass
     // as an env var.
     let config_path_str = config_path.to_string_lossy().into_owned();
+    // hypeman also reads a bare `PORT` env var, which takes precedence over
+    // `config.yaml`'s `port:` field -- confirmed the hard way: blast's own
+    // `PORT` (set for BLAST__PORT-style config, e.g. by an operator's
+    // container entrypoint) leaks into this child via the normal
+    // inherit-parent-env `Command` default, so hypeman silently rebinds onto
+    // whatever port blast itself wants, both processes fighting over it and
+    // the health check below timing out forever. Set it explicitly so
+    // whatever's in *our* environment can never leak through by accident.
+    let port_str = port.to_string();
     let mut cmd = match strategy {
         CapStrategy::Direct => {
             let mut c = Command::new(server_bin);
             c.env("JWT_SECRET", secret);
             c.env("CONFIG_PATH", &config_path_str);
+            c.env("PORT", &port_str);
             c
         }
         CapStrategy::Sudo => {
@@ -738,6 +754,7 @@ async fn spawn_hypeman_server(
                 "env",
                 &format!("JWT_SECRET={secret}"),
                 &format!("CONFIG_PATH={config_path_str}"),
+                &format!("PORT={port_str}"),
             ])
             .arg(server_bin);
             c
@@ -764,6 +781,27 @@ async fn spawn_hypeman_server(
 // ---------------------------------------------------------------------------
 // Shared build/tool helpers
 // ---------------------------------------------------------------------------
+
+/// Unlike `binary_is_usable`, doesn't invoke the binary: hypeman treats
+/// every flag it doesn't recognize (`--version`, `--help`, `-h`) as
+/// no-op and falls through to its default action -- starting the full
+/// server, bridge/iptables setup and all -- so any `--version`-style probe
+/// just runs out the clock on `binary_is_usable`'s 5s timeout and reports
+/// "not usable" even for a perfectly good binary. Existence + the exec bit
+/// is the only safe check available.
+fn hypeman_server_binary_present(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            m.is_file() && m.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(not(unix))]
+        {
+            m.is_file()
+        }
+    })
+}
 
 async fn binary_is_usable(path: &Path) -> bool {
     if !path.is_file() {

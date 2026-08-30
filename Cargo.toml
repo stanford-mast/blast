@@ -1,6 +1,6 @@
 [package]
 name = "blast_core"
-version = "0.1.2"
+version = "0.1.4"
 edition = "2021"
 description = "Open-source VMs-as-a-service: local sandbox orchestration over SmolVM, Hypeman, and Docker"
 license = "MIT"

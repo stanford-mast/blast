@@ -244,6 +244,14 @@ pub struct WorkerRegisterRequest {
     pub worker_provider: String,
     pub worker_region: String,
     pub platform: String,
+    /// "docker" / "smolvm" / "hypeman" -- the snapshot format this worker's
+    /// VMs use, distinct from `platform` (CPU architecture, identical across
+    /// backends on the same host). Informational for now; the control plane
+    /// always routes an existing VM back to its original owning worker, so
+    /// nothing currently picks a worker by backend -- but a future
+    /// migrate-across-BYOC-workers feature would need it to avoid resuming a
+    /// snapshot on a backend that can't read its format.
+    pub backend: String,
     #[serde(rename = "cpu_count")]
     pub vcpu: u32,
     pub memory_mib: u64,

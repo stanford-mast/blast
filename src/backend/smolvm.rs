@@ -307,4 +307,6 @@ impl VmBackend for SmolvmBackend {
     }
 
     fn platform(&self) -> &str { super::host_platform() }
+
+    fn kind(&self) -> &'static str { "smolvm" }
 }
