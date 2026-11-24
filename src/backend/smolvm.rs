@@ -49,8 +49,16 @@ const AGENT_CONNECTIONS: usize = 8;
 /// checkpoints.
 const EXEC_SLOTS: usize = AGENT_CONNECTIONS - 2;
 
-/// How long a `SmolVM` command waits out a locked state database.
-const DATABASE_LOCKED_RETRY: Duration = Duration::from_secs(30);
+/// How long a `SmolVM` command waits out a refusal that clears by itself.
+const BUSY_RETRY: Duration = Duration::from_secs(30);
+
+/// `SmolVM`'s refusals that end on their own and change nothing: its state
+/// database is locked by a concurrent command, or the machine's previous
+/// checkpoint is still being saved after the machine resumed.
+const BUSY: [&str; 2] = [
+    "database is locked",
+    "another durable save is still pending",
+];
 
 /// Between half and all of `backoff`, so contending commands spread out.
 fn jittered(backoff: Duration) -> Duration {
@@ -134,21 +142,21 @@ impl SmolvmBackend {
         self.smolvm_env(args, None).await
     }
 
-    /// Runs a `SmolVM` command, retrying while its state database is locked:
-    /// concurrent commands contend for it and give up quickly. A command
-    /// that fails this way has changed nothing (a failed `create` removes
-    /// what it made), so it can simply run again.
+    /// Runs a `SmolVM` command, retrying while `SmolVM` refuses it as
+    /// [`BUSY`]. A command refused this way has changed nothing (a failed
+    /// `create` removes what it made), so it can simply run again.
     async fn smolvm_env(
         &self,
         args: &[&str],
         config_path: Option<&Path>,
     ) -> Result<std::process::Output> {
-        let deadline = std::time::Instant::now() + DATABASE_LOCKED_RETRY;
+        let deadline = std::time::Instant::now() + BUSY_RETRY;
         let mut backoff = Duration::from_millis(50);
         loop {
             let out = self.smolvm_once(args, config_path).await?;
+            let stderr = String::from_utf8_lossy(&out.stderr);
             if out.status.success()
-                || !String::from_utf8_lossy(&out.stderr).contains("database is locked")
+                || !BUSY.iter().any(|busy| stderr.contains(busy))
                 || std::time::Instant::now() >= deadline
             {
                 return Ok(out);
@@ -538,19 +546,21 @@ mod tests {
     use super::*;
     use crate::backend::{Ended, Stdout};
 
-    /// A `SmolVM` whose database is locked for its first three commands.
-    fn contended_smolvm(dir: &Path) -> PathBuf {
+    /// A `SmolVM` that refuses its first three commands with `refusal`.
+    fn contended_smolvm(dir: &Path, refusal: &str) -> PathBuf {
         let script = dir.join("smolvm");
         std::fs::write(
             &script,
-            "#!/bin/sh\n\
-             count=$(cat \"$XDG_DATA_HOME/calls\" 2>/dev/null || echo 0)\n\
-             echo $((count + 1)) > \"$XDG_DATA_HOME/calls\"\n\
-             if [ \"$count\" -lt 3 ]; then\n\
-               echo \"Error: database operation failed: database is locked\" >&2; exit 1\n\
-             fi\n\
-             if [ \"$2\" = exec ]; then exit 1; fi\n\
-             echo '[{\"name\":\"m\",\"cpus\":1,\"memory_mib\":256,\"state\":\"stopped\"}]'\n",
+            format!(
+                "#!/bin/sh\n\
+                 count=$(cat \"$XDG_DATA_HOME/calls\" 2>/dev/null || echo 0)\n\
+                 echo $((count + 1)) > \"$XDG_DATA_HOME/calls\"\n\
+                 if [ \"$count\" -lt 3 ]; then\n\
+                   echo \"Error: {refusal}\" >&2; exit 1\n\
+                 fi\n\
+                 if [ \"$2\" = exec ]; then exit 1; fi\n\
+                 echo '[{{\"name\":\"m\",\"cpus\":1,\"memory_mib\":256,\"state\":\"stopped\"}}]'\n"
+            ),
         )
         .unwrap();
         let mut permissions = std::fs::metadata(&script).unwrap().permissions();
@@ -575,8 +585,22 @@ mod tests {
 
     #[tokio::test]
     async fn commands_wait_out_a_locked_database() {
+        commands_wait_out("database operation failed: database is locked").await;
+    }
+
+    #[tokio::test]
+    async fn commands_wait_out_a_pending_checkpoint_save() {
+        commands_wait_out(
+            "agent operation failed: checkpoint machine: libkrun save failed: \
+             ERR EBUSY another durable save is still pending",
+        )
+        .await;
+    }
+
+    async fn commands_wait_out(refusal: &str) {
         let dir = tempfile::tempdir().unwrap();
-        let backend = SmolvmBackend::new(contended_smolvm(dir.path()), dir.path().to_owned());
+        let backend =
+            SmolvmBackend::new(contended_smolvm(dir.path(), refusal), dir.path().to_owned());
 
         assert!(backend
             .is_stopped(&VmHandle { id: "m".into() })
@@ -680,7 +704,10 @@ mod tests {
     #[tokio::test]
     async fn guest_commands_are_never_retried() {
         let dir = tempfile::tempdir().unwrap();
-        let backend = SmolvmBackend::new(contended_smolvm(dir.path()), dir.path().to_owned());
+        let backend = SmolvmBackend::new(
+            contended_smolvm(dir.path(), "database operation failed: database is locked"),
+            dir.path().to_owned(),
+        );
         let vm = VmHandle { id: "m".into() };
 
         let out = backend
