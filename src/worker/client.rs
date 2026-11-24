@@ -504,6 +504,10 @@ fn encode_activity(activity: &Activity) -> Vec<u8> {
     if let Some(error) = &activity.error_message {
         attributes.push(string("error_message", error));
     }
+    if let Some(body) = &activity.request_body_content {
+        attributes.push(string("request_body_content", body));
+        attributes.push(string("request_size_bytes", &body.len().to_string()));
+    }
     if let Some(body) = &activity.response_body_content {
         attributes.push(string("response_body_content", body));
         attributes.push(string("response_size_bytes", &body.len().to_string()));

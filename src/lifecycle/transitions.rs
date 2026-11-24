@@ -62,17 +62,30 @@ pub async fn pause_vm(app: &AppState, vm: &VmRecord) {
 /// Reclaim a running VM using the strongest state the backend can represent.
 /// A backend without a real CPU-only pause goes straight to a durable
 /// suspension, so its vCPU is released only after the VM process is gone.
-pub async fn park_running_vm(app: &AppState, vm: &VmRecord, reason: &str) {
+pub async fn park_running_vm(
+    app: &AppState,
+    vm: &VmRecord,
+    reason: &str,
+    held: Option<VmHeld>,
+) -> Option<VmHeld> {
     if app.backend.supports_pause() {
         pause_vm(app, vm).await;
+        held
     } else {
-        suspend_vm(app, vm, reason).await;
+        suspend_vm(app, vm, reason, held).await;
+        None
     }
 }
 
+/// The VM's lock, as the caller of a transition holds it.
+pub type VmHeld = tokio::sync::OwnedMutexGuard<()>;
+
 /// Paused -> Suspended: write a snapshot to disk, destroy the VM process,
 /// free CPU + memory, then copy the snapshot to durable storage.
-pub async fn suspend_vm(app: &AppState, vm: &VmRecord, reason: &str) {
+/// `held` goes on to the storing of the snapshot, so that nothing reaches the
+/// VM between its suspension and that: until it is stored, a suspended VM
+/// has no snapshot a resume or a fork may use.
+pub async fn suspend_vm(app: &AppState, vm: &VmRecord, reason: &str, held: Option<VmHeld>) {
     if !safe_to_transition(vm) {
         debug!(vm_id = %vm.vm_id, "skipping suspend: session in flight");
         return;
@@ -80,6 +93,7 @@ pub async fn suspend_vm(app: &AppState, vm: &VmRecord, reason: &str) {
     let Some(handle) = vm.handle.as_ref() else {
         return;
     };
+    super::end_checkpoint_upload(app, &vm.vm_id).await;
     let snap_dir = app.snapshots.snap_dir(&vm.vm_id);
     let suspended = match app.snapshots.invalidate_local_generation(&vm.vm_id).await {
         Ok(()) => app.backend.suspend(handle, &snap_dir).await,
@@ -147,7 +161,8 @@ pub async fn suspend_vm(app: &AppState, vm: &VmRecord, reason: &str) {
                 warn!(vm_id = %vm.vm_id, err = %error, "persist suspend activity failed");
             }
             if store {
-                spawn_store_snapshot(app, &vm.vm_id);
+                let (app, vm_id) = (app.clone(), vm.vm_id.clone());
+                tokio::spawn(async move { store_snapshot(&app, &vm_id, held).await });
             }
         }
         Err(_) if demote_if_stopped(app, vm).await => {}
@@ -254,7 +269,7 @@ pub fn manifest(vm: &VmRecord) -> VmManifest {
 /// record's `storing`, which keeps a second copy from starting meanwhile.
 pub fn spawn_store_snapshot(app: &AppState, vm_id: &str) {
     let (app, vm_id) = (app.clone(), vm_id.to_owned());
-    tokio::spawn(async move { store_snapshot(&app, &vm_id).await });
+    tokio::spawn(async move { store_snapshot(&app, &vm_id, None).await });
 }
 
 pub(super) async fn upload_with_lease<F>(
@@ -298,8 +313,13 @@ where
 /// Both the upload and local release use the snapshot directory, so allowing
 /// resume, sync, or delete to overlap would race on that directory (and makes
 /// removal fail outright on platforms such as Windows).
-async fn store_snapshot(app: &AppState, vm_id: &str) {
-    let _vm = crate::api::handlers::lock_vm(app, vm_id).await;
+async fn store_snapshot(app: &AppState, vm_id: &str, held: Option<VmHeld>) {
+    let _vm = match held {
+        Some(held) => held,
+        None => crate::api::handlers::lock_vm(app, vm_id).await,
+    };
+    super::end_checkpoint_upload(app, vm_id).await;
+    let upload = super::CheckpointUpload::begin(app, vm_id);
     let started = Instant::now();
     let stored = async {
         if resolve_pending(app, vm_id).await? == Some(PendingKind::Suspended) {
@@ -317,15 +337,17 @@ async fn store_snapshot(app: &AppState, vm_id: &str) {
                 },
             )
             .await?;
-        if let Err(error) = upload_with_lease(
-            app,
-            vm_id,
-            &reservation,
-            app.snapshots
-                .persist_generation(vm_id, &reservation.snapshot_id),
-        )
-        .await
-        {
+        let uploaded = tokio::select! {
+            uploaded = upload_with_lease(
+                app,
+                vm_id,
+                &reservation,
+                app.snapshots
+                    .persist_generation(vm_id, &reservation.snapshot_id),
+            ) => uploaded,
+            () = upload.cancel.cancelled() => Err(anyhow::anyhow!("the VM is being deleted")),
+        };
+        if let Err(error) = uploaded {
             app.snapshots.abandon_generation(vm_id).await?;
             return Err(error);
         }
@@ -334,6 +356,7 @@ async fn store_snapshot(app: &AppState, vm_id: &str) {
         Ok::<(), anyhow::Error>(())
     }
     .await;
+    upload.end(app, vm_id);
     match stored {
         Ok(()) => {
             let released = app

@@ -66,6 +66,9 @@ pub struct Activity {
     pub status_code: u16,
     pub error_message: Option<String>,
     pub response_body_content: Option<String>,
+    /// What was asked for: a run's command, a fork's request.
+    #[serde(default)]
+    pub request_body_content: Option<String>,
 }
 
 impl Activity {
@@ -94,6 +97,7 @@ impl Activity {
             status_code: if state == "failed" { 500 } else { 200 },
             error_message: None,
             response_body_content: None,
+            request_body_content: None,
         }
     }
 
@@ -123,6 +127,7 @@ impl Activity {
             status_code,
             error_message: Some(truncated_bytes(error_message, MAX_ACTIVITY_OUTPUT_BYTES)),
             response_body_content: None,
+            request_body_content: None,
         }
     }
 
@@ -186,6 +191,7 @@ impl Activity {
             },
             error_message,
             response_body_content,
+            request_body_content: Some(truncated_bytes(&run.command, MAX_ACTIVITY_OUTPUT_BYTES)),
         }
     }
 }

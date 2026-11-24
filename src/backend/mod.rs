@@ -265,6 +265,30 @@ pub trait VmBackend: Send + Sync + 'static {
     /// fork may still be reading them through hard links.
     async fn snapshot(&self, vm: &VmHandle, snap_dir: &Path) -> Result<()>;
 
+    /// Removes what the backend still holds of machines that are stopped and
+    /// that no VM in `kept` runs on, such as a fork that failed halfway.
+    /// Returns how many it removed.
+    async fn remove_stopped_leftovers(
+        &self,
+        _kept: &std::collections::HashSet<String>,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    /// [`Self::snapshot`], sending on `resumed` as soon as the VM runs again:
+    /// a backend may pause it for a moment and go on writing the snapshot for
+    /// much longer. One that cannot tell the two apart sends when it is done.
+    async fn snapshot_while_running(
+        &self,
+        vm: &VmHandle,
+        snap_dir: &Path,
+        resumed: tokio::sync::oneshot::Sender<()>,
+    ) -> Result<()> {
+        let written = self.snapshot(vm, snap_dir).await;
+        let _ = resumed.send(());
+        written
+    }
+
     /// Suspend: write state to `snap_dir` as `snapshot` does, and destroy the
     /// VM process.
     async fn suspend(&self, vm: &VmHandle, snap_dir: &Path) -> Result<()>;

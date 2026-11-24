@@ -44,6 +44,11 @@ pub struct ForkRequest {
     pub disk: Option<bool>,
     pub durable: Option<bool>,
     pub policies: Option<serde_json::Value>,
+
+    /// The request as it arrived, without its registry credentials: what the
+    /// fork's activity is recorded with.
+    #[serde(skip)]
+    pub recorded: Option<String>,
 }
 
 /// Credentials for pulling `image` from a private registry, matching Docker's

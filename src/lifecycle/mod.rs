@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use tokio::time;
 use tracing::{debug, info, warn};
@@ -38,8 +38,11 @@ struct PressureThresholds {
 ///   `Running` -(`pause_ttl` or vcpu pressure)-> `Paused`   [CPU freed, memory hot]
 ///   `Paused`  -(`suspend_ttl` or memory pressure)-> `Suspended`  [CPU+memory freed, snapshot on disk]
 ///
-/// Backends without a real CPU-only pause move directly from Running to
-/// Suspended. They never receive the Paused accounting discount.
+/// A backend without a real CPU-only pause moves directly from Running to
+/// Suspended, and never receives the Paused accounting discount. It does so
+/// when a pausing backend would (`pause_ttl` then `suspend_ttl` of idleness),
+/// so an idle VM costs a full restore no sooner on one backend than another;
+/// pressure still parks it at once.
 ///
 /// A VM with an active session is never paused or suspended. Resource
 /// accounting changes only after its backend transition succeeds.
@@ -148,7 +151,6 @@ async fn dirty_checkpoint_loop(app: AppState, interval: Duration) {
             let checkpoint_app = app.clone();
             tokio::spawn(async move {
                 let _gate = gate;
-                let _vm = vm_guard;
                 let Some(current) = checkpoint_app.store.get(&vm.vm_id).await else {
                     return;
                 };
@@ -161,22 +163,158 @@ async fn dirty_checkpoint_loop(app: AppState, interval: Duration) {
                     || checkpoint_app
                         .draining
                         .load(std::sync::atomic::Ordering::SeqCst)
+                    || uploading_checkpoint(&checkpoint_app, &vm.vm_id)
                 {
                     return;
                 }
-                checkpoint_running_vm(&checkpoint_app, &current).await;
+                checkpoint_running_vm(&checkpoint_app, &current, vm_guard).await;
             });
         }
     }
 }
 
-async fn checkpoint_running_vm(app: &AppState, vm: &VmRecord) {
+/// A background checkpoint from the moment its machine runs again to its
+/// being stored. The VM is free meanwhile: runs and syncs go on. Whatever
+/// else reads or replaces the VM's snapshot state first ends it with
+/// [`end_checkpoint_upload`], while it holds the VM's lock.
+#[derive(Clone)]
+pub struct CheckpointUpload {
+    pub(super) cancel: tokio_util::sync::CancellationToken,
+    /// Held while the checkpoint is stored: from its reservation to its
+    /// commit. Writing it out before that touches nothing of the VM's.
+    running: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl CheckpointUpload {
+    /// Marks `vm_id`'s snapshot as being stored, for [`abandon_snapshot_store`].
+    pub(super) fn begin(app: &AppState, vm_id: &str) -> Self {
+        let upload = Self {
+            cancel: tokio_util::sync::CancellationToken::new(),
+            running: Arc::default(),
+        };
+        app.checkpoint_uploads
+            .lock()
+            .expect("checkpoint uploads lock")
+            .insert(vm_id.to_owned(), upload.clone());
+        upload
+    }
+
+    /// Forgets this one, and not one that has since taken its place.
+    pub(super) fn end(&self, app: &AppState, vm_id: &str) {
+        let mut uploads = app
+            .checkpoint_uploads
+            .lock()
+            .expect("checkpoint uploads lock");
+        if uploads
+            .get(vm_id)
+            .is_some_and(|current| Arc::ptr_eq(&current.running, &self.running))
+        {
+            uploads.remove(vm_id);
+        }
+    }
+}
+
+pub type CheckpointUploads =
+    Arc<std::sync::Mutex<std::collections::HashMap<String, CheckpointUpload>>>;
+
+fn uploading_checkpoint(app: &AppState, vm_id: &str) -> bool {
+    app.checkpoint_uploads
+        .lock()
+        .expect("checkpoint uploads lock")
+        .contains_key(vm_id)
+}
+
+/// Stops the storing of `vm_id`'s snapshot, whichever kind is in flight,
+/// without waiting for it: for a VM about to be deleted, whose delete would
+/// otherwise wait out an upload of what it is about to remove.
+pub fn abandon_snapshot_store(app: &AppState, vm_id: &str) {
+    if let Some(upload) = app
+        .checkpoint_uploads
+        .lock()
+        .expect("checkpoint uploads lock")
+        .get(vm_id)
+    {
+        upload.cancel.cancel();
+    }
+}
+
+/// Keeps `vm_id`'s background checkpoint, if one is in flight, from being
+/// stored, and returns once it has let go of the VM's snapshot state. One
+/// still being written out is left to finish (stopping the backend there
+/// can stop the machine) and is dropped then. The caller holds the VM's
+/// lock, so no other checkpoint starts before it is done.
+pub async fn end_checkpoint_upload(app: &AppState, vm_id: &str) {
+    let upload = app
+        .checkpoint_uploads
+        .lock()
+        .expect("checkpoint uploads lock")
+        .get(vm_id)
+        .cloned();
+    if let Some(upload) = upload {
+        upload.cancel.cancel();
+        drop(upload.running.lock().await);
+    }
+}
+
+/// Stores the checkpoint written out in `dir`, unless `upload` is ended first.
+async fn store_checkpoint(
+    app: &AppState,
+    vm_id: &str,
+    dir: &std::path::Path,
+    upload: &CheckpointUpload,
+) -> anyhow::Result<()> {
+    if resolve_pending(app, vm_id).await? == Some(crate::snapshot::PendingKind::Suspended) {
+        return Ok(());
+    }
+    let reservation = app.control_plane.reserve_snapshot(vm_id).await?;
+    app.snapshots
+        .set_pending_generation(
+            vm_id,
+            &crate::snapshot::PendingGeneration {
+                vm_generation: reservation.vm_generation,
+                snapshot_id: reservation.snapshot_id.clone(),
+                uploaded: false,
+                kind: crate::snapshot::PendingKind::DirtyCheckpoint,
+            },
+        )
+        .await?;
+    let uploaded = tokio::select! {
+        uploaded = upload_with_lease(
+            app,
+            vm_id,
+            &reservation,
+            app.snapshots
+                .persist_checkpoint_generation(vm_id, dir, &reservation.snapshot_id),
+        ) => uploaded,
+        () = upload.cancel.cancelled() => Err(anyhow::anyhow!("superseded before it was stored")),
+    };
+    if let Err(error) = uploaded {
+        app.snapshots.abandon_generation(vm_id).await?;
+        return Err(error);
+    }
+    app.snapshots.mark_generation_uploaded(vm_id).await?;
+    commit_generation(app, vm_id, &reservation).await?;
+    Ok(())
+}
+
+/// Checkpoints a running VM without holding it for longer than its machine
+/// is paused. The VM (`vm_guard`) is held while what the checkpoint is of is
+/// written down and until the machine runs again, so no run starts in the
+/// machine as it is saved; writing the checkpoint out and storing it go on
+/// with the VM free.
+async fn checkpoint_running_vm(
+    app: &AppState,
+    vm: &VmRecord,
+    vm_guard: tokio::sync::OwnedMutexGuard<()>,
+) {
     let dir = app.snapshots.checkpoint_dir(&vm.vm_id);
+    let upload = CheckpointUpload {
+        cancel: tokio_util::sync::CancellationToken::new(),
+        running: Arc::default(),
+    };
+    let mut running = None;
     let result = async {
         tokio::fs::create_dir_all(&dir).await?;
-        app.backend
-            .snapshot(vm.handle.as_ref().expect("checked handle"), &dir)
-            .await?;
         let mut committed = vm.clone();
         committed.state = VmState::Suspended;
         committed.handle = None;
@@ -190,47 +328,55 @@ async fn checkpoint_running_vm(app: &AppState, vm: &VmRecord) {
             &app.runs,
         )
         .await?;
-        if resolve_pending(app, &vm.vm_id).await? == Some(crate::snapshot::PendingKind::Suspended) {
-            return Ok::<(), anyhow::Error>(());
+        app.checkpoint_uploads
+            .lock()
+            .expect("checkpoint uploads lock")
+            .insert(vm.vm_id.clone(), upload.clone());
+        let (resumed, mut machine_resumed) = tokio::sync::oneshot::channel();
+        let written = app.backend.snapshot_while_running(
+            vm.handle.as_ref().expect("checked handle"),
+            &dir,
+            resumed,
+        );
+        tokio::pin!(written);
+        let early = tokio::select! {
+            written = &mut written => Some(written),
+            Ok(()) = &mut machine_resumed => None,
+        };
+        drop(vm_guard);
+        match early {
+            Some(written) => written?,
+            None => written.await?,
         }
-        let reservation = app.control_plane.reserve_snapshot(&vm.vm_id).await?;
-        app.snapshots
-            .set_pending_generation(
-                &vm.vm_id,
-                &crate::snapshot::PendingGeneration {
-                    vm_generation: reservation.vm_generation,
-                    snapshot_id: reservation.snapshot_id.clone(),
-                    uploaded: false,
-                    kind: crate::snapshot::PendingKind::DirtyCheckpoint,
-                },
-            )
-            .await?;
-        if let Err(error) = upload_with_lease(
-            app,
-            &vm.vm_id,
-            &reservation,
-            app.snapshots
-                .persist_checkpoint_generation(&vm.vm_id, &dir, &reservation.snapshot_id),
-        )
-        .await
-        {
-            app.snapshots.abandon_generation(&vm.vm_id).await?;
-            return Err(error);
+        let superseded = || anyhow::anyhow!("superseded before it was stored");
+        if upload.cancel.is_cancelled() {
+            return Err(superseded());
         }
-        app.snapshots.mark_generation_uploaded(&vm.vm_id).await?;
-        commit_generation(app, &vm.vm_id, &reservation).await?;
-        Ok::<(), anyhow::Error>(())
+        running = Some(upload.running.clone().lock_owned().await);
+        if upload.cancel.is_cancelled() {
+            return Err(superseded());
+        }
+        store_checkpoint(app, &vm.vm_id, &dir, &upload).await
     }
     .await;
     let _ = tokio::fs::remove_dir_all(&dir).await;
+    upload.end(app, &vm.vm_id);
+    drop(running);
     match result {
         Ok(()) => {
             info!(vm_id = %vm.vm_id, "stored dirty checkpoint");
             publish(app, &vm.vm_id).await;
         }
-        Err(_) if demote_if_stopped(app, vm).await => {}
+        Err(_) if upload.cancel.is_cancelled() => {
+            debug!(vm_id = %vm.vm_id, "dirty checkpoint superseded before it was stored");
+        }
         Err(error) => {
-            warn!(vm_id = %vm.vm_id, err = %format!("{error:#}"), "dirty checkpoint failed");
+            // The VM was let go for the upload; what a stopped machine
+            // needs done to it is done under its lock again.
+            let _vm = crate::api::handlers::lock_vm(app, &vm.vm_id).await;
+            if !demote_if_stopped(app, vm).await {
+                warn!(vm_id = %vm.vm_id, err = %format!("{error:#}"), "dirty checkpoint failed");
+            }
         }
     }
 }
@@ -239,6 +385,11 @@ async fn ttl_loop(app: AppState, pause_ttl: Duration, suspend_ttl: Duration) {
     app.control_plane.ready().await;
     let mut ticker = time::interval(Duration::from_secs(1));
     let mut last_removal_retry = time::Instant::now();
+    let park_after = if app.backend.supports_pause() {
+        pause_ttl
+    } else {
+        pause_ttl + suspend_ttl
+    };
     loop {
         ticker.tick().await;
         for vm in app.store.all().await {
@@ -247,14 +398,14 @@ async fn ttl_loop(app: AppState, pause_ttl: Duration, suspend_ttl: Duration) {
             };
             if vm.state == VmState::Paused && idle_since.elapsed() >= suspend_ttl {
                 let _gate = app.lifecycle_gate.read().await;
-                let Some(_vm) = crate::api::handlers::try_lock_vm(&app, &vm.vm_id) else {
+                let Some(held) = crate::api::handlers::try_lock_vm(&app, &vm.vm_id) else {
                     continue;
                 };
                 let Some(current) = app.store.get(&vm.vm_id).await else {
                     continue;
                 };
                 if current.state == VmState::Paused {
-                    suspend_vm(&app, &current, "ttl").await;
+                    suspend_vm(&app, &current, "ttl", Some(held)).await;
                 }
             }
         }
@@ -263,18 +414,18 @@ async fn ttl_loop(app: AppState, pause_ttl: Duration, suspend_ttl: Duration) {
             if vm.state != VmState::Running {
                 continue;
             }
-            if vm.last_active.elapsed() < pause_ttl {
+            if vm.last_active.elapsed() < park_after {
                 continue;
             }
             let _gate = app.lifecycle_gate.read().await;
-            let Some(_vm) = crate::api::handlers::try_lock_vm(&app, &vm.vm_id) else {
+            let Some(held) = crate::api::handlers::try_lock_vm(&app, &vm.vm_id) else {
                 continue;
             };
             let Some(current) = app.store.get(&vm.vm_id).await else {
                 continue;
             };
             if current.state == VmState::Running {
-                park_running_vm(&app, &current, "ttl").await;
+                park_running_vm(&app, &current, "ttl", Some(held)).await;
             }
         }
 
@@ -365,19 +516,23 @@ async fn pause_one_running_eager(app: &AppState) {
     for vm in running {
         debug!(vm_id = %vm.vm_id, "eager pause (vcpu pressure)");
         let _gate = app.lifecycle_gate.read().await;
-        let Some(_vm) = crate::api::handlers::try_lock_vm(app, &vm.vm_id) else {
+        let Some(held) = crate::api::handlers::try_lock_vm(app, &vm.vm_id) else {
             continue;
         };
         let Some(current) = app.store.get(&vm.vm_id).await else {
             continue;
         };
         if current.state == VmState::Running {
-            park_running_vm(app, &current, "vcpu pressure").await;
+            park_running_vm(app, &current, "vcpu pressure", Some(held)).await;
             return;
         }
     }
 }
 
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the VM stays held for the whole pass over it"
+)]
 async fn reclaim_memory(app: &AppState) {
     let mut candidates: Vec<_> = app
         .store
@@ -389,21 +544,22 @@ async fn reclaim_memory(app: &AppState) {
     candidates.sort_by_key(|v| v.last_active);
     for vm in candidates {
         let _gate = app.lifecycle_gate.read().await;
-        let Some(_vm) = crate::api::handlers::try_lock_vm(app, &vm.vm_id) else {
+        let Some(held) = crate::api::handlers::try_lock_vm(app, &vm.vm_id) else {
             continue;
         };
         let Some(mut current) = app.store.get(&vm.vm_id).await else {
             continue;
         };
+        let mut held = Some(held);
         if current.state == VmState::Running {
-            park_running_vm(app, &current, "memory pressure").await;
+            held = park_running_vm(app, &current, "memory pressure", held).await;
             let Some(updated) = app.store.get(&vm.vm_id).await else {
                 continue;
             };
             current = updated;
         }
         if current.state == VmState::Paused {
-            suspend_vm(app, &current, "memory pressure").await;
+            suspend_vm(app, &current, "memory pressure", held.take()).await;
         }
         if current.state != VmState::Running {
             return;
@@ -411,6 +567,10 @@ async fn reclaim_memory(app: &AppState) {
     }
 }
 
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the VM stays held for the whole pass over it"
+)]
 async fn reclaim_disk(app: &AppState) {
     if !app.backend.snapshots_are_portable() || !app.snapshots.can_store().await {
         return;
@@ -419,21 +579,22 @@ async fn reclaim_disk(app: &AppState) {
     candidates.sort_by_key(|v| v.last_active);
     for vm in candidates {
         let _gate = app.lifecycle_gate.read().await;
-        let Some(_vm) = crate::api::handlers::try_lock_vm(app, &vm.vm_id) else {
+        let Some(held) = crate::api::handlers::try_lock_vm(app, &vm.vm_id) else {
             continue;
         };
         let Some(mut current) = app.store.get(&vm.vm_id).await else {
             continue;
         };
+        let mut held = Some(held);
         if current.state == VmState::Running {
-            park_running_vm(app, &current, "disk pressure").await;
+            held = park_running_vm(app, &current, "disk pressure", held).await;
             let Some(updated) = app.store.get(&vm.vm_id).await else {
                 continue;
             };
             current = updated;
         }
         if current.state == VmState::Paused {
-            suspend_vm(app, &current, "disk pressure").await;
+            suspend_vm(app, &current, "disk pressure", held.take()).await;
             return;
         }
         if current.state == VmState::Suspended && current.snapshot_dir.is_some() {
@@ -468,6 +629,7 @@ pub async fn destroy_vm(app: &AppState, vm_id: &str) -> anyhow::Result<Option<Vm
     if app.store.get(vm_id).await.is_none() {
         return Ok(None);
     }
+    end_checkpoint_upload(app, vm_id).await;
     app.records
         .vm_deleted(vm_id)
         .await
@@ -513,11 +675,11 @@ pub async fn hand_back(
     }
     for vm in app.store.all().await {
         if vm.state == VmState::Running {
-            park_running_vm(app, &vm, "worker stopping").await;
+            park_running_vm(app, &vm, "worker stopping", None).await;
         }
         if let Some(vm) = app.store.get(&vm.vm_id).await {
             if vm.state == VmState::Paused {
-                suspend_vm(app, &vm, "worker stopping").await;
+                suspend_vm(app, &vm, "worker stopping", None).await;
             }
         }
     }

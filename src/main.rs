@@ -18,7 +18,6 @@ mod worker;
 use std::sync::{atomic::AtomicBool, Arc};
 
 use anyhow::{Context, Result};
-use axum::Router;
 use clap::{Parser, Subcommand};
 use tokio::{
     net::TcpListener,
@@ -161,6 +160,20 @@ async fn restore_state(state: &AppState) -> Result<()> {
     for (run_id, run) in state.runs.all().await {
         state.records.run(&run_id, &run)?;
     }
+    let kept = state
+        .store
+        .all()
+        .await
+        .into_iter()
+        .filter_map(|vm| vm.handle.map(|handle| handle.id))
+        .collect();
+    match state.backend.remove_stopped_leftovers(&kept).await {
+        Ok(0) => {}
+        Ok(removed) => info!(removed, "removed stopped machines no VM runs on"),
+        Err(error) => {
+            tracing::warn!(err = %format!("{error:#}"), "removing stopped machines failed");
+        }
+    }
     Ok(())
 }
 
@@ -232,6 +245,7 @@ async fn build_state(
         vm_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         uploads: Arc::default(),
         run_cancels: Arc::default(),
+        checkpoint_uploads: Arc::default(),
     };
     restore_state(&state).await?;
     Ok(state)
@@ -288,7 +302,7 @@ async fn serve(cli: &Cli) -> Result<Served> {
     let local_token = cfg.api.token.as_deref().map(Arc::from);
     if local_token.is_none() {
         if remote.is_some() {
-            tracing::warn!("[api] token is not set: only liveness diagnostics are enabled");
+            tracing::warn!("[api] token is not set: the loopback listener serves only liveness and `blast leave`");
         } else {
             tracing::warn!(
                 "[api] token is not set: the local API on port {} is unauthenticated",
@@ -296,11 +310,14 @@ async fn serve(cli: &Cli) -> Result<Served> {
             );
         }
     }
+    // `blast leave` asks a connected worker to leave over its loopback
+    // listener, behind `[api] token` when one is set. A worker outside a pool
+    // has nothing to leave, so its listener serves no leave route.
     let (leave_tx, leave_rx) = mpsc::channel(1);
     let router = if remote.is_some() {
-        api::diagnostics_router(state, local_token, Router::new())
+        api::diagnostics_router(state, local_token, worker::leave::route(leave_tx))
     } else {
-        api::router_with(state, local_token, worker::leave::route(leave_tx))
+        api::router(state, local_token)
     }
     .layer(tower_http::trace::TraceLayer::new_for_http());
 

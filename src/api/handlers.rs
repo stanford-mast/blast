@@ -50,6 +50,9 @@ pub struct AppState {
     pub vm_locks: Arc<std::sync::Mutex<HashMap<String, std::sync::Weak<AsyncMutex<()>>>>>,
     pub uploads: Uploads,
     pub run_cancels: super::runs::RunCancels,
+    /// The VMs whose background checkpoint is being uploaded; see
+    /// [`crate::lifecycle::CheckpointUpload`].
+    pub checkpoint_uploads: crate::lifecycle::CheckpointUploads,
     pub records: Records,
     pub control_plane: crate::worker::client::ControlPlane,
     pub allow_local_snapshot_adoption: bool,
@@ -292,8 +295,20 @@ pub async fn get_regions(State(s): State<AppState>) -> ApiResult<ListRegionsResp
 pub async fn post_fork(
     State(s): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<ForkRequest>,
+    Json(mut body): Json<serde_json::Value>,
 ) -> ApiResult<Vm> {
+    // Recorded without the credentials, which are used for one pull and
+    // kept nowhere.
+    let registry_auth = body
+        .as_object_mut()
+        .and_then(|fields| fields.remove("registry_auth"));
+    let recorded = body.to_string();
+    if let (Some(auth), Some(fields)) = (registry_auth, body.as_object_mut()) {
+        fields.insert("registry_auth".into(), auth);
+    }
+    let mut req: ForkRequest =
+        serde_json::from_value(body).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    req.recorded = Some(recorded);
     let vm_id = headers
         .get(VM_ID_HEADER)
         .map(|v| v.to_str().map(str::to_owned))
@@ -441,11 +456,7 @@ pub async fn handle_fork(
     let arrived = Instant::now();
     let _mutation = begin_mutation(s).await?;
     check_fork_supported(s, &req)?;
-    if req.image.is_some() && (req.source_vm_id.is_some() || req.source_vm_name.is_some()) {
-        return Err(ApiError::bad_request(
-            "give either `image` or a source VM, not both",
-        ));
-    }
+    check_fork_source(&req)?;
     let vm_id = s
         .control_plane
         .allocate_vm_id(vm_id)
@@ -502,6 +513,8 @@ pub async fn handle_fork(
         }
     };
     record.handle = Some(handle.clone());
+    // The VM begins now: a fork that took a minute has not left it idle for one.
+    record.last_active = Instant::now();
     match &source {
         None => record.workdir = image_workdir(s, &handle).await,
         // Being forked is activity of the source.
@@ -534,11 +547,9 @@ pub async fn handle_fork(
     let record = s.store.get(&vm_id).await.unwrap_or(record);
     persist_recoverable_fork(s, &record, &handle).await?;
     persist_vm_record(&s.records, &record)?;
-    if let Err(error) = s.records.activity(Activity::operation(
-        "fork",
-        "completed",
-        Some(record.vm_id.clone()),
-    )) {
+    let mut forked = Activity::operation("fork", "completed", Some(record.vm_id.clone()));
+    forked.request_body_content.clone_from(&req.recorded);
+    if let Err(error) = s.records.activity(forked) {
         tracing::warn!(vm_id = %record.vm_id, err = %error, "persist fork activity failed");
     }
     Ok(vm_object(s, record).await)
@@ -613,6 +624,12 @@ async fn lock_source(
 ) -> Result<(VmRecord, OwnedMutexGuard<()>), ApiError> {
     let src_id = resolve_source_vm_id(s, req).await?;
     let guard = lock_vm(s, &src_id).await;
+    crate::lifecycle::end_checkpoint_upload(s, &src_id).await;
+    // Being forked is activity of the source from the start: a fork takes
+    // long enough for a source last used before it to be suspended under it.
+    s.store
+        .update(&src_id, |r| r.last_active = Instant::now())
+        .await;
     let src = find_vm(s, &src_id).await.map_err(|e| {
         if e.status() == StatusCode::NOT_FOUND {
             source_not_found()
@@ -659,6 +676,35 @@ async fn resolve_source_vm_id(s: &AppState, req: &ForkRequest) -> Result<String,
             "one of: image, source_vm_id, source_vm_name required",
         ))
     }
+}
+
+/// Whether `image` could name an image at all: the characters a registry
+/// host, a repository path, a tag and a digest are written in. One that could
+/// not is refused before a pull is tried for it.
+pub(super) fn is_image_reference(image: &str) -> bool {
+    !image.is_empty()
+        && image
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-/:@".contains(&byte))
+}
+
+/// What a fork is from: an image that could be one, or a VM, and not both.
+fn check_fork_source(req: &ForkRequest) -> Result<(), ApiError> {
+    if req
+        .image
+        .as_deref()
+        .is_some_and(|image| !is_image_reference(image))
+    {
+        return Err(ApiError::bad_request(
+            "image is not a valid reference: invalid reference format",
+        ));
+    }
+    if req.image.is_some() && (req.source_vm_id.is_some() || req.source_vm_name.is_some()) {
+        return Err(ApiError::bad_request(
+            "give either `image` or a source VM, not both",
+        ));
+    }
+    Ok(())
 }
 
 /// A missing fork source answers the same 404 whether named by id or by name.
@@ -769,6 +815,7 @@ pub async fn delete_vm(
     Path(vm_id): Path<String>,
 ) -> ApiResult<DeleteResponse> {
     let _mutation = begin_mutation(&s).await?;
+    crate::lifecycle::abandon_snapshot_store(&s, &vm_id);
     // Holding the VM's lock waits out a sync or a snapshot of it in flight
     // (a fork holds it only until its snapshot is pinned), and keeps new
     // runs from starting.

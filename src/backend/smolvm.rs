@@ -1,13 +1,15 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use tokio::process::Command;
+use tokio::{process::Command, sync::Semaphore};
 
-use super::{Exec, RegistryAuth, Resources, RunOutput, VmBackend, VmHandle};
+use super::{Captured, Ended, Exec, RegistryAuth, Resources, RunOutput, VmBackend, VmHandle};
 
 /// Fields returned by `smolvm machine ls --json`.
 #[derive(serde::Deserialize)]
@@ -32,7 +34,20 @@ pub struct SmolvmBackend {
     binary: std::path::PathBuf,
     /// Root for `SmolVM` images, checkpoints, and cache files.
     smolvm_data_dir: std::path::PathBuf,
+    /// Each machine's share of its guest agent's connections; see [`EXEC_SLOTS`].
+    exec_slots: Mutex<HashMap<String, Arc<Semaphore>>>,
 }
+
+/// `SmolVM`'s guest agent serves this many connections at once (its
+/// `MAX_CONCURRENT_CONNECTIONS`) and accepts none while they are all in use:
+/// one command too many, and the machine looks stopped to every command,
+/// `SmolVM`'s own state probe among them.
+const AGENT_CONNECTIONS: usize = 8;
+
+/// How many of a machine's agent connections commands run on. The rest stay
+/// free for what else is sent to it while they run: state probes and
+/// checkpoints.
+const EXEC_SLOTS: usize = AGENT_CONNECTIONS - 2;
 
 /// How long a `SmolVM` command waits out a locked state database.
 const DATABASE_LOCKED_RETRY: Duration = Duration::from_secs(30);
@@ -43,6 +58,22 @@ fn jittered(backoff: Duration) -> Duration {
     let spread = u64::try_from(half.as_micros()).unwrap_or(u64::MAX).max(1);
     let random = u64::try_from(ulid::Ulid::new().random() % u128::from(spread)).unwrap_or(0);
     half + Duration::from_micros(random)
+}
+
+/// What a failed `SmolVM` command says went wrong: its `Error:` line, without
+/// the progress it printed on the way there, which names its machines.
+fn failure(stderr: &str) -> &str {
+    let lines = || {
+        stderr
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+    };
+    lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("Error: "))
+        .or_else(|| lines().next_back())
+        .unwrap_or_default()
 }
 
 fn flag_value<'a>(args: &[&'a str], flag: &str) -> Option<&'a str> {
@@ -57,10 +88,45 @@ fn toml_escape(s: &str) -> String {
 }
 
 impl SmolvmBackend {
-    pub const fn new(binary: std::path::PathBuf, data_dir: std::path::PathBuf) -> Self {
+    pub fn new(binary: std::path::PathBuf, data_dir: std::path::PathBuf) -> Self {
         Self {
             binary,
             smolvm_data_dir: data_dir,
+            exec_slots: Mutex::default(),
+        }
+    }
+
+    fn exec_slots(&self, machine: &str) -> Arc<Semaphore> {
+        self.exec_slots
+            .lock()
+            .expect("exec slots lock")
+            .entry(machine.to_owned())
+            .or_insert_with(|| Arc::new(Semaphore::new(EXEC_SLOTS)))
+            .clone()
+    }
+
+    /// A machine restored from a checkpoint wakes with the clock the
+    /// checkpoint was taken at, and on Linux nothing moves it on: each
+    /// suspension would leave it that much further behind. A guest whose
+    /// clock cannot be set keeps running on the old one.
+    async fn set_clock(&self, machine: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        let set = format!("date -u -s @{now} >/dev/null");
+        let outcome = self
+            .smolvm(&["machine", "exec", "--name", machine, "--", "sh", "-c", &set])
+            .await;
+        match outcome {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => tracing::warn!(
+                machine,
+                err = %String::from_utf8_lossy(&out.stderr).trim(),
+                "setting a restored machine's clock failed"
+            ),
+            Err(error) => {
+                tracing::warn!(machine, err = %format!("{error:#}"), "setting a restored machine's clock failed");
+            }
         }
     }
 
@@ -125,7 +191,7 @@ impl SmolvmBackend {
         if out.status.success() {
             Ok(out)
         } else {
-            bail!("{ctx}: {}", String::from_utf8_lossy(&out.stderr))
+            bail!("{ctx}: {}", failure(&String::from_utf8_lossy(&out.stderr)))
         }
     }
 
@@ -281,6 +347,7 @@ impl VmBackend for SmolvmBackend {
             self.smolvm(&["machine", "start", "--name", &id]).await?,
             "smolvm start",
         )?;
+        self.set_clock(&id).await;
         Ok(VmHandle { id })
     }
 
@@ -288,6 +355,24 @@ impl VmBackend for SmolvmBackend {
     /// limit. Without `--workdir` the command starts in the image's working
     /// directory; the image's environment applies either way.
     async fn run(&self, vm: &VmHandle, exec: Exec<'_>) -> Result<RunOutput> {
+        // A command past the machine's slots waits for one, as long as it
+        // may run at all.
+        let slots = self.exec_slots(&vm.id);
+        let waited_out = |ended| RunOutput {
+            stdout: Captured::default(),
+            stderr: Captured::default(),
+            ended,
+        };
+        let _slot = tokio::select! {
+            slot = slots.acquire() => slot.context("exec slots closed")?,
+            () = exec.cancel.cancelled() => return Ok(waited_out(Ended::Cancelled)),
+            () = async {
+                match exec.timeout {
+                    Some(limit) => tokio::time::sleep(limit).await,
+                    None => std::future::pending().await,
+                }
+            } => return Ok(waited_out(Ended::TimedOut)),
+        };
         let mut command = self.command();
         command.args(["machine", "exec", "--name", &vm.id, "--stream"]);
         if let Some(cwd) = exec.cwd {
@@ -340,6 +425,73 @@ impl VmBackend for SmolvmBackend {
         Ok(())
     }
 
+    async fn remove_stopped_leftovers(
+        &self,
+        kept: &std::collections::HashSet<String>,
+    ) -> Result<usize> {
+        let out = Self::check(
+            self.smolvm(&["machine", "ls", "--json"]).await?,
+            "smolvm machine ls",
+        )?;
+        let machines: Vec<MachineInfo> =
+            serde_json::from_slice(&out.stdout).context("parse smolvm machine ls --json")?;
+        let mut removed = 0;
+        for machine in machines {
+            if machine.is_running() || kept.contains(&machine.name) {
+                continue;
+            }
+            Self::check(
+                self.smolvm(&["machine", "delete", "--name", &machine.name, "--force"])
+                    .await?,
+                "smolvm machine delete",
+            )?;
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
+    /// `SmolVM` saves the machine while it is paused, lets it run again, and
+    /// only then packs what it saved into its output, starting with a
+    /// temporary file beside it: the first new entry in `snap_dir` says the
+    /// machine is running.
+    async fn snapshot_while_running(
+        &self,
+        vm: &VmHandle,
+        snap_dir: &Path,
+        resumed: tokio::sync::oneshot::Sender<()>,
+    ) -> Result<()> {
+        std::fs::create_dir_all(snap_dir)?;
+        let entries = || -> Result<std::collections::BTreeSet<std::ffi::OsString>> {
+            std::fs::read_dir(snap_dir)?
+                .map(|entry| Ok(entry?.file_name()))
+                .collect()
+        };
+        match std::fs::remove_file(snap_dir.join("machine.partial.smolcheckpoint")) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
+        let before = entries()?;
+        let written = self.snapshot(vm, snap_dir);
+        tokio::pin!(written);
+        let mut resumed = Some(resumed);
+        let mut look = tokio::time::interval(Duration::from_millis(50));
+        loop {
+            tokio::select! {
+                written = &mut written => {
+                    if let Some(resumed) = resumed.take() {
+                        let _ = resumed.send(());
+                    }
+                    return written;
+                }
+                _ = look.tick(), if resumed.is_some() => {
+                    if entries()? != before {
+                        let _ = resumed.take().expect("checked").send(());
+                    }
+                }
+            }
+        }
+    }
+
     async fn suspend(&self, vm: &VmHandle, snap_dir: &Path) -> Result<()> {
         self.snapshot(vm, snap_dir).await?;
         self.delete(vm).await
@@ -350,6 +502,10 @@ impl VmBackend for SmolvmBackend {
     }
 
     async fn delete(&self, vm: &VmHandle) -> Result<()> {
+        self.exec_slots
+            .lock()
+            .expect("exec slots lock")
+            .remove(&vm.id);
         if self.listed(&vm.id).await?.is_none() {
             return Ok(());
         }
@@ -407,6 +563,16 @@ mod tests {
         std::fs::read_to_string(dir.join("calls")).unwrap()
     }
 
+    #[test]
+    fn a_failure_is_the_error_and_not_the_progress_before_it() {
+        let stderr = "Starting machine '01M7R6ES6R96MBX6EWBYH6T6BV'...\n\
+                      Pulling ubuntu:no-such-tag...\n\
+                      Error: image operation failed: manifest unknown\n";
+        assert_eq!(failure(stderr), "image operation failed: manifest unknown");
+        assert_eq!(failure("something else\n\n"), "something else");
+        assert_eq!(failure(""), "");
+    }
+
     #[tokio::test]
     async fn commands_wait_out_a_locked_database() {
         let dir = tempfile::tempdir().unwrap();
@@ -417,6 +583,98 @@ mod tests {
             .await
             .unwrap());
         assert_eq!(calls(dir.path()).trim(), "4");
+    }
+
+    /// A `SmolVM` whose every command logs when it starts and ends.
+    fn logging_smolvm(dir: &Path) -> PathBuf {
+        let script = dir.join("smolvm");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             echo start >> \"$XDG_DATA_HOME/log\"\n\
+             sleep 0.2\n\
+             echo end >> \"$XDG_DATA_HOME/log\"\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+        script
+    }
+
+    #[tokio::test]
+    async fn a_machines_commands_never_outnumber_its_exec_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = SmolvmBackend::new(logging_smolvm(dir.path()), dir.path().to_owned());
+        let vm = VmHandle { id: "m".into() };
+
+        let runs =
+            (0..EXEC_SLOTS * 3).map(|_| backend.run(&vm, Exec::internal("true", Stdout::Capture)));
+        for out in futures::future::join_all(runs).await {
+            assert_eq!(out.unwrap().ended, Ended::Exited(0));
+        }
+
+        let (mut running, mut most) = (0, 0);
+        for line in std::fs::read_to_string(dir.path().join("log"))
+            .unwrap()
+            .lines()
+        {
+            running = if line == "start" {
+                running + 1
+            } else {
+                running - 1
+            };
+            most = most.max(running);
+        }
+        assert_eq!(most, EXEC_SLOTS);
+    }
+
+    /// A `SmolVM` whose checkpoint pauses, then packs beside its output as
+    /// the real one does: a temporary file first, the output at the end.
+    fn packing_smolvm(dir: &Path) -> PathBuf {
+        let script = dir.join("smolvm");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             for last; do :; done\n\
+             sleep 0.3\n\
+             touch \"$(dirname \"$last\")/.tmpPACK\"\n\
+             sleep 0.6\n\
+             mv \"$(dirname \"$last\")/.tmpPACK\" \"$last\"\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+        script
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_says_the_machine_runs_again_before_it_is_written_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = SmolvmBackend::new(packing_smolvm(dir.path()), dir.path().to_owned());
+        let snap_dir = dir.path().join("snap");
+        std::fs::create_dir_all(&snap_dir).unwrap();
+        std::fs::write(snap_dir.join("manifest.json"), "{}").unwrap();
+        let (resumed, machine_resumed) = tokio::sync::oneshot::channel();
+        let started = std::time::Instant::now();
+
+        let vm = VmHandle { id: "m".into() };
+        let written = backend.snapshot_while_running(&vm, &snap_dir, resumed);
+        tokio::pin!(written);
+        tokio::select! {
+            _ = &mut written => panic!("written out before the machine was said to run"),
+            said = machine_resumed => said.unwrap(),
+        }
+        let resumed_after = started.elapsed();
+        written.await.unwrap();
+
+        assert!(
+            resumed_after >= Duration::from_millis(300),
+            "{resumed_after:?}"
+        );
+        assert!(started.elapsed() >= resumed_after + Duration::from_millis(400));
+        assert!(snap_dir.join("machine.smolcheckpoint").exists());
     }
 
     #[tokio::test]

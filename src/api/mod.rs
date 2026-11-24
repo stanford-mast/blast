@@ -143,7 +143,18 @@ fn finish_router(
             state.clone(),
             error::envelope,
         ))
+        .layer(middleware::from_fn(run_to_its_end))
         .with_state(state)
+}
+
+/// Serves a request to its end whether or not its caller is still waiting.
+/// A handler dropped part-way leaves what it had begun as it was: a fork's
+/// VM reserved and never started.
+async fn run_to_its_end(req: Request, next: Next) -> Response {
+    // The task ends early only by panicking, which is passed on.
+    tokio::spawn(next.run(req))
+        .await
+        .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
 }
 
 /// The API's operations this worker does not serve, each refused by name

@@ -150,6 +150,7 @@ fn app(data: &Path, backend: Arc<SlowBackend>) -> AppState {
         vm_locks: Arc::default(),
         uploads: Arc::default(),
         run_cancels: Arc::default(),
+        checkpoint_uploads: Arc::default(),
         records,
         control_plane,
         allow_local_snapshot_adoption: false,
@@ -572,6 +573,20 @@ async fn a_long_run_does_not_hold_up_its_session_and_is_cancelled_once() {
 }
 
 #[test]
+fn a_name_that_could_not_be_an_image_is_refused_as_one() {
+    for image in [
+        "ubuntu:24.04",
+        "ghcr.io/owner/repo:tag",
+        "registry.example:5000/a/b@sha256:0123abcd",
+    ] {
+        assert!(super::handlers::is_image_reference(image), "{image}");
+    }
+    for image in ["", "not a valid/image::ref", "ubuntu:24.04\n", "repo;rm"] {
+        assert!(!super::handlers::is_image_reference(image), "{image:?}");
+    }
+}
+
+#[test]
 fn an_image_is_named_in_full() {
     for (image, full) in [
         ("alpine:3.20", "docker.io/library/alpine:3.20"),
@@ -600,5 +615,103 @@ fn a_deletion_the_control_plane_did_not_take_can_be_retried() {
             .into_response()
             .status(),
         axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fork_its_caller_stopped_waiting_for_still_makes_its_vm() {
+    use tower::ServiceExt;
+
+    let data = tempfile::tempdir().unwrap();
+    let mut s = app(data.path(), Arc::new(SlowBackend::default()));
+    // A declared pool: the fork reserves its VM before it starts it.
+    s.total_resources = Resources {
+        vcpu: 4,
+        memory_mib: 4096,
+        disk_mib: 8192,
+    };
+    let source = add_source(&s, Some(VmHandle { id: "src".into() })).await;
+    let vm_id = ulid::Ulid::new().to_string();
+    let request = axum::http::Request::post("/v1/fork")
+        .header("content-type", "application/json")
+        .header(VM_ID_HEADER, &vm_id)
+        .body(axum::body::Body::from(
+            serde_json::json!({ "source_vm_id": source }).to_string(),
+        ))
+        .unwrap();
+
+    let fork = super::router(s.clone(), None).oneshot(request);
+    assert!(tokio::time::timeout(Duration::from_millis(50), fork)
+        .await
+        .is_err());
+
+    let started = async {
+        while s.store.get(&vm_id).await.and_then(|vm| vm.handle).is_none() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), started)
+        .await
+        .expect("the abandoned fork's VM never started");
+}
+
+/// A connected worker's loopback listener with `leave` mounted, whose leave
+/// requests are each answered "left".
+fn connected_listener(s: AppState, token: Option<&str>) -> axum::Router {
+    let (requests, mut asked) = tokio::sync::mpsc::channel::<tokio::sync::oneshot::Sender<bool>>(1);
+    tokio::spawn(async move {
+        while let Some(left) = asked.recv().await {
+            let _ = left.send(true);
+        }
+    });
+    super::diagnostics_router(
+        s,
+        token.map(Into::into),
+        crate::worker::leave::route(requests),
+    )
+}
+
+async fn ask_to_leave(router: axum::Router, token: Option<&str>) -> axum::http::StatusCode {
+    use tower::ServiceExt;
+
+    let mut request = axum::http::Request::post(crate::worker::leave::PATH);
+    if let Some(token) = token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    let request = request.body(axum::body::Body::empty()).unwrap();
+    router.oneshot(request).await.unwrap().status()
+}
+
+#[tokio::test]
+async fn a_connected_worker_without_a_token_leaves_when_asked_on_loopback() {
+    let data = tempfile::tempdir().unwrap();
+    let s = app(data.path(), Arc::new(SlowBackend::default()));
+    assert_eq!(
+        ask_to_leave(connected_listener(s, None), None).await,
+        axum::http::StatusCode::NO_CONTENT
+    );
+}
+
+#[tokio::test]
+async fn a_connected_worker_with_a_token_leaves_only_for_its_token() {
+    let data = tempfile::tempdir().unwrap();
+    let s = app(data.path(), Arc::new(SlowBackend::default()));
+    assert_eq!(
+        ask_to_leave(connected_listener(s.clone(), Some("secret")), None).await,
+        axum::http::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        ask_to_leave(connected_listener(s, Some("secret")), Some("secret")).await,
+        axum::http::StatusCode::NO_CONTENT
+    );
+}
+
+#[tokio::test]
+async fn a_worker_outside_a_pool_serves_no_leave() {
+    let data = tempfile::tempdir().unwrap();
+    let s = app(data.path(), Arc::new(SlowBackend::default()));
+    assert_eq!(
+        ask_to_leave(super::router(s, None), None).await,
+        axum::http::StatusCode::NOT_FOUND
     );
 }
