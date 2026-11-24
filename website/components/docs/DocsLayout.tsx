@@ -8,16 +8,14 @@ import { CopyMarkdownButton } from "./CopyMarkdownButton";
 export type TocItem = { id: string; text: string };
 
 // Shared docs shell: header (logo only) + left sidebar + centered content
-// column + a right rail. Mirrors the three-column layout of arker.ai/docs's
-// DocsDocument (cloudflare/src/app/docs/docs-document.tsx): the rail is Copy
+// column + a right rail, in three columns: the rail is Copy
 // Markdown on top, the outline below, in ONE sticky flex column that travels
 // with the content, not a separate/narrower column, which is what was making
-// the page read as narrower than the reference. The rail always renders
+// the page read as narrower than it is. The rail always renders
 // (every docs page gets Copy Markdown, even ones without an outline, e.g.
 // the Introduction and the Guides); the outline itself only renders when the
-// page supplies a toc. No visible "On this page" heading, the reference
-// only carries that string as an aria-label, never rendered text
-// (on-this-page.tsx:188).
+// page supplies a toc. No visible "On this page" heading: that string is
+// only an aria-label, never rendered text.
 export function DocsLayout({
   children,
   toc,

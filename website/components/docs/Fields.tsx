@@ -1,9 +1,8 @@
 import type { ReactNode } from "react";
 
 // Lightly syntax-highlight a type annotation (e.g. `String | null`,
-// `"idle" | "running"`) so it reads like code. Same scheme as arker.ai/docs's
-// Fields (cloudflare/src/components/docs/fields.tsx), minus the parts of its
-// tokenizer this smaller field set never exercises.
+// `"idle" | "running"`) so it reads like code; the tokenizer covers only
+// what this field set exercises.
 function renderType(type: string) {
   const parts = type.split(/("[^"]*"|\s*\|\s*|,\s+)/g).filter((s) => s !== "");
   return parts.map((tok, i) => {

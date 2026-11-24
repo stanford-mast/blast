@@ -5,7 +5,7 @@ use std::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         Arc,
     },
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,15 @@ pub enum VmState {
 pub struct VmRecord {
     pub vm_id: String,
     pub name: Option<String>,
+    pub description: Option<String>,
+    /// OCI image the VM (or its fork ancestor) booted from.
+    pub image: Option<String>,
+    /// The VM this one was forked from, if any.
+    pub parent_vm_id: Option<String>,
+    /// The image's working directory, where a run starts unless its session
+    /// says otherwise. `None` for a VM made before this was recorded.
+    pub workdir: Option<String>,
+    pub created_at: SystemTime,
     pub state: VmState,
     pub resources: Resources,
     pub snapshot_dir: Option<PathBuf>,
@@ -44,14 +53,73 @@ pub struct VmRecord {
     /// Wall-clock time the VM entered a non-running state (for TTL tracking).
     pub idle_since: Option<Instant>,
     pub sessions: HashMap<String, SessionRecord>,
+    /// Whether durable storage holds the current snapshot; meaningful only
+    /// while suspended.
+    pub snapshot_stored: bool,
+    /// A copy to durable storage is in flight.
+    pub storing: bool,
+    /// When storing the snapshot last failed, so retries back off.
+    pub store_failed_at: Option<Instant>,
 }
 
-#[derive(Debug, Clone)]
+impl VmRecord {
+    pub fn new(vm_id: String, state: VmState, resources: Resources) -> Self {
+        Self {
+            vm_id,
+            name: None,
+            description: None,
+            image: None,
+            parent_vm_id: None,
+            workdir: None,
+            created_at: SystemTime::now(),
+            state,
+            resources,
+            snapshot_dir: None,
+            handle: None,
+            last_active: Instant::now(),
+            idle_since: None,
+            sessions: HashMap::new(),
+            snapshot_stored: false,
+            storing: false,
+            store_failed_at: None,
+        }
+    }
+
+    /// The VM's sessions, without the internal busy sessions.
+    pub fn client_sessions(&self) -> impl Iterator<Item = &SessionRecord> {
+        self.sessions
+            .values()
+            .filter(|s| s.session_idx != BUSY_SESSION_IDX)
+    }
+
+    /// Whether a run or a sync is using the VM.
+    pub fn in_use(&self) -> bool {
+        self.sessions
+            .values()
+            .any(|s| s.session_idx == BUSY_SESSION_IDX)
+    }
+
+    /// Where a run of `session` starts, as the API reports it.
+    pub fn session_cwd(&self, session: &SessionRecord) -> String {
+        session
+            .cwd
+            .clone()
+            .or_else(|| self.workdir.clone())
+            .unwrap_or_else(|| "/".into())
+    }
+}
+
+/// `session_idx` of the internal sessions `Store::mark_busy` inserts.
+const BUSY_SESSION_IDX: u32 = u32::MAX;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
     pub session_id: String,
     pub session_idx: u32,
-    pub cwd: String,
+    /// `None` starts runs in the image's working directory.
+    pub cwd: Option<String>,
     pub env: HashMap<String, String>,
+    /// `Running` only on the internal busy sessions.
     pub state: SessionState,
 }
 
@@ -81,13 +149,24 @@ pub struct Store {
     pending_demand: Arc<PendingDemand>,
     /// A parked admission request pings this to make the pressure loop run
     /// an immediate out-of-cycle reclaim pass instead of waiting out its
-    /// normal tick. Mirrors arkerd's `notify.notify_one()` waking its
-    /// scanner (`arkerd-worker-linux/src/background/resources.rs`).
+    /// normal tick.
     admission_requested: Arc<Notify>,
     /// Every transition that releases pool resources (pause, suspend, evict,
     /// delete) notifies this so parked requests recheck immediately rather
     /// than sitting out a fixed poll interval.
     capacity_freed: Arc<Notify>,
+    sessions: Arc<RwLock<SessionJournal>>,
+    sessions_path: Option<Arc<PathBuf>>,
+    /// Host memory a live VM holds beyond its guest RAM (the backend's VMM).
+    vm_memory_overhead_mib: u64,
+}
+
+type SessionJournal = HashMap<String, HashMap<String, SessionRecord>>;
+
+#[derive(Serialize, Deserialize)]
+struct PortableVmState {
+    sessions: HashMap<String, SessionRecord>,
+    runs: HashMap<String, DurableRunRecord>,
 }
 
 impl Default for Store {
@@ -97,6 +176,9 @@ impl Default for Store {
             pending_demand: Arc::default(),
             admission_requested: Arc::new(Notify::new()),
             capacity_freed: Arc::new(Notify::new()),
+            sessions: Arc::default(),
+            sessions_path: None,
+            vm_memory_overhead_mib: 0,
         }
     }
 }
@@ -112,15 +194,45 @@ pub struct AdmissionWaiterGuard {
 
 impl Drop for AdmissionWaiterGuard {
     fn drop(&mut self) {
-        self.demand.vcpu.fetch_sub(self.requested.vcpu, Ordering::SeqCst);
-        self.demand.memory_mib.fetch_sub(self.requested.memory_mib, Ordering::SeqCst);
-        self.demand.disk_mib.fetch_sub(self.requested.disk_mib, Ordering::SeqCst);
+        self.demand
+            .vcpu
+            .fetch_sub(self.requested.vcpu, Ordering::SeqCst);
+        self.demand
+            .memory_mib
+            .fetch_sub(self.requested.memory_mib, Ordering::SeqCst);
+        self.demand
+            .disk_mib
+            .fetch_sub(self.requested.disk_mib, Ordering::SeqCst);
     }
 }
 
 impl Store {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn durable(
+        data_dir: &std::path::Path,
+        vm_memory_overhead_mib: u64,
+    ) -> anyhow::Result<Self> {
+        let path = data_dir.join("sessions.json");
+        let mut sessions: SessionJournal = read_json_or_default(&path)?;
+        for vm_sessions in sessions.values_mut() {
+            vm_sessions.retain(|_, session| session.session_idx != BUSY_SESSION_IDX);
+            for session in vm_sessions.values_mut() {
+                session.state = SessionState::Idle;
+            }
+        }
+        Ok(Self {
+            sessions: Arc::new(RwLock::new(sessions)),
+            sessions_path: Some(Arc::new(path)),
+            vm_memory_overhead_mib,
+            ..Self::default()
+        })
+    }
+
+    /// What a live VM of shape `resources` holds on the host.
+    pub fn live_footprint(&self, resources: &Resources) -> Resources {
+        Resources {
+            memory_mib: resources.memory_mib + self.vm_memory_overhead_mib,
+            ..resources.clone()
+        }
     }
 
     /// Registers `requested` as pending demand for as long as the returned
@@ -128,11 +240,20 @@ impl Store {
     /// reclaim pass. Only `admission::acquire` calls this -- it's the one
     /// place a request parks waiting for pool headroom.
     pub fn register_admission_waiter(&self, requested: &Resources) -> AdmissionWaiterGuard {
-        self.pending_demand.vcpu.fetch_add(requested.vcpu, Ordering::SeqCst);
-        self.pending_demand.memory_mib.fetch_add(requested.memory_mib, Ordering::SeqCst);
-        self.pending_demand.disk_mib.fetch_add(requested.disk_mib, Ordering::SeqCst);
+        self.pending_demand
+            .vcpu
+            .fetch_add(requested.vcpu, Ordering::SeqCst);
+        self.pending_demand
+            .memory_mib
+            .fetch_add(requested.memory_mib, Ordering::SeqCst);
+        self.pending_demand
+            .disk_mib
+            .fetch_add(requested.disk_mib, Ordering::SeqCst);
         self.admission_requested.notify_one();
-        AdmissionWaiterGuard { demand: self.pending_demand.clone(), requested: requested.clone() }
+        AdmissionWaiterGuard {
+            demand: self.pending_demand.clone(),
+            requested: requested.clone(),
+        }
     }
 
     /// Nudges the pressure loop again without registering new demand --
@@ -161,8 +282,8 @@ impl Store {
     /// Waits for a signal that some transition just freed pool resources.
     /// Callers must still re-check capacity themselves on wakeup -- this
     /// only means "something changed, worth rechecking," not "it fits now."
-    pub async fn wait_capacity_freed(&self) {
-        self.capacity_freed.notified().await;
+    pub fn capacity_freed(&self) -> tokio::sync::futures::OwnedNotified {
+        self.capacity_freed.clone().notified_owned()
     }
 
     /// Called by every transition that releases pool resources (pause,
@@ -172,7 +293,103 @@ impl Store {
     }
 
     pub async fn insert(&self, record: VmRecord) {
-        self.inner.write().await.insert(record.vm_id.clone(), record);
+        let mut record = record;
+        self.restore_sessions(&mut record).await;
+        self.inner
+            .write()
+            .await
+            .insert(record.vm_id.clone(), record);
+    }
+
+    async fn restore_sessions(&self, record: &mut VmRecord) {
+        if let Some(sessions) = self.sessions.read().await.get(&record.vm_id) {
+            record.sessions.clone_from(sessions);
+        }
+    }
+
+    /// The VM's session at `idx`, made with `cwd` and `env` if it has none
+    /// there; without `idx`, a new session at the next index. `None` when
+    /// the VM is gone.
+    pub async fn open_session(
+        &self,
+        vm_id: &str,
+        idx: Option<u32>,
+        cwd: Option<String>,
+        env: HashMap<String, String>,
+    ) -> std::io::Result<Option<SessionRecord>> {
+        let mut map = self.inner.write().await;
+        let Some(vm) = map.get_mut(vm_id) else {
+            return Ok(None);
+        };
+        if let Some(existing) = vm.client_sessions().find(|s| Some(s.session_idx) == idx) {
+            return Ok(Some(existing.clone()));
+        }
+        let next_idx = vm
+            .client_sessions()
+            .map(|s| s.session_idx + 1)
+            .max()
+            .unwrap_or(0);
+        let session = SessionRecord {
+            session_id: new_session_id(),
+            session_idx: idx.unwrap_or(next_idx),
+            cwd,
+            env,
+            state: SessionState::Idle,
+        };
+        let mut journal = self.sessions.write().await;
+        let mut next = journal.clone();
+        next.entry(vm_id.to_owned())
+            .or_default()
+            .insert(session.session_id.clone(), session.clone());
+        self.persist_sessions(&next)?;
+        *journal = next;
+        drop(journal);
+        vm.sessions
+            .insert(session.session_id.clone(), session.clone());
+        drop(map);
+        Ok(Some(session))
+    }
+
+    /// Gives a fork its source's sessions: the same indexes, directories and
+    /// environments under new ids.
+    pub async fn inherit_sessions(&self, vm_id: &str, source: &VmRecord) -> std::io::Result<()> {
+        for session in source.client_sessions() {
+            self.open_session(
+                vm_id,
+                Some(session.session_idx),
+                session.cwd.clone(),
+                session.env.clone(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn remove_session(&self, vm_id: &str, session_id: &str) -> std::io::Result<bool> {
+        let mut map = self.inner.write().await;
+        let Some(vm) = map.get_mut(vm_id) else {
+            return Ok(false);
+        };
+        if !vm.sessions.contains_key(session_id) {
+            return Ok(false);
+        }
+        let mut journal = self.sessions.write().await;
+        let mut next = journal.clone();
+        if let Some(sessions) = next.get_mut(vm_id) {
+            sessions.remove(session_id);
+        }
+        self.persist_sessions(&next)?;
+        *journal = next;
+        drop(journal);
+        vm.sessions.remove(session_id);
+        drop(map);
+        Ok(true)
+    }
+
+    fn persist_sessions(&self, journal: &SessionJournal) -> std::io::Result<()> {
+        self.sessions_path
+            .as_deref()
+            .map_or(Ok(()), |path| write_json_atomic(path, journal))
     }
 
     pub async fn get(&self, vm_id: &str) -> Option<VmRecord> {
@@ -184,87 +401,123 @@ impl Store {
         F: FnOnce(&mut VmRecord),
     {
         let mut map = self.inner.write().await;
-        map.get_mut(vm_id).is_some_and(|rec| { f(rec); true })
+        map.get_mut(vm_id).is_some_and(|rec| {
+            f(rec);
+            true
+        })
     }
 
     pub async fn remove(&self, vm_id: &str) -> Option<VmRecord> {
         self.inner.write().await.remove(vm_id)
     }
 
+    async fn replace_portable_sessions(
+        &self,
+        vm_id: &str,
+        sessions: HashMap<String, SessionRecord>,
+    ) -> std::io::Result<()> {
+        let mut journal = self.sessions.write().await;
+        let mut next = journal.clone();
+        if sessions.is_empty() {
+            next.remove(vm_id);
+        } else {
+            next.insert(vm_id.to_owned(), sessions.clone());
+        }
+        self.persist_sessions(&next)?;
+        *journal = next;
+        drop(journal);
+        if let Some(vm) = self.inner.write().await.get_mut(vm_id) {
+            vm.sessions = sessions;
+        }
+        Ok(())
+    }
+
     pub async fn all(&self) -> Vec<VmRecord> {
         self.inner.read().await.values().cloned().collect()
     }
 
-    /// A suspended VM's checkpoint holds MORE disk than the VM's own
-    /// declared `disk_mib`: suspend is pause + snapshot + kill, and the
-    /// snapshot's memory dump alone writes roughly `memory_mib` worth of
-    /// bytes to disk (confirmed directly: Hypeman's standby snapshot failed
-    /// with a real ENOSPC writing that memory file when the pool's disk
-    /// accounting had only ever charged `disk_mib`). Crediting
-    /// `disk_mib + memory_mib` here is what makes the pool's admission
-    /// control -- and the disk-pressure eviction it drives -- actually
-    /// bound real host disk usage instead of a number that quietly
-    /// undercounts every suspended VM.
+    /// Suspended checkpoints charge their disk image and memory dump.
     const fn suspended_disk_footprint(resources: &Resources) -> u64 {
         resources.disk_mib + resources.memory_mib
     }
 
-    /// Resources currently held across all VMs, mirroring the exact hold
-    /// semantics documented on : Pending and Running hold
-    /// vcpu+memory+disk, Paused releases vcpu but keeps memory+disk,
-    /// Suspended releases vcpu and memory but keeps disk (the snapshot,
-    /// which itself needs the VM's `memory_mib` in extra disk -- see
-    /// `suspended_disk_footprint`), and an evicted VM (removed from the
-    /// store) holds nothing.
-    fn resources_in_use_locked(map: &HashMap<String, VmRecord>) -> crate::backend::Resources {
+    /// Resources currently held across all VMs.
+    fn resources_in_use_locked(
+        &self,
+        map: &HashMap<String, VmRecord>,
+    ) -> crate::backend::Resources {
         let mut vcpu = 0u32;
         let mut memory_mib = 0u64;
         let mut disk_mib = 0u64;
         for vm in map.values() {
             match vm.state {
                 VmState::Pending | VmState::Running => {
-                    vcpu += vm.resources.vcpu;
-                    memory_mib += vm.resources.memory_mib;
-                    disk_mib += vm.resources.disk_mib;
+                    let live = self.live_footprint(&vm.resources);
+                    vcpu += live.vcpu;
+                    memory_mib += live.memory_mib;
+                    disk_mib += live.disk_mib;
                 }
                 VmState::Paused => {
-                    memory_mib += vm.resources.memory_mib;
-                    disk_mib += vm.resources.disk_mib;
+                    let live = self.live_footprint(&vm.resources);
+                    memory_mib += live.memory_mib;
+                    disk_mib += live.disk_mib;
                 }
-                VmState::Suspended => {
+                VmState::Suspended if vm.snapshot_dir.is_some() => {
                     disk_mib += Self::suspended_disk_footprint(&vm.resources);
                 }
+                VmState::Suspended => {}
             }
         }
-        crate::backend::Resources { vcpu, memory_mib, disk_mib }
+        crate::backend::Resources {
+            vcpu,
+            memory_mib,
+            disk_mib,
+        }
+    }
+
+    /// Marks `vm_id` busy so no lifecycle transition (pause, suspend) touches
+    /// its backend handle until `clear_busy` is called with the returned id.
+    /// Uses a running internal session, which `lifecycle::transitions`
+    /// already refuses to transition under.
+    pub async fn mark_busy(&self, vm_id: &str) -> String {
+        let busy_id = format!("busy_{}", Ulid::new());
+        self.update(vm_id, |r| {
+            r.sessions.insert(
+                busy_id.clone(),
+                SessionRecord {
+                    session_id: busy_id.clone(),
+                    session_idx: BUSY_SESSION_IDX,
+                    cwd: None,
+                    env: HashMap::new(),
+                    state: SessionState::Running,
+                },
+            );
+        })
+        .await;
+        busy_id
+    }
+
+    pub async fn clear_busy(&self, vm_id: &str, busy_id: &str) {
+        self.update(vm_id, |r| {
+            r.sessions.remove(busy_id);
+            r.last_active = Instant::now();
+        })
+        .await;
     }
 
     pub async fn resources_in_use(&self) -> crate::backend::Resources {
-        Self::resources_in_use_locked(&*self.inner.read().await)
+        self.resources_in_use_locked(&*self.inner.read().await)
     }
 
-    /// Atomically checks `requested` against `total` (accounting for
-    /// everything already held) and, if it fits, inserts a `Pending`
-    /// placeholder reserving those resources -- all under one write-lock
-    /// critical section, so two concurrent callers can never both pass the
-    /// check for more than `total` combined allows. On success the caller
-    /// owns the reservation under `vm_id` and must either promote it (via
-    /// `update`, flipping state to `Running` and setting `handle`) or
-    /// release it (via `remove`) once the backend fork resolves.
-    ///
-    /// Returns `Err(in_use)` when it doesn't fit right now -- the caller
-    /// decides whether that's fail-fast (requested alone exceeds `total`,
-    /// so it can never fit) or queue-and-retry (fits in `total` in
-    /// principle, just busy).
+    /// Reserves a pending VM if its full resource request fits.
     pub async fn try_reserve(
         &self,
-        vm_id: &str,
-        name: Option<String>,
-        requested: &Resources,
+        record: &VmRecord,
         total: &Resources,
     ) -> Result<(), crate::backend::Resources> {
+        let requested = &self.live_footprint(&record.resources);
         let mut map = self.inner.write().await;
-        let in_use = Self::resources_in_use_locked(&map);
+        let in_use = self.resources_in_use_locked(&map);
         let fits = in_use.vcpu + requested.vcpu <= total.vcpu
             && in_use.memory_mib + requested.memory_mib <= total.memory_mib
             && in_use.disk_mib + requested.disk_mib <= total.disk_mib;
@@ -272,66 +525,45 @@ impl Store {
             return Err(in_use);
         }
         map.insert(
-            vm_id.to_string(),
+            record.vm_id.clone(),
             VmRecord {
-                vm_id: vm_id.to_string(),
-                name,
                 state: VmState::Pending,
-                resources: requested.clone(),
-                snapshot_dir: None,
-                handle: None,
-                last_active: Instant::now(),
-                idle_since: None,
-                sessions: HashMap::new(),
+                ..record.clone()
             },
         );
         drop(map);
         Ok(())
     }
 
-    /// Atomically checks whether promoting an EXISTING record to `Running`
-    /// fits within `total`, then flips its state on success -- the resume
-    /// counterpart to `try_reserve` (new VM) for the other admission-
-    /// controlled moment: a `run()` call whose VM is Paused or Suspended
-    /// re-acquires real vcpu (unpause) or vcpu+memory (resume), and must
-    /// queue against the SAME pool rather than bypass it.
-    ///
-    /// On success, marks the record `Pending` (NOT `Running`) -- the actual
-    /// backend `unpause`/`resume` call hasn't happened yet, and every
-    /// pressure-loop reclaim function filters on an EXACT state match
-    /// (`Running`/`Paused`/`Suspended`), so `Pending` stays invisible to all
-    /// of them, same as a brand-new fork's placeholder. Setting it to
-    /// `Running` here instead was a real bug: the pressure loop could pick
-    /// this record for an eager pause while the caller's own `unpause()`
-    /// was still in flight, racing two conflicting backend calls on the
-    /// same handle (observed as Docker's "container is already paused").
-    /// The caller must flip the record to `Running` itself once its backend
-    /// call actually succeeds (see `api::handlers::ensure_running_handle`).
-    ///
-    /// Reads `vm_id`'s CURRENT state under the lock (not a value the caller
-    /// captured earlier) to stay correct if something else -- the pressure
-    /// loop, a concurrent request -- changed it since the caller last
-    /// looked. A VM that's vanished (concurrently deleted) is treated as
-    /// nothing to reserve; the caller's subsequent backend call surfaces
-    /// "not found" on its own.
+    /// Reserves the resources needed to resume an existing VM.
     pub async fn try_reserve_resume(
         &self,
         vm_id: &str,
         total: &Resources,
     ) -> Result<(), crate::backend::Resources> {
         let mut map = self.inner.write().await;
-        let Some(rec) = map.get(vm_id) else { return Ok(()) };
-        let full = rec.resources.clone();
+        let Some(rec) = map.get(vm_id) else {
+            return Ok(());
+        };
+        let full = self.live_footprint(&rec.resources);
         let held_now = match rec.state {
-            VmState::Paused => {
-                Resources { vcpu: 0, memory_mib: full.memory_mib, disk_mib: full.disk_mib }
-            }
-            VmState::Suspended => {
-                Resources { vcpu: 0, memory_mib: 0, disk_mib: Self::suspended_disk_footprint(&full) }
-            }
+            VmState::Paused => Resources {
+                vcpu: 0,
+                memory_mib: full.memory_mib,
+                disk_mib: full.disk_mib,
+            },
+            VmState::Suspended => Resources {
+                vcpu: 0,
+                memory_mib: 0,
+                disk_mib: if rec.snapshot_dir.is_some() {
+                    Self::suspended_disk_footprint(&rec.resources)
+                } else {
+                    0
+                },
+            },
             VmState::Pending | VmState::Running => full.clone(),
         };
-        let in_use = Self::resources_in_use_locked(&map);
+        let in_use = self.resources_in_use_locked(&map);
         let fits = in_use.vcpu - held_now.vcpu + full.vcpu <= total.vcpu
             && in_use.memory_mib - held_now.memory_mib + full.memory_mib <= total.memory_mib
             && in_use.disk_mib - held_now.disk_mib + full.disk_mib <= total.disk_mib;
@@ -344,78 +576,9 @@ impl Store {
     }
 }
 
-pub fn new_vm_id() -> String { format!("vm_{}", Ulid::new()) }
-pub fn new_session_id() -> String { format!("sess_{}", Ulid::new()) }
-pub fn new_run_id() -> String { format!("run_{}", Ulid::new()) }
+mod runs;
+pub use runs::*;
+use runs::{read_json_or_default, write_json_atomic, DurableRunRecord};
 
-// ── Runs ──────────────────────────────────────────────────────────────────
-
-/// Lifecycle state for a Run, mirrors the control plane's `RunState`.
-/// - `Running`: the command is in flight (either genuinely executing, or
-///   the `time_to_background` sync window elapsed before it finished).
-/// - `Completed`: the command ran to completion; `exit_code` conveys
-///   success (0) or a non-zero program exit. A non-zero exit is still
-///   `Completed`, the program ran.
-/// - `Failed`: the system could not run or finish the command. `fail_reason`
-///   explains why; this is distinct from `stderr` (the program's own output).
-/// - `Cancelled`: the run was cancelled by the client.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RunState {
-    Running,
-    Completed,
-    Failed,
-    Cancelled,
-}
-
-impl RunState {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RunRecord {
-    pub state: RunState,
-    pub stdout: Option<String>,
-    pub stderr: Option<String>,
-    pub stdout_encoding: Option<String>,
-    pub stderr_encoding: Option<String>,
-    pub exit_code: Option<i32>,
-    pub fail_reason: Option<String>,
-}
-
-/// Poll store for run results, lets a caller that got back a `"running"`
-/// state (because `time_to_background` elapsed before the command finished)
-/// retrieve the eventual result via `GET /v1/vms/:vm_id/runs/:run_id`.
-#[derive(Default, Clone)]
-pub struct RunStore {
-    inner: Arc<RwLock<HashMap<String, RunRecord>>>,
-}
-
-impl RunStore {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub async fn insert(&self, run_id: String, record: RunRecord) {
-        self.inner.write().await.insert(run_id, record);
-    }
-
-    pub async fn get(&self, run_id: &str) -> Option<RunRecord> {
-        self.inner.read().await.get(run_id).cloned()
-    }
-
-    pub async fn update<F>(&self, run_id: &str, f: F) -> bool
-    where
-        F: FnOnce(&mut RunRecord),
-    {
-        let mut map = self.inner.write().await;
-        map.get_mut(run_id).is_some_and(|rec| { f(rec); true })
-    }
-}
+#[cfg(test)]
+mod tests;

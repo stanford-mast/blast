@@ -26,7 +26,7 @@ export async function getStaticProps() {
 }
 
 // Cross-referenced against src/api/types.rs (RunRequest/RunResponse) and
-// src/api/handlers.rs (handle_run, get_run) on the arker-blast host.
+// src/api/handlers.rs (handle_run, get_run).
 // `session_idx` is accepted in the request struct but unused by handle_run
 // today, so it's left undocumented. There is no list-runs or cancel-run
 // endpoint in BLAST's router; only the two documented here.
@@ -96,12 +96,13 @@ export default function ApiRunPage({ highlighted }: { highlighted: string[] }) {
             The command to run.
           </Field>
           <Field name="session_id" type="String">
-            Run inside an existing session (shared shell state). Defaults to
-            the VM&apos;s default session.
+            Run inside an existing session (its working directory and
+            environment). Defaults to the VM&apos;s default session.
           </Field>
           <Field name="timeout" type="Int">
             Execution/kill bound in seconds: the longest the command may run
-            before it&apos;s killed. Defaults to <code>300</code>.
+            before it&apos;s killed (exit code <code>124</code>). Omitted or{" "}
+            <code>0</code> means no limit.
           </Field>
           <Field name="time_to_background" type="Int">
             Sync window in seconds: how long the HTTP call blocks before
@@ -114,7 +115,7 @@ export default function ApiRunPage({ highlighted }: { highlighted: string[] }) {
             Environment-variable overrides for this run.
           </Field>
           <Field name="cwd" type="String">
-            Working directory for this run. Defaults to <code>/</code>.
+            Working directory for this run. Defaults to the session&apos;s.
           </Field>
         </Fields>
 

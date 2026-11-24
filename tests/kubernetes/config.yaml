@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blast
+  namespace: blast-system
+data:
+  blast.toml: |
+    port = 7240
+    data_dir = "/var/lib/blast"
+    [backend]
+    kind = "smolvm"
+    binary = "/usr/local/bin/fake-smolvm"
+    [worker]
+    control_plane_endpoint = "http://blast-control-plane:8080"
+    pool_id = "00000000-0000-0000-0000-000000000001"
+    storage_dir = "/var/lib/blast/durable"
+    drain_timeout_secs = 20
+    [resources]
+    vcpu = 2
+    memory_mib = 512
+    disk_mib = 2048
+    admission_queue_secs = 5
+    [lifecycle]
+    pause_ttl_secs = 1
+    suspend_ttl_secs = 2
+    vcpu_pressure_thresh = 0.0
+    memory_pressure_thresh = 0.0

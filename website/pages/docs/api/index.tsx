@@ -9,6 +9,7 @@ const toc: TocItem[] = [
   { id: "operations", text: "Operations" },
   { id: "authentication", text: "Authentication" },
   { id: "errors", text: "Errors" },
+  { id: "not-supported-yet", text: "Not supported yet" },
 ];
 
 const BLOCKS = [
@@ -21,8 +22,11 @@ const BLOCKS = [
   {
     lang: "json",
     code: `{
-  "code": 404,
-  "message": "VM not found: vm_abc123"
+  "error": {
+    "code": "not_found",
+    "message": "VM not found: vm_abc123",
+    "details": { "resource": "vm" }
+  }
 }`,
   },
 ];
@@ -31,8 +35,7 @@ export async function getStaticProps() {
   return { props: { highlighted: await highlightBlocks(BLOCKS) } };
 }
 
-// Adapted from arker.ai/docs's API overview (cloudflare/src/content/docs/api/overview.mdx),
-// rewritten to describe BLAST's actual scope rather than Arker's: fork, run,
+// Describes BLAST's actual scope: fork, run,
 // sync, sessions, and the automatic lifecycle, not multi-tenant orgs,
 // billing, GPUs, filesystems, or policies.
 export default function ApiOverviewPage({ highlighted }: { highlighted: string[] }) {
@@ -132,9 +135,13 @@ export default function ApiOverviewPage({ highlighted }: { highlighted: string[]
 
         <h2 id="authentication">Authentication</h2>
         <p>
-          BLAST&apos;s HTTP API has no built-in authentication. Run it behind
-          your own network boundary (localhost, a private network, or a
-          reverse proxy) if you need to restrict who can call it. The{" "}
+          Set <code>token</code> under <code>[api]</code> in{" "}
+          <code>blast.toml</code> to require{" "}
+          <code>Authorization: Bearer &lt;token&gt;</code> on every request
+          except <code>/v1/live</code>. Without it the API is unauthenticated:
+          run it behind your own network boundary (localhost, a private
+          network, or a reverse proxy) if you need to restrict who can call
+          it. The{" "}
           <code>api_key</code> under <code>[worker]</code> in{" "}
           <code>blast.toml</code> is used outbound only, to authenticate
           BLAST to a control plane it registers with; it is not checked on
@@ -145,9 +152,30 @@ export default function ApiOverviewPage({ highlighted }: { highlighted: string[]
         <p>An error response carries the HTTP status and a JSON body:</p>
         <CodeBlock lang="json" code={BLOCKS[1].code} html={highlighted[1]} />
         <p>
-          <code>code</code> mirrors the HTTP status; <code>message</code> is
+          <code>code</code> is a stable name for the HTTP status (
+          <code>not_found</code> for 404); <code>message</code> is
           human-readable.
         </p>
+
+        <h2 id="not-supported-yet">Not supported yet</h2>
+        <p>
+          These return 422 <code>unsupported_operation</code>, with the
+          feature&apos;s name in <code>details.feature</code>:
+        </p>
+        <ul>
+          <li>PTY and terminal sessions</li>
+          <li>SSH keys on a fork</li>
+          <li>Signals to a run (cancel it instead)</li>
+          <li>Public ports and ingress</li>
+          <li>Network policies</li>
+          <li>Durable VMs</li>
+          <li>Updating or resizing a VM (<code>PATCH /v1/vms/{"{id}"}</code>)</li>
+          <li>GPUs</li>
+          <li>Dockerfile, diskless and filesystem-only forks</li>
+          <li>VM metrics</li>
+          <li>Mounts and shared filesystems</li>
+          <li>Presigned and manifest sync</li>
+        </ul>
       </DocsLayout>
     </>
   );

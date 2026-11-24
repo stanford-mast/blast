@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-// Ports arker.ai/docs's CopyPageMenu (cloudflare/src/components/docs/copy-page-menu.tsx):
-// same split button + chevron dropdown shape (bg-surface, hover:bg-surface-hover,
+// A split button + chevron dropdown (bg-surface, hover:bg-surface-hover,
 // duration-[50ms], full width, dropdown-panel-enter/exit), without
 // lucide-react/sonner as dependencies (simple inline SVGs and an inline
 // "Copied" state instead of a toast) and without the "Copy all pages" /

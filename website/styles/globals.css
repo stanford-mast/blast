@@ -3,22 +3,9 @@
 @tailwind utilities;
 
 /*
- * Color tokens copied from arker.ai's actual design system, not eyeballed:
- *   cloudflare/src/app/globals.css:73   --page: #121212;
- *   cloudflare/src/app/globals.css:75   --surface: #1c1c1d;
- *   cloudflare/src/app/globals.css:76   --surface-hover: #262626;
- *   cloudflare/src/app/globals.css:82   --border: #2a2a2a;
- *   cloudflare/src/app/globals.css:85   --primary: #f2ff2d;
- *   cloudflare/src/app/globals.css:112  --marketing-text: #fafafa;
- *   cloudflare/src/app/globals.css:113  --marketing-secondary: #c8c8c8;
- *   cloudflare/src/app/globals.css:114  --marketing-tertiary: #808080;
- *
- * `--page` (not `--background`) is what arker.ai's actual marketing/landing
- * page renders against: cloudflare/src/app/page.tsx:50 sets
- * `bg-[var(--page)]` on the page root, and
- * cloudflare/src/components/landing/nav-client.tsx:47 does the same for the
- * fixed nav. `--background` (#171717) is the *app/console* surface, a
- * different token used behind the signed-in product, not this site.
+ * Color tokens. `--page` is what every page and the fixed nav render
+ * against; `--surface`/`--surface-hover` fill buttons and panels, and the
+ * `--marketing-*` tones are the three text weights.
  */
 :root {
   --page: #121212;
@@ -36,9 +23,8 @@ body {
 }
 
 /* Selection highlight: the real BLAST mark's own yellow (#ffe067, from
- * blast_icon_only.svg) rather than arker.ai's brand lime (#f2ff2d) --
- * distinct enough tones that reusing arker's exact accent here would clash
- * with the logo now on the page. */
+ * blast_icon_only.svg) rather than the lime `--brand` (#f2ff2d) -- the
+ * lime would clash with the logo on the page. */
 ::selection {
   background: #ffe067;
   color: #0b0b0b;
@@ -48,8 +34,7 @@ body {
   color: #0b0b0b;
 }
 
-/* Custom scrollbar, matching arker.ai's thin dark treatment
- * (cloudflare/src/app/globals.css:1503-1521). */
+/* Custom scrollbar: thin and dark. */
 *::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -69,12 +54,10 @@ body {
 }
 
 /* ─── Documentation content ─────────────────────────────────────────────
- * Adapted from arker.ai/docs's .doc-content typography
- * (cloudflare/src/app/globals.css:855-1023), using this site's own font
- * variables (--font-inter / --font-sometype-mono / --font-zalando-semi-expanded
- * from pages/_app.tsx) in place of arker.ai's --font-display, and without the
- * wide-table / rehype-pretty-code / catalog-table variants BLAST's small docs
- * set doesn't need. */
+ * Typography for .doc-content, using this site's own font variables
+ * (--font-inter / --font-sometype-mono / --font-zalando-semi-expanded from
+ * pages/_app.tsx), without the wide-table / catalog-table variants BLAST's
+ * small docs set doesn't need. */
 
 .link {
   color: var(--marketing-secondary);

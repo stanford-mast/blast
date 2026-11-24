@@ -60,9 +60,11 @@ BS=$(echo "$BR" | python3 -c "import json,sys; print(json.load(sys.stdin)['state
 echo ""; echo "--- [6] Sync write + read ---"
 B64=$(echo -n "blast-sync-content" | base64 -w0)
 WR=$(curl -sf -X POST $BASE/v1/vms/$VM/sync -H 'Content-Type: application/json' \
-  -d "{\"op\":\"write\",\"writes\":[{\"path\":\"/tmp/t.txt\",\"size\":18,\"content\":\"$B64\"}]}")
+  -d "{\"op\":\"write\",\"writes\":[{\"path\":\"/tmp/t.txt\",\"upload_id\":\"retryable-sync\",\"size\":18,\"content\":\"$B64\"}]}")
 WRITTEN=$(echo "$WR" | python3 -c "import json,sys; print(json.load(sys.stdin)['results'][0]['written'])" 2>/dev/null)
 [ "$WRITTEN" = "True" ] && pass "sync write" || fail "sync write: $WR"
+curl -sf -X POST $BASE/v1/vms/$VM/sync -H 'Content-Type: application/json' \
+  -d "{\"op\":\"write\",\"writes\":[{\"path\":\"/tmp/t.txt\",\"upload_id\":\"retryable-sync\",\"size\":18,\"content\":\"$B64\"}]}" >/dev/null
 RD=$(curl -sf -X POST $BASE/v1/vms/$VM/sync -H 'Content-Type: application/json' \
   -d '{"op":"read","path":"/tmp/t.txt"}')
 GOT=$(echo "$RD" | python3 -c "
@@ -226,20 +228,16 @@ BAD=$(curl -s -X POST $BASE/v1/fork -H 'Content-Type: application/json' -d '{"re
 echo "$BAD" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'vm_id' not in d" 2>/dev/null \
   && pass "fork with no source returns error (no vm_id)" || fail "fork with no source returned a VM: $BAD"
 
-echo ""; echo "--- [14] Adversarial: sync on non-running VM ---"
-# Fork then suspend (simulate by deleting the handle via delete+checking error on sync)
+echo ""; echo "--- [14] Adversarial: sync read of a missing file ---"
 F4=$(curl -sf -X POST $BASE/v1/fork -H 'Content-Type: application/json' \
   -d '{"image":"ubuntu:22.04","resources":{"vcpu":1,"memory_mib":256,"disk_mib":512}}')
 VM4=$(echo "$F4" | python3 -c "import json,sys; print(json.load(sys.stdin).get('vm_id',''))" 2>/dev/null)
 if [ -n "$VM4" ]; then
-  # Sync read on a running VM for a non-existent path — should return content="" not panic
-  RD4=$(curl -sf -X POST $BASE/v1/vms/$VM4/sync -H 'Content-Type: application/json' \
+  RD4=$(curl -s -X POST $BASE/v1/vms/$VM4/sync -H 'Content-Type: application/json' \
     -d '{"op":"read","path":"/tmp/this-file-does-not-exist-xyz123"}')
-  # cat on non-existent file exits non-zero; backend returns it but API returns ok:true with empty content
-  # The important thing: no server crash (we get a valid JSON response)
-  echo "$RD4" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null \
-    && pass "sync read non-existent path returns valid JSON (no crash)" \
-    || fail "sync read non-existent path: invalid response: $RD4"
+  echo "$RD4" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['error']['code']=='not_found'" 2>/dev/null \
+    && pass "sync read of a missing file returns not_found" \
+    || fail "sync read of a missing file: $RD4"
   curl -sf -X DELETE $BASE/v1/vms/$VM4 > /dev/null 2>&1 || true
 fi
 
@@ -248,9 +246,9 @@ F5=$(curl -sf -X POST $BASE/v1/fork -H 'Content-Type: application/json' \
   -d '{"image":"ubuntu:22.04","resources":{"vcpu":1,"memory_mib":256,"disk_mib":512}}')
 VM5=$(echo "$F5" | python3 -c "import json,sys; print(json.load(sys.stdin).get('vm_id',''))" 2>/dev/null)
 if [ -n "$VM5" ]; then
-  WR5=$(curl -sf -X POST $BASE/v1/vms/$VM5/sync -H 'Content-Type: application/json' \
+  WR5=$(curl -s -X POST $BASE/v1/vms/$VM5/sync -H 'Content-Type: application/json' \
     -d '{"op":"write","writes":[{"path":"/tmp/p.txt","size":5,"presigned":true}]}')
-  ERR5=$(echo "$WR5" | python3 -c "import json,sys; print(json.load(sys.stdin)['results'][0].get('error',''))" 2>/dev/null)
+  ERR5=$(echo "$WR5" | python3 -c "import json,sys; print(json.load(sys.stdin)['error']['code'])" 2>/dev/null)
   [ -n "$ERR5" ] && pass "presigned write returns error: $ERR5" \
     || fail "presigned write should have returned an error: $WR5"
   curl -sf -X DELETE $BASE/v1/vms/$VM5 > /dev/null 2>&1 || true

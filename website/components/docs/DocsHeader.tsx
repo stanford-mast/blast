@@ -1,9 +1,8 @@
 import Link from "next/link";
 
 // Docs header: the BLAST wordmark, top-left, and nothing else. No other nav
-// items, no login/signup/talk-to-us. Same fixed-bar + in-flow-spacer
-// treatment as arker.ai's own nav (cloudflare/src/components/landing/nav-client.tsx),
-// stripped down to just the logo per the brief.
+// items, no login/signup/talk-to-us. A fixed bar plus an in-flow spacer
+// holding just the logo.
 export function DocsHeader() {
   return (
     <>

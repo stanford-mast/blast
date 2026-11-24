@@ -3,15 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { TocItem } from "./DocsLayout";
 
-// Ports arker.ai/docs's OnThisPage (cloudflare/src/components/docs/on-this-page.tsx)
-// as closely as BLAST's flat (no nested sub-items) toc needs: the active row
+// The page outline, for BLAST's flat (no nested sub-items) toc: the active row
 // is driven by BOTH the section scrolled into view (scroll-spy) and the
-// section the cursor is hovering inside the article, same "reading along"
-// behavior as the reference. Hovering a row in this list only gives it a
-// subtle hover background; it does not move the active row. Clicking
-// smooth-scrolls from the current position. Dropped relative to the
-// reference: the "dated" changelog-row split and nested sub-item groups,
-// neither of which BLAST's docs have a use for.
+// section the cursor is hovering inside the article ("reading along").
+// Hovering a row in this list only gives it a subtle hover background; it
+// does not move the active row. Clicking smooth-scrolls from the current
+// position.
 export function OnThisPage({
   items,
   articleSelector = ".doc-content",

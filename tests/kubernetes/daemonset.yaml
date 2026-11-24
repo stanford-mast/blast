@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: blast
+  namespace: blast-system
+spec:
+  template:
+    spec:
+      terminationGracePeriodSeconds: 30
+      nodeSelector: null
+      tolerations: null
+      securityContext:
+        seccompProfile: null
+      containers:
+        - name: blast
+          image: blast-k3s-e2e:IMAGE
+          imagePullPolicy: Never
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+              devices.kubevirt.io/kvm: null
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: null
+            capabilities: null
+            readOnlyRootFilesystem: false
+          volumeMounts:
+            - name: kvm
+              mountPath: /dev/kvm
+      volumes:
+        - name: data
+          hostPath:
+            path: /var/lib/blast-k3s-e2e
+            type: Directory
+        - name: kvm
+          hostPath:
+            path: /dev/kvm
+            type: CharDevice

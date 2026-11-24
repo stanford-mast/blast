@@ -7,10 +7,7 @@ const toc: TocItem[] = [
 ];
 
 // Body is the "Purpose" section of the repo README, reused verbatim (not
-// rephrased) per the brief, with one deliberate exception: the trailing
-// "such as [Arker](https://arker.ai)" example is dropped from the
-// VM-providers bullet in favor of generic "a control plane" wording, same
-// as the Orchestration page.
+// rephrased).
 export default function IntroductionPage() {
   return (
     <>
@@ -40,12 +37,12 @@ export default function IntroductionPage() {
         </p>
         <ul>
           <li>
-            <strong>Single 7 MB binary.</strong> No Terraform. No Packer. No
-            extra dependencies.
+            <strong>Single 10 MB binary.</strong> No Terraform. No Packer. No
+            extra dependencies beyond SmolVM.
           </li>
           <li>
             <strong>Most permissible license.</strong> Code is MIT-licensed
-            and just 3,586 lines, built to keep enterprise security reviews
+            and about 15,000 lines, built to keep enterprise security reviews
             as simple as possible.
           </li>
           <li>

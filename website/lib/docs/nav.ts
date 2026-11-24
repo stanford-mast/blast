@@ -1,13 +1,11 @@
 // Docs sidebar registry. Deliberately small and hand-authored (no MDX/content
-// pipeline): three groups, mirroring arker.ai/docs's "Specs / Guides / API"
-// pattern (cloudflare/src/lib/docs/pages.ts) but trimmed to exactly what
-// BLAST ships.
+// pipeline): three groups, trimmed to exactly what BLAST ships.
 
 export type NavItem = {
   slug: string;
   label: string;
   // Items sharing a `row` key render side-by-side in one grid row (used for
-  // the Fork/Run/Sync trio, same convention as arker.ai/docs's NAV_GROUPS).
+  // the Fork/Run/Sync trio).
   row?: string;
 };
 

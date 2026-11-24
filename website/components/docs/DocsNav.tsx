@@ -4,8 +4,7 @@ import { NAV_GROUPS, hrefForSlug, type NavItem } from "@/lib/docs/nav";
 
 // Left sidebar. No border, no surface tint on the rail itself; rows touch (no
 // gaps), small uppercase-ish section labels, active row gets a subtle fill.
-// Mirrors arker.ai/docs's DocsNav (cloudflare/src/components/docs/docs-nav.tsx),
-// ported from next/navigation to next/router for the pages-router site.
+// Uses next/router, for the pages-router site.
 export function DocsNav({ onNavigate }: { onNavigate?: () => void }) {
   const router = useRouter();
 
@@ -39,8 +38,7 @@ export function DocsNav({ onNavigate }: { onNavigate?: () => void }) {
           <div className="flex flex-col">
             {clusterByRow(group.items).map((cluster, ci) =>
               cluster.length > 1 ? (
-                // No gap; rows touch, matching arker.ai/docs's DocsNav
-                // (docs-nav.tsx:41-59), which sizes each clustered row with
+                // No gap; rows touch. Each clustered row is sized with
                 // an explicit `repeat(n, minmax(0, 1fr))` grid rather than a
                 // fixed column count.
                 <div

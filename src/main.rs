@@ -9,192 +9,350 @@ mod admission;
 mod api;
 mod backend;
 mod config;
+mod durable;
 mod lifecycle;
 mod snapshot;
 mod store;
 mod worker;
 
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, Arc};
 
-use anyhow::Result;
-use clap::Parser;
-use tokio::net::TcpListener;
-use tokio::sync::RwLock;
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use tokio::{
+    net::TcpListener,
+    sync::{mpsc, oneshot},
+};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use api::handlers::AppState;
-use backend::{docker::DockerBackend, hypeman::HypemanBackend, smolvm::SmolvmBackend, Resources, VmBackend};
+use backend::{
+    docker::DockerBackend, hypeman::HypemanBackend, smolvm::SmolvmBackend, Resources, VmBackend,
+};
 use config::{BackendConfig, Config};
-use snapshot::SnapshotStore;
+use snapshot::{SnapshotStore, Storage};
 use store::{RunStore, Store};
-use worker::WorkerClient;
+use worker::{heartbeat::Ended, records::Records, Worker};
 
 #[derive(Parser)]
 #[command(name = "blast", about = "Sandbox serving engine")]
 struct Cli {
-    #[arg(long, env = "BLAST_CONFIG")]
+    #[arg(long, env = "BLAST_CONFIG", global = true)]
     config: Option<std::path::PathBuf>,
+    /// Additional execution-compatibility suffix; wins over `[worker] platform`.
+    #[arg(long, global = true)]
+    platform: Option<String>,
+    #[command(subcommand)]
+    command: Option<Command>,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+#[derive(Subcommand)]
+enum Command {
+    /// Leave the pool for good: the running BLAST hands its VMs back,
+    /// reports `left`, forgets its worker id and exits (with none running,
+    /// the worker id is reported `left` and forgotten). Stopping BLAST
+    /// instead keeps it in the pool.
+    Leave,
+}
 
-    let cli = Cli::parse();
-    let mut cfg = Config::load(cli.config.as_deref())?;
+/// Why a connected worker exits.
+enum Exit {
+    /// A signal: stop, and rejoin as the same worker on restart.
+    Stop,
+    /// The operator ran `blast leave` (answered on the sender with whether
+    /// the worker left), or the control plane is deleting the pool.
+    Leave(Option<oneshot::Sender<bool>>),
+    Refused {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    /// The control plane retired this worker id.
+    Retired,
+    MembershipLeaseExpired,
+}
 
-    // Runs before backend construction so a zero-config `blast` still comes
-    // up: auto-detects (and, if missing, auto-builds/auto-spawns) whatever
-    // the configured backend needs, and fills any resolved values (an
-    // absolute binary path, a minted hypeman token, ...) back into `cfg`.
-    // Needs data_dir to exist first (managed binaries and hypeman's own data
-    // dir both live under it).
-    tokio::fs::create_dir_all(&cfg.data_dir).await?;
-    backend::bootstrap::ensure_backend_ready(&mut cfg.backend, &cfg.data_dir).await?;
+fn configured_platform(cli: &Cli, cfg: &Config) -> Result<String> {
+    Ok(backend::worker_platform(
+        cli.platform.as_deref().or(cfg.worker.platform.as_deref()),
+        &cfg.backend,
+        &worker::host_identity()?,
+    ))
+}
 
+async fn backend_and_snapshots(
+    cfg: &mut Config,
+    remote: bool,
+) -> Result<(Arc<dyn VmBackend>, Arc<SnapshotStore>)> {
+    backend::bootstrap::ensure_backend_ready(&mut cfg.backend, &cfg.data_dir)?;
     let backend: Arc<dyn VmBackend> = match &cfg.backend {
         BackendConfig::Docker => Arc::new(DockerBackend::new()),
-        BackendConfig::Hypeman { endpoint, token, cli_binary } => {
-            Arc::new(HypemanBackend::new(endpoint.clone(), token.clone(), cli_binary.clone()))
+        BackendConfig::Hypeman {
+            endpoint,
+            token,
+            cli_binary,
+        } => Arc::new(HypemanBackend::new(
+            endpoint.clone(),
+            token.clone(),
+            cli_binary.clone(),
+        )),
+        BackendConfig::Smolvm { binary } => {
+            Arc::new(SmolvmBackend::new(binary.clone(), cfg.data_dir.clone()))
         }
-        BackendConfig::Smolvm { binary } => Arc::new(SmolvmBackend::new(binary.clone(), cfg.data_dir.clone())),
     };
-
-    let snapshots = Arc::new(SnapshotStore::new(&cfg.data_dir));
-    let store = Store::new();
-
-    // `{0,0,0}` means no pool configured -- `handle_fork`'s admission
-    // control and `lifecycle`'s pressure loop both treat that as unlimited
-    // (their `total.x > 0` guards skip straight through), so this single
-    // resolution of `resources` is the one thing both consult; see
-    // `api::handlers::reserve_pool_capacity` and `lifecycle::pressure_loop`.
-    let total_resources = cfg.resources.as_ref().map_or(
-        Resources { vcpu: 0, memory_mib: 0, disk_mib: 0 },
-        |r| Resources { vcpu: r.vcpu, memory_mib: r.memory_mib, disk_mib: r.disk_mib },
-    );
-
-    let state = AppState {
-        store: store.clone(),
-        runs: RunStore::new(),
-        backend: backend.clone(),
-        snapshots: snapshots.clone(),
-        config: Arc::new(cfg.clone()),
-        total_resources: total_resources.clone(),
+    let storage = match (&cfg.worker.storage_dir, remote) {
+        (Some(dir), _) => {
+            tokio::fs::create_dir_all(dir).await?;
+            Storage::Dir(dir.clone())
+        }
+        (None, true) => Storage::object(cfg.worker.object_storage_endpoint.clone()),
+        (None, false) => Storage::None,
     };
+    let shared = match &storage {
+        Storage::None => false,
+        Storage::Dir(_) => cfg.worker.storage_dir_shared,
+        Storage::Object { .. } => true,
+    };
+    Ok((
+        backend,
+        Arc::new(SnapshotStore::with_shared_storage(
+            &cfg.data_dir,
+            storage,
+            shared,
+        )),
+    ))
+}
 
-    // Dirty-sync uploads are only meaningful when a control plane is registered.
-    // We share the WorkerClient via RwLock so the upload fn can use the real
-    // worker_id (only known after registration) while lifecycle is spawned before
-    // the registration future completes.
-    let upload_url_fn: Option<lifecycle::UploadUrlFn> =
-        if cfg.worker.control_plane_endpoint.is_some() {
-            let wc_slot: Arc<RwLock<Option<Arc<WorkerClient>>>> = Arc::new(RwLock::new(None));
-            // Store into AppState so worker::start can fill it in after registration.
-            // We share a clone with the lifecycle closure.
-            let wc_for_lifecycle = wc_slot.clone();
-            // worker::start also needs a handle to populate it:
-            // We pass wc_slot into AppState via a thread-local approach or by
-            // stashing it in a tokio task that runs after registration.
-            // Simplest: spawn a task that awaits registration then sets the slot.
-            let cfg2 = cfg.clone();
-            let state2 = state.clone();
-            tokio::spawn(async move {
-                match worker::start(cfg2.worker.clone(), state2).await {
-                    Ok(Some(wc)) => {
-                        *wc_slot.write().await = Some(Arc::new(wc));
-                    }
-                    Ok(None) => {} // standalone mode
-                    Err(e) => tracing::error!("worker registration failed: {e:#}"),
-                }
-            });
+fn configured_resources(cfg: &Config) -> Resources {
+    cfg.resources.as_ref().map_or(
+        Resources {
+            vcpu: 0,
+            memory_mib: 0,
+            disk_mib: 0,
+        },
+        |resources| Resources {
+            vcpu: resources.vcpu,
+            memory_mib: resources.memory_mib,
+            disk_mib: resources.disk_mib,
+        },
+    )
+}
 
-            Some(Arc::new(move |_vm_id: String, blob: String| {
-                let wc_ref = wc_for_lifecycle.clone();
-                Box::pin(async move {
-                    let wc = {
-                        let guard = wc_ref.read().await;
-                        match guard.as_ref() {
-                            Some(w) => Arc::clone(w),
-                            None => anyhow::bail!("worker not yet registered; upload URL unavailable"),
-                        }
-                    };
-                    // Call the router's presigned upload URL endpoint.
-                    let url = wc.url(&format!("/api/v1/workers/{}/storage/upload-url?blob={}", wc.worker_id, urlencoding::encode(&blob)));
-                    let resp = wc.authed(wc.client.get(&url))
-                        .send()
-                        .await?
-                        .error_for_status()?
-                        .json::<serde_json::Value>()
-                        .await?;
-                    resp["url"].as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| anyhow::anyhow!("missing url in presigned response: {resp}"))
-                })
-            }))
-        } else {
-            None
-        };
-
-    // When upload_url_fn is Some, start() was already spawned above.
-    // When None, start it now (standalone mode, no dirty-sync).
-    if upload_url_fn.is_none() {
-        worker::start(cfg.worker.clone(), state.clone()).await?;
+async fn restore_state(state: &AppState) -> Result<()> {
+    state.snapshots.scavenge_transient_snapshots().await?;
+    if state.allow_local_snapshot_adoption {
+        state.snapshots.adopt_all_local_manifests().await?;
     }
-
-    // Standalone == no control plane registered. Eviction permanently destroys
-    // the last local copy of a VM's snapshot, which is only safe when a control
-    // plane has (or will have) a durable off-box copy via presigned S3 upload -
-    // see lifecycle::transitions::evict_vm.
-    let is_standalone = cfg.worker.control_plane_endpoint.is_none();
-
-    let shutdown_upload_url_fn = upload_url_fn.clone();
-    lifecycle::spawn(
-        &cfg.lifecycle,
-        store.clone(),
-        &backend,
-        snapshots.clone(),
-        &total_resources,
-        upload_url_fn,
-        is_standalone,
-    );
-
-    let router = api::router(state)
-        .layer(tower_http::trace::TraceLayer::new_for_http());
-
-    let addr = format!("0.0.0.0:{}", cfg.port);
-    let listener = TcpListener::bind(&addr).await?;
-    info!(addr, "blast listening");
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal(
-            store,
-            backend,
-            snapshots,
-            shutdown_upload_url_fn,
-            is_standalone,
-        ))
-        .await?;
-
+    // A removal is recorded only once the control plane has accepted the
+    // delete, so finishing one needs nothing from it: a worker that has not
+    // joined yet could not ask.
+    for vm_id in state.snapshots.pending_removals().await? {
+        state.snapshots.forget(&vm_id).await?;
+    }
+    for manifest in state.snapshots.owned_manifests().await? {
+        let restored = api::handlers::record_from_manifest(state, manifest)
+            .await
+            .map_err(|error| anyhow::anyhow!("restore owned VM: {error:?}"))?;
+        if let Some(record) = restored {
+            state.store.insert(record).await;
+        }
+    }
+    for (run_id, run) in state.runs.all().await {
+        state.records.run(&run_id, &run)?;
+    }
+    let kept = state
+        .store
+        .all()
+        .await
+        .into_iter()
+        .filter_map(|vm| vm.handle.map(|handle| handle.id))
+        .collect();
+    match state.backend.remove_stopped_leftovers(&kept).await {
+        Ok(0) => {}
+        Ok(removed) => info!(removed, "removed stopped machines no VM runs on"),
+        Err(error) => {
+            tracing::warn!(err = %format!("{error:#}"), "removing stopped machines failed");
+        }
+    }
     Ok(())
 }
 
-/// Waits for SIGTERM (the signal a k8s pod termination, `systemctl stop`, or
-/// a node drain sends) or Ctrl-C, then runs `lifecycle::drain` once before
-/// resolving -- so the axum server it gates keeps serving in-flight and new
-/// requests for the whole drain (a `run`/`delete` call still works normally
-/// while this is in progress), and only stops accepting connections once
-/// drain has actually finished, not the instant the signal arrived.
-async fn shutdown_signal(
-    store: Store,
-    backend: Arc<dyn VmBackend>,
-    snapshots: Arc<SnapshotStore>,
-    upload_url_fn: Option<lifecycle::UploadUrlFn>,
-    is_standalone: bool,
+fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            // A worker's joins, heartbeat failures and tunnel drops are what an
+            // operator looks for first, so info shows without RUST_LOG.
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
+    let cli = Cli::parse();
+    loop {
+        let runtime = tokio::runtime::Runtime::new()?;
+        let served = runtime.block_on(serve(&cli));
+        // Ends every task of the worker that just stopped, so none of them
+        // outlives the worker id it served.
+        runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
+        match served? {
+            Served::Stopped => return Ok(()),
+            Served::Retired => info!("the worker id has left the pool; joining as a new worker"),
+            Served::LeaseExpired => {
+                info!("the membership lease expired; rejoining the pool as this worker");
+            }
+        }
+    }
+}
+
+/// How long a stopped worker's tasks get to end.
+const RUNTIME_SHUTDOWN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How one worker's service ended.
+enum Served {
+    Stopped,
+    /// The control plane retired the worker id; its membership is forgotten
+    /// and the next start joins as a new worker.
+    Retired,
+    /// The control plane went unreachable for the length of the membership
+    /// lease, so the worker fenced itself. The next start rejoins under a new
+    /// incarnation and keeps the VMs the control plane still counts as its own.
+    LeaseExpired,
+}
+
+/// The app state over `cfg.data_dir`, with what it restored from there.
+async fn build_state(
+    cfg: &mut Config,
+    remote: Option<&config::RemoteConfig>,
+    platform: String,
+    control_plane: worker::client::ControlPlane,
+) -> Result<AppState> {
+    let records = Records::new(&cfg.data_dir, control_plane.clone())?;
+    api::sync::clear_staging(&cfg.data_dir)?;
+    let (backend, snapshots) = backend_and_snapshots(cfg, remote.is_some()).await?;
+    let state = AppState {
+        store: Store::durable(&cfg.data_dir, backend.vm_memory_overhead_mib())?,
+        runs: RunStore::durable(&cfg.data_dir)?,
+        backend,
+        snapshots,
+        config: Arc::new(cfg.clone()),
+        total_resources: configured_resources(cfg),
+        records,
+        control_plane,
+        allow_local_snapshot_adoption: remote.is_none(),
+        platform,
+        pool_id: remote.map(|config| config.pool_id.clone()),
+        draining: Arc::new(AtomicBool::new(false)),
+        lifecycle_gate: Arc::new(tokio::sync::RwLock::new(())),
+        vm_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        uploads: Arc::default(),
+        run_cancels: Arc::default(),
+        checkpoint_uploads: Arc::default(),
+    };
+    restore_state(&state).await?;
+    Ok(state)
+}
+
+async fn serve(cli: &Cli) -> Result<Served> {
+    let mut cfg = Config::load(cli.config.as_deref())?;
+    let remote = cfg.worker.remote()?;
+    cfg.validate_resources(remote.is_some())?;
+    let platform = configured_platform(cli, &cfg)?;
+
+    if matches!(cli.command, Some(Command::Leave)) {
+        let remote = remote
+            .context("`blast leave` needs [worker] control_plane_endpoint, api_key and pool_id")?;
+        let advertised =
+            worker::heartbeat::advertised_resources(&configured_resources(&cfg), &cfg.data_dir);
+        worker::leave::run(&cfg, &remote, &platform, &advertised).await?;
+        return Ok(Served::Stopped);
+    }
+
+    tokio::fs::create_dir_all(&cfg.data_dir).await?;
+    let process_lock = if remote.is_some() {
+        worker::lock_connected_membership(&cfg.data_dir)?
+    } else {
+        worker::lock_membership(&cfg.data_dir)?
+    };
+    let control_plane = if let Some(remote) = &remote {
+        let worker_id = worker::load_or_create_worker_id(&cfg.data_dir)?;
+        let incarnation = worker::new_incarnation();
+        worker::client::ControlPlane::new(remote, &worker_id, &incarnation)
+    } else {
+        worker::client::ControlPlane::local(&cfg.data_dir)?
+    };
+    let state = build_state(&mut cfg, remote.as_ref(), platform, control_plane.clone()).await?;
+    let records_task = tokio::spawn(state.records.clone().send_loop());
+
+    lifecycle::spawn(&cfg.lifecycle, &state);
+
+    let worker = if let Some(c) = &remote {
+        let mut tunnel_state = state.clone();
+        tunnel_state.allow_local_snapshot_adoption = true;
+        Some(Worker::start(
+            c,
+            state.clone(),
+            api::router(tunnel_state, None),
+            process_lock,
+            control_plane,
+        )?)
+    } else {
+        info!("using embedded local control plane");
+        None
+    };
+
+    let local_token = cfg.api.token.as_deref().map(Arc::from);
+    if local_token.is_none() {
+        if remote.is_some() {
+            tracing::warn!("[api] token is not set: the loopback listener serves only liveness and `blast leave`");
+        } else {
+            tracing::warn!(
+                "[api] token is not set: the local API on port {} is unauthenticated",
+                cfg.port
+            );
+        }
+    }
+    // `blast leave` asks a connected worker to leave over its loopback
+    // listener, behind `[api] token` when one is set. A worker outside a pool
+    // has nothing to leave, so its listener serves no leave route.
+    let (leave_tx, leave_rx) = mpsc::channel(1);
+    let router = if remote.is_some() {
+        api::diagnostics_router(state, local_token, worker::leave::route(leave_tx))
+    } else {
+        api::router(state, local_token)
+    }
+    .layer(tower_http::trace::TraceLayer::new_for_http());
+
+    let host = if remote.is_some() {
+        "127.0.0.1"
+    } else {
+        "0.0.0.0"
+    };
+    let addr = format!("{host}:{}", cfg.port);
+    let listener = TcpListener::bind(&addr).await?;
+    info!(addr, "blast listening");
+    let (ended_tx, mut ended_rx) = oneshot::channel();
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown(worker, leave_rx, ended_tx))
+        .await?;
+    records_task.abort();
+
+    ended_rx.try_recv().unwrap_or(Ok(Served::Stopped))
+}
+
+/// Resolves once BLAST should stop: on SIGTERM or Ctrl-C, on `blast leave`,
+/// when the control plane deletes a connected worker's pool, or when it
+/// refuses the worker or retires its id. A connected worker first stops (a
+/// signal), leaves (`blast leave`, pool deleted) or forgets its retired
+/// membership; a refusal or a retirement is sent on `ended`. The local API
+/// keeps serving meanwhile.
+async fn shutdown(
+    mut worker: Option<Worker>,
+    mut leave_requests: mpsc::Receiver<oneshot::Sender<bool>>,
+    ended: oneshot::Sender<Result<Served>>,
 ) {
     let ctrl_c = async {
-        tokio::signal::ctrl_c().await.expect("install Ctrl+C handler");
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install Ctrl+C handler");
     };
     #[cfg(unix)]
     let terminate = async {
@@ -205,13 +363,50 @@ async fn shutdown_signal(
     };
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
+    let worker_ended = async {
+        match &mut worker {
+            Some(w) => w.ended().await,
+            None => std::future::pending().await,
+        }
+    };
 
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
+    let exit = tokio::select! {
+        () = ctrl_c => { info!("interrupted"); Exit::Stop }
+        () = terminate => { info!("SIGTERM received"); Exit::Stop }
+        ended = worker_ended => match ended {
+            Ended::PoolDeleted => { info!("the pool is being deleted"); Exit::Leave(None) }
+            Ended::Refused { status, body } => Exit::Refused { status, body },
+            Ended::Retired => Exit::Retired,
+            Ended::LeaseExpired => Exit::MembershipLeaseExpired,
+        },
+        Some(left) = leave_requests.recv() => { info!("asked to leave the pool"); Exit::Leave(Some(left)) }
+    };
+
+    let Some(worker) = worker else { return };
+    match exit {
+        Exit::Stop => {
+            info!("stopping");
+            worker.stop().await;
+        }
+        Exit::Leave(answer) => {
+            info!("leaving the pool");
+            // An operator-requested leave must preserve every VM for another
+            // worker. Pool deletion is explicitly destructive and may retire
+            // host-local/nonportable state.
+            let left = worker.leave(answer.is_some()).await;
+            if let Some(answer) = answer {
+                let _ = answer.send(left);
+            }
+        }
+        Exit::Refused { status, body } => {
+            let _ = ended.send(Err(worker.refusal(status, &body)));
+        }
+        Exit::Retired => {
+            worker.retire().await;
+            let _ = ended.send(Ok(Served::Retired));
+        }
+        Exit::MembershipLeaseExpired => {
+            let _ = ended.send(Ok(Served::LeaseExpired));
+        }
     }
-
-    info!("shutdown signal received, draining");
-    lifecycle::drain(&store, &backend, &snapshots, upload_url_fn, is_standalone).await;
-    info!("drain complete");
 }

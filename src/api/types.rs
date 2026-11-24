@@ -1,31 +1,54 @@
-// API fields are part of the JSON contract and deserialized by serde;
-// some are not yet consumed in Rust code, suppress dead_code for this module.
-#![allow(dead_code)]
+//! Request and response bodies, in the control plane's wire shapes (its
+//! `openapi.json`) for the subset BLAST serves, so the control plane and its
+//! SDKs work against a BLAST endpoint unchanged. The control plane forwards the
+//! customer's fork and run bodies as it received them, placement fields
+//! included, so those two ignore fields they don't know; fields the API
+//! defines but BLAST cannot honour are parsed and refused by the handler
+//! with `unsupported_operation`.
 
-/// Control-plane-compatible request/response types, a minimal subset.
-///
-/// Field names and JSON representations match the control plane API so that
-/// standard SDKs work against a BLAST endpoint without modification.
+// Accepted-but-unused request fields are part of the parsed shape without
+// ever being read, and field names are the wire names.
+#![allow(dead_code, clippy::struct_field_names)]
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-// ── Fork ──────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct ForkRequest {
     pub source_vm_id: Option<String>,
     pub source_vm_name: Option<String>,
     /// OCI image reference, e.g. "ubuntu:24.04".
     pub image: Option<String>,
     pub name: Option<String>,
+    pub description: Option<String>,
     pub resources: Option<ResourcesInput>,
-    pub network: Option<NetworkInput>,
     /// Credentials for pulling `image` from a private registry (ghcr.io, a
     /// private Docker Hub repo, ECR, etc). Used only for this one pull, never
     /// stored. Ignored when forking from a source VM, which has no registry
     /// to authenticate against.
     pub registry_auth: Option<RegistryAuth>,
+    /// Seconds to wait for pool capacity; the worker's
+    /// `admission_queue_secs` when absent.
+    pub queueing_timeout: Option<u64>,
+    pub platforms: Option<Vec<String>>,
+    pub layers: Option<Vec<String>>,
+
+    // Fields this worker refuses unless they ask for the default.
+    pub dockerfile: Option<String>,
+    pub source_org_id: Option<String>,
+    pub source_org_name: Option<String>,
+    pub nestedvirt: Option<bool>,
+    pub public: Option<bool>,
+    pub ssh_public_keys: Option<serde_json::Value>,
+    pub disk: Option<bool>,
+    pub durable: Option<bool>,
+    pub policies: Option<serde_json::Value>,
+
+    /// The request as it arrived, without its registry credentials: what the
+    /// fork's activity is recorded with.
+    #[serde(skip)]
+    pub recorded: Option<String>,
 }
 
 /// Credentials for pulling `image` from a private registry, matching Docker's
@@ -37,6 +60,7 @@ pub struct ForkRequest {
 /// personal access token. Short-lived tokens are fine -- the pull happens
 /// once, at fork time.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegistryAuth {
     /// Registry username, e.g. `AWS` for ECR.
     pub username: String,
@@ -54,100 +78,49 @@ impl std::fmt::Debug for RegistryAuth {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResourcesInput {
     pub vcpu: Option<u32>,
     pub memory_mib: Option<u64>,
     pub disk_mib: Option<u64>,
+    pub vgpu: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct NetworkInput {
-    pub ssh_public_keys: Option<Vec<String>>,
-}
-
-// ── VM object ─────────────────────────────────────────────────────────────────
-
+/// The `Vm` schema.
 #[derive(Debug, Serialize)]
-pub struct VmObject {
+pub struct Vm {
     pub vm_id: String,
+    pub owner_org_id: String,
+    pub created_at: String,
     pub name: Option<String>,
-    pub state: String,
-    pub provider: String,
-    pub region: String,
+    pub description: Option<String>,
+    pub public: bool,
+    pub state: &'static str,
+    pub region: Option<String>,
+    pub provider: Option<String>,
     pub platform: String,
-    pub resources: ResourcesOutput,
+    pub sessions: Vec<Session>,
+    pub resources: VmResources,
+    pub network: VmNetwork,
+    pub pool_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct ResourcesOutput {
+#[derive(Debug, Clone, Serialize)]
+pub struct VmResources {
     pub vcpu: u32,
     pub memory_mib: u64,
     pub disk_mib: u64,
 }
 
-// ── Run ───────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct RunRequest {
-    pub command: Option<String>,
-    pub session_id: Option<String>,
-    pub session_idx: Option<u32>,
-    pub timeout: Option<u64>,
-    /// Sync window in seconds. `0` returns a pollable command run immediately
-    /// after successful dispatch without polling for completion. A positive
-    /// value bounds the synchronous wait. Omission uses the 300-second
-    /// default. This does not bound command execution; use `timeout` for the
-    /// execution and kill bound. Values above approximately 350 seconds can
-    /// exceed the load balancer idle limit.
-    pub time_to_background: Option<u64>,
-    pub env: Option<HashMap<String, String>>,
-    pub cwd: Option<String>,
+#[derive(Debug, Default, Serialize)]
+pub struct VmNetwork {
+    pub ssh_public_keys: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct RunResponse {
-    pub run_id: String,
-    pub state: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stdout: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stderr: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stdout_encoding: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stderr_encoding: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
-    /// System failure explanation when `state == "failed"`, distinct from
-    /// `stderr`, which is the program's own error output. Absent for runs
-    /// that are still running or completed normally.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fail_reason: Option<String>,
-}
-
-// ── Sessions ──────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct CreateSessionRequest {
-    pub env: Option<HashMap<String, String>>,
-    pub cwd: Option<String>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct SessionObject {
-    pub session_id: String,
-    pub session_idx: u32,
-    pub state: String,
-    pub cwd: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub env: Option<HashMap<String, String>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ListSessionsResponse {
-    pub sessions: Vec<SessionObject>,
-    pub next_cursor: Option<String>,
+pub struct ListVmsResponse {
+    pub vms: Vec<Vm>,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,21 +128,175 @@ pub struct DeleteResponse {
     pub deleted: bool,
 }
 
-// ── Sync ─────────────────────────────────────────────────────────────────────
+#[derive(Debug, Default, Deserialize)]
+pub struct RunRequest {
+    pub command: Option<String>,
+    pub session_id: Option<String>,
+    pub session_idx: Option<u32>,
+    /// Seconds before the command is killed; absent or `0` means no limit.
+    pub timeout: Option<u64>,
+    /// Sync window in seconds. `0` returns a pollable run immediately; a
+    /// positive value bounds the synchronous wait (default 300). This does
+    /// not bound command execution; `timeout` does.
+    pub time_to_background: Option<u64>,
+    /// Deprecated alias for `time_to_background: 0`.
+    pub background: Option<bool>,
+    pub queueing_timeout: Option<u64>,
+    pub end_symbol: Option<String>,
+    pub end_after_all_subprocesses: Option<bool>,
+    pub signal: Option<String>,
+    pub policies: Option<serde_json::Value>,
+    /// BLAST extensions: per-run environment and working directory.
+    pub env: Option<HashMap<String, String>>,
+    pub cwd: Option<String>,
+}
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "op", rename_all = "lowercase")]
-pub enum SyncRequest {
-    Read { path: String },
-    Write { writes: Vec<SyncWrite> },
+impl RunRequest {
+    /// Whether the request says anything about a run beyond its command; one
+    /// that says nothing at all only wakes the VM.
+    pub const fn names_a_run(&self) -> bool {
+        self.session_id.is_some()
+            || self.session_idx.is_some()
+            || self.timeout.is_some()
+            || self.time_to_background.is_some()
+            || self.background.is_some()
+            || self.queueing_timeout.is_some()
+            || self.end_symbol.is_some()
+            || self.end_after_all_subprocesses.is_some()
+            || self.env.is_some()
+            || self.cwd.is_some()
+    }
+}
+
+/// `createRun`'s body: complete output when the run finished inside the
+/// sync window (HTTP 200), else just the run to poll (HTTP 202).
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum RunResponse {
+    Completed {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
+        state: &'static str,
+        stdout: String,
+        stdout_encoding: &'static str,
+        /// Present when the command printed more than `stdout` holds.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        stdout_truncated: bool,
+        stderr: String,
+        stderr_encoding: &'static str,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        stderr_truncated: bool,
+        exit_code: Option<i32>,
+    },
+    Background {
+        session_id: Option<String>,
+        run_id: String,
+        state: &'static str,
+    },
+}
+
+impl RunResponse {
+    /// The answer to a request that ran no command: no run and no session,
+    /// and 0 is the acknowledgement's own status.
+    pub const fn acknowledged() -> Self {
+        Self::Completed {
+            session_id: None,
+            run_id: None,
+            state: "completed",
+            stdout: String::new(),
+            stdout_encoding: "utf-8",
+            stdout_truncated: false,
+            stderr: String::new(),
+            stderr_encoding: "utf-8",
+            stderr_truncated: false,
+            exit_code: Some(0),
+        }
+    }
+}
+
+/// The `Run` schema (`getRun`).
+#[derive(Debug, Serialize)]
+pub struct Run {
+    pub run_id: String,
+    pub vm_id: String,
+    pub session_id: Option<String>,
+    pub command: String,
+    pub state: &'static str,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub exit_code: Option<i32>,
+    pub fail_reason: Option<String>,
+    pub stdout: String,
+    pub stdout_encoding: &'static str,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stdout_truncated: bool,
+    pub stderr: String,
+    pub stderr_encoding: &'static str,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stderr_truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListRunsResponse {
+    pub runs: Vec<Run>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CancelRunResponse {
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSessionRequest {
+    pub env: Option<HashMap<String, String>>,
+    pub cwd: Option<String>,
+    // Terminal sessions, which this worker refuses.
+    pub pty: Option<bool>,
+    pub cols: Option<u32>,
+    pub rows: Option<u32>,
+    pub command: Option<String>,
+}
+
+/// The `Session` schema.
+#[derive(Debug, Serialize, Clone)]
+pub struct Session {
+    pub session_id: String,
+    pub session_idx: u32,
+    pub state: &'static str,
+    pub cwd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListSessionsResponse {
+    pub sessions: Vec<Session>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
+pub enum SyncRequest {
+    Read { path: String },
+    Write { writes: Vec<SyncWrite> },
+    Manifest { path: String },
+}
+
+/// One entry of a write: `SyncChunkWrite` (a byte range
+/// `[start, end)` of a `size`-byte file, sharing `upload_id` across chunks),
+/// or a whole file when `upload_id`/`start`/`end` are omitted. The API's
+/// presigned forms are recognised and refused.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncWrite {
     pub path: String,
-    #[serde(default)]
-    pub size: u64,
+    pub size: Option<u64>,
     pub upload_id: Option<String>,
+    /// Base64-encoded bytes.
     pub content: Option<String>,
     pub start: Option<u64>,
     pub end: Option<u64>,
@@ -185,11 +312,9 @@ pub enum SyncResponse {
         ok: bool,
         path: String,
         size: u64,
-        content: Option<String>,
-        encoding: Option<String>,
-        presigned_url: Option<String>,
-        expires_in: Option<u64>,
-        method: Option<String>,
+        content: String,
+        /// `utf8` or `base64`.
+        encoding: &'static str,
     },
     Write {
         ok: bool,
@@ -197,24 +322,35 @@ pub enum SyncResponse {
     },
 }
 
+/// `SyncChunkWriteResult`.
 #[derive(Debug, Serialize)]
 pub struct SyncWriteResult {
+    pub path: String,
+    pub size: u64,
     pub received_bytes: u64,
+    pub ranges: Vec<ByteRange>,
     pub complete: bool,
     pub written: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub presigned_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upload_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_in: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub method: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub error: Option<SyncFileError>,
 }
 
-// ── Regions ───────────────────────────────────────────────────────────────────
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ByteRange {
+    pub start: u64,
+    pub end: u64,
+}
+
+/// The per-file `SyncFileError`.
+#[derive(Debug, Serialize)]
+pub struct SyncFileError {
+    pub code: &'static str,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+    /// What became of the write: unknown, for the VM named.
+    pub recovery: serde_json::Value,
+}
 
 #[derive(Debug, Serialize)]
 pub struct RegionEntry {
@@ -230,70 +366,4 @@ pub struct RegionEntry {
 #[derive(Debug, Serialize)]
 pub struct ListRegionsResponse {
     pub regions: Vec<RegionEntry>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ListVmsResponse {
-    pub vms: Vec<VmObject>,
-}
-
-// ── Worker registration (BLAST → control plane) ───────────────────────────────
-
-#[derive(Debug, Serialize)]
-pub struct WorkerRegisterRequest {
-    pub worker_provider: String,
-    pub worker_region: String,
-    pub platform: String,
-    /// "docker" / "smolvm" / "hypeman" -- the snapshot format this worker's
-    /// VMs use, distinct from `platform` (CPU architecture, identical across
-    /// backends on the same host). Informational for now; the control plane
-    /// always routes an existing VM back to its original owning worker, so
-    /// nothing currently picks a worker by backend -- but a future
-    /// migrate-across-BYOC-workers feature would need it to avoid resuming a
-    /// snapshot on a backend that can't read its format.
-    pub backend: String,
-    #[serde(rename = "cpu_count")]
-    pub vcpu: u32,
-    pub memory_mib: u64,
-    pub disk_mib: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct WorkerRegisterResponse {
-    pub worker_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct WorkerHeartbeatRequest {
-    pub vcpu: u32,
-    pub memory_mib: u64,
-    pub disk_mib: u64,
-    pub vcpu_free: u32,
-    pub memory_mib_free: u64,
-    pub disk_mib_free: u64,
-    pub vm_count: u32,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct WorkerCommand {
-    pub command_id: String,
-    pub command: String,
-    pub params: serde_json::Value,
-}
-
-#[derive(Debug, Serialize)]
-pub struct WorkerCommandResult {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl WorkerCommandResult {
-    pub fn err(msg: impl Into<String>) -> Self {
-        Self { ok: false, result: None, error: Some(msg.into()) }
-    }
 }

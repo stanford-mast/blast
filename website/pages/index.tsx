@@ -1,12 +1,9 @@
 import React from 'react'
 import Head from 'next/head'
 
-// Sharp-corner, 50ms-hover link "button", the same treatment arker.ai uses
-// for its secondary nav/footer actions
-// (cloudflare/src/components/landing/nav-client.tsx:187,198: bg-surface,
-// gap-2, px-4 py-2.5, text-base font-semibold, hover:bg-surface-hover,
-// transition-colors duration-[50ms], verified literal class-for-class
-// against that file, not approximated).
+// Sharp-corner, 50ms-hover link "button" (bg-surface, gap-2, px-4 py-2.5,
+// text-base font-semibold, hover:bg-surface-hover, transition-colors
+// duration-[50ms]).
 function LinkButton({
   href,
   internal,

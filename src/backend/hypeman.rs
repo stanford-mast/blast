@@ -1,13 +1,13 @@
-use std::{collections::HashMap, path::Path, path::PathBuf, time::Duration};
+use std::{path::Path, path::PathBuf, time::Duration};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::process::Command;
 
-use super::{RegistryAuth, Resources, RunOutput, VmBackend, VmHandle};
+use super::{Exec, RegistryAuth, Resources, RunOutput, VmBackend, VmHandle};
 
 /// Metadata persisted into `snap_dir` so `fork_snapshot`/`resume` can find their
 /// way back to the hypeman-side object a snapshot lives on. Hypeman's
@@ -22,13 +22,6 @@ struct SnapshotMeta {
     /// - After `snapshot()`: this instance is still `Running`; `fork_snapshot()`
     ///   forks a brand-new instance off of it (`from_running: true`).
     instance_id: String,
-    /// The specific snapshot object id, when one was minted via `POST
-    /// /instances/{id}/snapshots` (i.e. from `snapshot()`, not `suspend()`).
-    /// Not currently consumed by `fork_snapshot`/`resume` (both operate against
-    /// `instance_id`'s live/standby state, which is what those endpoints
-    /// support), but recorded for diagnostics and future use.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    snapshot_id: Option<String>,
 }
 
 const META_FILE: &str = "hypeman.json";
@@ -63,9 +56,8 @@ impl HypemanBackend {
     }
 
     fn read_meta(snap_dir: &Path) -> Result<SnapshotMeta> {
-        let raw = std::fs::read_to_string(snap_dir.join(META_FILE)).with_context(|| {
-            format!("no hypeman snapshot metadata in {}", snap_dir.display())
-        })?;
+        let raw = std::fs::read_to_string(snap_dir.join(META_FILE))
+            .with_context(|| format!("no hypeman snapshot metadata in {}", snap_dir.display()))?;
         serde_json::from_str(&raw).context("parse hypeman snapshot metadata")
     }
 
@@ -102,7 +94,9 @@ impl HypemanBackend {
                 bail!(
                     "instance {id} settled into state {} instead of Running{}",
                     resp.state,
-                    resp.state_error.map(|e| format!(": {e}")).unwrap_or_default(),
+                    resp.state_error
+                        .map(|e| format!(": {e}"))
+                        .unwrap_or_default(),
                 );
             }
             if std::time::Instant::now() >= deadline {
@@ -111,19 +105,8 @@ impl HypemanBackend {
         }
     }
 
-    /// Pull `image` into hypeman's image cache authenticated as `auth`, and
-    /// wait for the pull+convert to finish.
-    ///
-    /// `POST /instances` (what `fork_image` otherwise calls directly) has no
-    /// credentials field of its own -- its `credentials` field is for egress
-    /// credential brokering *inside* the guest, unrelated to authenticating
-    /// the base-image pull. `POST /images` (hypeman's separate "pull and
-    /// convert OCI image" endpoint, also used by `hypeman pull`) is the one
-    /// that takes registry credentials, via the same `PushCredentials` shape
-    /// it shares with image push. So a private-image fork pulls the image
-    /// there first -- authenticated, once -- and then creates the instance
-    /// from what is now a locally cached, already-authenticated image
-    /// reference.
+    /// Pulls an authenticated image into the local cache. Instance creation
+    /// has no field for registry credentials.
     async fn pull_image_with_auth(&self, image: &str, auth: &RegistryAuth) -> Result<()> {
         let body = json!({
             "name": image,
@@ -149,7 +132,8 @@ impl HypemanBackend {
         // `pulling` -- even though the record already exists and is readable
         // by digest, which createImage resolved (and returned) synchronously.
         let digest_ref = format!("{}@{}", repository_of(image), img.digest);
-        self.wait_for_image_ready(&digest_ref, Duration::from_secs(300)).await
+        self.wait_for_image_ready(&digest_ref, Duration::from_secs(300))
+            .await
     }
 
     /// Poll `GET /images/{name}` (there's no `/wait` endpoint for images the
@@ -222,11 +206,6 @@ struct WaitResponse {
     timed_out: bool,
 }
 
-#[derive(Deserialize)]
-struct Snapshot {
-    id: String,
-}
-
 #[async_trait]
 impl VmBackend for HypemanBackend {
     async fn fork_image(
@@ -247,14 +226,7 @@ impl VmBackend for HypemanBackend {
             "vcpus": resources.vcpu,
             "size": format!("{} MB", resources.memory_mib),
             "overlay_size": format!("{} MB", resources.disk_mib),
-            // Without an explicit long-running cmd, most OCI images default CMD
-            // to a bare shell with no stdin attached. That shell exits (code 0)
-            // within a few hundred ms of boot, which shuts the guest down and
-            // makes firecracker exit cleanly right behind it -- hypeman then has
-            // nothing left to query and reports the instance stuck in "Unknown"
-            // forever (repeated "connection refused" on the now-gone fc.sock).
-            // It isn't a firecracker crash; it's an empty entrypoint. Keep every
-            // VM alive the same way DockerBackend does.
+            // Keep images with a short-lived default command available for runs.
             "cmd": ["sh", "-c", "tail -f /dev/null"],
         });
         let inst: Instance = self
@@ -268,8 +240,9 @@ impl VmBackend for HypemanBackend {
             .json()
             .await
             .context("hypeman create body")?;
-        self.wait_for_running(&inst.id, Duration::from_secs(60)).await?;
-        Ok(VmHandle { id: inst.id, platform: super::host_platform().to_owned() })
+        self.wait_for_running(&inst.id, Duration::from_secs(60))
+            .await?;
+        Ok(VmHandle { id: inst.id })
     }
 
     async fn fork_snapshot(&self, snap_dir: &Path, _resources: &Resources) -> Result<VmHandle> {
@@ -286,7 +259,10 @@ impl VmBackend for HypemanBackend {
             "target_state": "Running",
         });
         let inst: Instance = self
-            .authed(self.client.post(self.url(&format!("/instances/{}/fork", meta.instance_id))))
+            .authed(
+                self.client
+                    .post(self.url(&format!("/instances/{}/fork", meta.instance_id))),
+            )
             .json(&body)
             .send()
             .await
@@ -296,45 +272,31 @@ impl VmBackend for HypemanBackend {
             .json()
             .await
             .context("hypeman fork body")?;
-        self.wait_for_running(&inst.id, Duration::from_secs(60)).await?;
-        Ok(VmHandle { id: inst.id, platform: super::host_platform().to_owned() })
+        self.wait_for_running(&inst.id, Duration::from_secs(60))
+            .await?;
+        Ok(VmHandle { id: inst.id })
     }
 
-    async fn run(
-        &self,
-        vm: &VmHandle,
-        command: &str,
-        _session_id: &str,
-        env: &HashMap<String, String>,
-        cwd: &str,
-        timeout: Duration,
-    ) -> Result<RunOutput> {
+    async fn run(&self, vm: &VmHandle, exec: Exec<'_>) -> Result<RunOutput> {
         // There's no plain REST exec endpoint (it's WebSocket-only, driven by
         // the hypeman-cli); shell out to the real CLI instead of reimplementing
         // that protocol.
-        let mut cmd = Command::new(&self.cli_binary);
-        cmd.env("HYPEMAN_BASE_URL", &self.endpoint);
-        cmd.env("HYPEMAN_API_KEY", &self.token);
-        cmd.args(["exec", &vm.id, "--cwd", cwd, "--timeout", &timeout.as_secs().to_string()]);
-        for (k, v) in env {
-            cmd.arg("-e").arg(format!("{k}={v}"));
+        let mut command = Command::new(&self.cli_binary);
+        command.env("HYPEMAN_BASE_URL", &self.endpoint);
+        command.env("HYPEMAN_API_KEY", &self.token);
+        command.args(["exec", &vm.id]);
+        if let Some(cwd) = exec.cwd {
+            command.args(["--cwd", cwd]);
         }
-        cmd.args(["--", "sh", "-c", command]);
-
-        let out = tokio::time::timeout(timeout, cmd.output())
-            .await
-            .map_err(|_| anyhow!("hypeman exec timed out"))?
-            .context("hypeman exec")?;
-        Ok(RunOutput {
-            stdout: out.stdout,
-            stderr: out.stderr,
-            exit_code: out.status.code().unwrap_or(-1),
-        })
+        for (key, value) in exec.env {
+            command.args(["-e", &format!("{key}={value}")]);
+        }
+        command.args(["--", "sh", "-c", exec.command]);
+        super::exec_client(command, &exec).await
     }
 
-    // Hypeman has no CPU-only freeze primitive over this API: `standby` always
-    // pairs pause with a snapshot + VMM teardown, which is `suspend()`'s job,
-    // not `pause()`'s. Same call smolvm.rs makes, and for the same reason.
+    // Hypeman has no CPU-only freeze primitive over this API: lifecycle calls
+    // `suspend()` directly instead of treating this no-op as reclaimed CPU.
     async fn pause(&self, _vm: &VmHandle) -> Result<()> {
         Ok(())
     }
@@ -344,20 +306,21 @@ impl VmBackend for HypemanBackend {
     }
 
     async fn snapshot(&self, vm: &VmHandle, snap_dir: &Path) -> Result<()> {
-        let snap: Snapshot = self
-            .authed(self.client.post(self.url(&format!("/instances/{}/snapshots", vm.id))))
-            .json(&json!({ "kind": "Standby" }))
-            .send()
-            .await
-            .context("hypeman snapshot")?
-            .error_for_status()
-            .context("hypeman snapshot status")?
-            .json()
-            .await
-            .context("hypeman snapshot body")?;
+        self.authed(
+            self.client
+                .post(self.url(&format!("/instances/{}/snapshots", vm.id))),
+        )
+        .json(&json!({ "kind": "Standby" }))
+        .send()
+        .await
+        .context("hypeman snapshot")?
+        .error_for_status()
+        .context("hypeman snapshot status")?;
         Self::write_meta(
             snap_dir,
-            &SnapshotMeta { instance_id: vm.id.clone(), snapshot_id: Some(snap.id) },
+            &SnapshotMeta {
+                instance_id: vm.id.clone(),
+            },
         )
     }
 
@@ -365,45 +328,67 @@ impl VmBackend for HypemanBackend {
         // standby = pause + snapshot + delete VMM, in one call, in place. The
         // instance record (and its snapshot) survive under the same id, which
         // is exactly what resume()/fork_snapshot() need to find later.
-        self.authed(self.client.post(self.url(&format!("/instances/{}/standby", vm.id))))
-            .json(&json!({}))
-            .send()
-            .await
-            .context("hypeman standby")?
-            .error_for_status()
-            .context("hypeman standby status")?;
-        Self::write_meta(snap_dir, &SnapshotMeta { instance_id: vm.id.clone(), snapshot_id: None })
+        self.authed(
+            self.client
+                .post(self.url(&format!("/instances/{}/standby", vm.id))),
+        )
+        .json(&json!({}))
+        .send()
+        .await
+        .context("hypeman standby")?
+        .error_for_status()
+        .context("hypeman standby status")?;
+        Self::write_meta(
+            snap_dir,
+            &SnapshotMeta {
+                instance_id: vm.id.clone(),
+            },
+        )
     }
 
     async fn resume(&self, snap_dir: &Path, _resources: &Resources) -> Result<VmHandle> {
         // hypeman has no per-request resource override on restore either: it
         // restores the standby instance back to exactly what it was.
         let meta = Self::read_meta(snap_dir)?;
-        self.authed(self.client.post(self.url(&format!("/instances/{}/restore", meta.instance_id))))
-            .send()
-            .await
-            .context("hypeman restore")?
-            .error_for_status()
-            .context("hypeman restore status")?;
-        self.wait_for_running(&meta.instance_id, Duration::from_secs(60)).await?;
-        Ok(VmHandle { id: meta.instance_id, platform: super::host_platform().to_owned() })
+        self.authed(
+            self.client
+                .post(self.url(&format!("/instances/{}/restore", meta.instance_id))),
+        )
+        .send()
+        .await
+        .context("hypeman restore")?
+        .error_for_status()
+        .context("hypeman restore status")?;
+        self.wait_for_running(&meta.instance_id, Duration::from_secs(60))
+            .await?;
+        Ok(VmHandle {
+            id: meta.instance_id,
+        })
     }
 
     async fn delete(&self, vm: &VmHandle) -> Result<()> {
-        self.authed(self.client.delete(self.url(&format!("/instances/{}", vm.id))))
+        let response = self
+            .authed(
+                self.client
+                    .delete(self.url(&format!("/instances/{}", vm.id))),
+            )
             .send()
             .await
-            .context("hypeman delete")?
-            .error_for_status()
-            .context("hypeman delete status")?;
+            .context("hypeman delete")?;
+        if response.status() != reqwest::StatusCode::NOT_FOUND {
+            response
+                .error_for_status()
+                .context("hypeman delete status")?;
+        }
         Ok(())
-    }
-
-    fn platform(&self) -> &str {
-        super::host_platform()
     }
 
     fn kind(&self) -> &'static str {
         "hypeman"
+    }
+
+    /// The snapshot stays on the Hypeman server; `snap_dir` only names it.
+    fn snapshots_are_portable(&self) -> bool {
+        false
     }
 }
