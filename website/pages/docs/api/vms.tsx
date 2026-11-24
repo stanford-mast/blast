@@ -38,9 +38,9 @@ export async function getStaticProps() {
 }
 
 // Cross-referenced against src/api/types.rs (VmObject, SessionObject) and
-// src/api/handlers.rs on the arker-blast host. There is no GET-by-id endpoint
+// src/api/handlers.rs. There is no GET-by-id endpoint
 // for a single session (only list/create/delete) and no query filtering on
-// GET /v1/vms, both match the real router exactly, not arker.ai's fuller set.
+// GET /v1/vms, both match the real router exactly.
 export default function ApiVmsPage({ highlighted }: { highlighted: string[] }) {
   return (
     <>
@@ -105,9 +105,9 @@ export default function ApiVmsPage({ highlighted }: { highlighted: string[] }) {
           <Field name="state" type='"running" | "idle"'>
             Lifecycle state. A run against an idle VM auto-resumes it.
           </Field>
-          <Field name="provider, region" type="String">
-            Where this VM runs, from the worker&apos;s own{" "}
-            <code>[worker]</code> config.
+          <Field name="provider, region" type="String | null">
+            Where this VM runs; <code>null</code> from BLAST itself, filled in
+            by a control plane that serves the VM.
           </Field>
           <Field name="platform" type="String">
             The backend&apos;s platform identifier for this VM.
@@ -120,8 +120,9 @@ export default function ApiVmsPage({ highlighted }: { highlighted: string[] }) {
 
         <h2 id="the-session-object">The Session object</h2>
         <p>
-          A session is a persistent shell whose working directory and
-          environment survive across runs. A VM gets a default session the
+          A session is a working directory and environment that every run in
+          it starts with; each run is a shell of its own. A VM gets a default
+          session the
           first time it runs a command without an explicit{" "}
           <code>session_id</code>; open more with{" "}
           <a href="#post-v1-vms-id-sessions" className="link">
@@ -226,7 +227,8 @@ export default function ApiVmsPage({ highlighted }: { highlighted: string[] }) {
         <h3>Request</h3>
         <Fields>
           <Field name="cwd" type="String">
-            Starting working directory. Defaults to <code>/</code>.
+            Starting working directory. Defaults to the image&apos;s working
+            directory, or its user&apos;s home.
           </Field>
           <Field name="env" type="Object">
             Environment-variable overrides for the session.

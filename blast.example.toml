@@ -35,8 +35,8 @@ binary = "smolvm"     # memory snapshotting (fork/snapshot/restore) via fork_sna
 control_plane_endpoint = "https://control-plane.example.com"   # the pool's regional endpoint
 api_key = "<join key>"                                          # the pool's join key (scope pool:<uuid>:join)
 pool_id = "00000000-0000-0000-0000-000000000000"
-# platform = "blast-x86"   # must be the pool's; default blast-x86 or blast-arm by CPU
-#                          # architecture. `--platform` wins.
+# platform = "icelake"     # a class of your own (e.g. a CPU model) added to the platform
+#                          # BLAST names from backend, OS and arch. `--platform` wins.
 # drain_timeout_secs = 300   # on SIGTERM or `blast leave`, how long to let in-flight runs
 #                            # and snapshot copies finish
 #

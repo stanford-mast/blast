@@ -7,8 +7,7 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // Pulled from arker.ai's design tokens
-        // (cloudflare/src/app/globals.css: --page, --surface, --marketing-*, --primary).
+        // The design tokens in styles/globals.css.
         page: '#121212',
         surface: '#1c1c1d',
         'surface-hover': '#262626',
@@ -27,9 +26,8 @@ module.exports = {
         sans: ['var(--font-inter)', 'sans-serif'],
         mono: ['var(--font-sometype-mono)', 'monospace'],
       },
-      // arker.ai zeroes its whole radius scale (globals.css --radius-xs..4xl: 0)
-      // rather than special-casing individual components. Mirrored here so
-      // nothing accidentally picks up a rounded-* utility.
+      // The whole radius scale is zero rather than special-casing individual
+      // components, so nothing accidentally picks up a rounded-* utility.
       borderRadius: {
         none: '0px',
         sm: '0px',
@@ -42,8 +40,7 @@ module.exports = {
         full: '0px',
       },
       transitionDuration: {
-        // arker.ai's landing-nav hover cadence (nav-client.tsx, footer.tsx,
-        // page.tsx all use `duration-[50ms]`).
+        // The hover cadence every link and button uses (`duration-[50ms]`).
         50: '50ms',
       },
     },

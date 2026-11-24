@@ -40,7 +40,7 @@ export async function getStaticProps() {
 }
 
 // Cross-referenced against src/api/types.rs::ForkRequest and
-// src/api/handlers.rs::handle_fork on the arker-blast host. `network` is part
+// src/api/handlers.rs::handle_fork. `network` is part
 // of the JSON shape but unused by handle_fork today, so it's left undocumented
 // rather than advertising a field that silently has no effect.
 export default function ApiForkPage({ highlighted }: { highlighted: string[] }) {
@@ -56,8 +56,8 @@ export default function ApiForkPage({ highlighted }: { highlighted: string[] }) 
         <h2 id="request">Request</h2>
         <p>
           Specify exactly one of <code>image</code>, <code>source_vm_id</code>
-          , or <code>source_vm_name</code>. If <code>image</code> is present
-          it takes precedence over the other two.
+          , or <code>source_vm_name</code>. Giving <code>image</code> with a
+          source VM is a <code>bad_request</code>.
         </p>
         <Fields>
           <Field name="image" type="String" required="Required, one of">
@@ -85,7 +85,8 @@ export default function ApiForkPage({ highlighted }: { highlighted: string[] }) 
             <code>
               {String.raw`{ "vcpu": 2, "memory_mib": 2048, "disk_mib": 10240 }`}
             </code>{" "}
-            is the default; any field you omit falls back to it.
+            is the default for a fork from an image; any field you omit falls
+            back to it. A fork of a VM has its source&apos;s resources.
           </Field>
           <Field name="registry_auth" type="Object">
             Credentials for pulling <code>image</code> from a private
@@ -97,7 +98,7 @@ export default function ApiForkPage({ highlighted }: { highlighted: string[] }) 
             username <code>AWS</code> with the output of{" "}
             <code>aws ecr get-login-password</code>; for Docker Hub or GHCR
             use your username and a personal access token as the password.
-            Ignored when forking from a source VM, which has no registry to
+            Refused when forking from a source VM, which has no registry to
             authenticate against.
           </Field>
         </Fields>

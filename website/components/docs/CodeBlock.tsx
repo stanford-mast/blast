@@ -1,19 +1,15 @@
 import { useState } from "react";
 
 // Standalone doc code block: borderless figure, dark header bar with a
-// language label + copy button, matching arker.ai/docs's code chrome
-// (cloudflare/src/app/globals.css:940-1021, .doc-code-header /
-// .doc-code-lang / .doc-code-copy / figure pre). `html` is real Shiki
-// output (github-dark-dimmed, the same theme arker.ai/docs renders with),
+// language label + copy button. `html` is real Shiki
+// output (github-dark-dimmed),
 // pre-highlighted at build time via lib/docs/highlight.ts + getStaticProps
 // -- no client-side highlighter, no flash of unhighlighted code. `code` is
 // the raw source, kept alongside purely for the copy button (copying
 // should yield plain text, not the highlighted HTML). The nested [&_pre]
 // overrides neutralize Shiki's own inline background/margin/padding, since
-// this wrapper supplies all of that itself (same "strip Shiki's own
-// background, force #181818" approach as arker's own
-// `figure[data-rehype-pretty-code-figure] pre { background-color: #181818
-// !important }").
+// this wrapper supplies all of that itself (Shiki's own background is
+// stripped and #181818 forced).
 export function CodeBlock({
   html,
   code,
@@ -32,9 +28,8 @@ export function CodeBlock({
   };
 
   return (
-    // No outer border: arker.ai's figure[data-rehype-pretty-code-figure]
-    // (globals.css:940-946) has none; separation comes purely from the
-    // header/body background split plus the header's own bottom border.
+    // No outer border: separation comes purely from the header/body
+    // background split plus the header's own bottom border.
     // Margin is the figure's literal 1.25rem 0 (my-5, not my-6).
     <div className="my-5 overflow-hidden bg-[#181818]">
       <div className="flex items-center justify-between border-b border-border bg-[#131315] px-3.5 py-2">

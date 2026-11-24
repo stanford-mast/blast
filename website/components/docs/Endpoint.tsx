@@ -2,9 +2,8 @@ import { Fragment } from "react";
 import Link from "next/link";
 import { endpointSlug } from "@/lib/docs/endpoint-slug";
 
-// HTTP method -> badge tint. Same muted, dark-theme-friendly fills as
-// arker.ai/docs's Endpoint (cloudflare/src/components/docs/endpoint.tsx) so
-// the verb reads at a glance.
+// HTTP method -> badge tint. Muted, dark-theme-friendly fills so the verb
+// reads at a glance.
 const METHOD_STYLES: Record<string, string> = {
   GET: "bg-[#13313f] text-[#7cc7e8]",
   POST: "bg-[#143126] text-[#6fd29b]",
@@ -61,7 +60,7 @@ export function Endpoint({
   const badgeFont = big ? "text-2xl sm:text-3xl" : "text-lg sm:text-xl";
 
   // When `href` makes the row a link, every segment gets the same
-  // group-hover feedback as arker.ai/docs's Endpoint (endpoint.tsx:70-105):
+  // group-hover feedback:
   // the badge brightens, the route surface lightens, and the trailing note
   // shifts to a brighter tone with a small arrow that slides into view.
   const body = (

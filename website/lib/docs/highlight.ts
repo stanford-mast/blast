@@ -1,7 +1,6 @@
 import { createHighlighter, type Highlighter } from "shiki";
 
-// Same theme arker.ai/docs uses (cloudflare/src/lib/shiki-highlighter.ts):
-// rehype-pretty-code renders with github-dark-dimmed. BLAST's docs only use
+// github-dark-dimmed. BLAST's docs only use
 // bash and json code blocks, so that's the whole lang set.
 const THEME = "github-dark-dimmed";
 const LANGS = ["bash", "json"];

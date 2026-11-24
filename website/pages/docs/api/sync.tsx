@@ -26,11 +26,7 @@ export async function getStaticProps() {
 }
 
 // Cross-referenced against src/api/types.rs (SyncRequest/SyncResponse) and
-// src/api/handlers.rs::handle_sync_write on the arker-blast host. Unlike
-// arker.ai's chunked/presigned sync, BLAST's write handler always does a
-// single whole-file write per entry (no byte-range accumulation) and
-// explicitly rejects `presigned: true`, documented as such rather than
-// implying the fuller Arker behavior.
+// src/api/sync.rs, which refuses `presigned: true`.
 export default function ApiSyncPage({ highlighted }: { highlighted: string[] }) {
   return (
     <>
@@ -57,18 +53,18 @@ export default function ApiSyncPage({ highlighted }: { highlighted: string[] }) 
             Destination path inside the VM.
           </Field>
           <Field name="content" type="String" required>
-            The file&apos;s bytes. BLAST tries to base64-decode this first;
-            if it isn&apos;t valid base64, it writes the literal text
-            instead.
+            The file&apos;s bytes, base64-encoded.
           </Field>
         </Fields>
         <p>
-          Each write replaces the destination file in full.{" "}
-          <code>start</code>/<code>end</code> byte ranges and presigned
-          uploads (<code>presigned: true</code>) are accepted in the request
-          shape for forward compatibility but are not implemented by this
-          worker today; a presigned write returns an error result for that
-          entry.
+          Each write replaces the destination file in full. A large file can
+          be sent in chunks of up to 5 MiB, each entry giving the file&apos;s{" "}
+          <code>size</code>, a shared <code>upload_id</code>, and its{" "}
+          <code>start</code>/<code>end</code> byte range; the file is written
+          once every byte has arrived. Presigned uploads (
+          <code>presigned: true</code>) are not implemented by this worker
+          today; a request with one is refused with{" "}
+          <code>unsupported_operation</code>.
         </p>
 
         <h2 id="response">Response</h2>
@@ -83,9 +79,10 @@ export default function ApiSyncPage({ highlighted }: { highlighted: string[] }) 
           <Field name="size" type="Int">
             Byte length of <code>content</code>.
           </Field>
-          <Field name="content, encoding" type='String, "utf-8" | "base64"'>
+          <Field name="content, encoding" type='String, "utf8" | "base64"'>
             The file&apos;s bytes and how they&apos;re encoded. Content that
-            isn&apos;t valid UTF-8 comes back base64-encoded.
+            isn&apos;t valid UTF-8 comes back base64-encoded. Reads are
+            limited to 16 MiB.
           </Field>
         </Fields>
         <p>
@@ -100,9 +97,9 @@ export default function ApiSyncPage({ highlighted }: { highlighted: string[] }) 
           <Field name="complete, written" type="Bool">
             <code>true</code> once the file is written.
           </Field>
-          <Field name="error" type="String">
-            Set instead of the above when this entry failed (e.g. missing{" "}
-            <code>content</code>, or <code>presigned: true</code>).
+          <Field name="error" type="Object">
+            <code>{String.raw`{ "code", "message" }`}</code>, set instead of
+            the above when this entry failed.
           </Field>
         </Fields>
 

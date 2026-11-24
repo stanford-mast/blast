@@ -3,8 +3,7 @@ import { Inter, Sometype_Mono } from 'next/font/google'
 import localFont from 'next/font/local'
 import '../styles/globals.css'
 
-// Same three font families as arker.ai (cloudflare/src/app/layout.tsx:12-32):
-// Inter for body copy, Sometype Mono for anything code-ish, and Zalando Sans
+// Three font families: Inter for body copy, Sometype Mono for anything code-ish, and Zalando Sans
 // SemiExpanded (self-hosted, same file) as the display face for the wordmark.
 const inter = Inter({
   variable: '--font-inter',

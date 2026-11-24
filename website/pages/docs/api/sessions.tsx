@@ -32,7 +32,7 @@ export async function getStaticProps() {
 
 // Cross-referenced against src/api/types.rs (CreateSessionRequest,
 // SessionObject, ListSessionsResponse) and src/api/handlers.rs
-// (post_session, list_sessions, delete_session) on the arker-blast host.
+// (post_session, list_sessions, delete_session).
 export default function ApiSessionsPage({ highlighted }: { highlighted: string[] }) {
   return (
     <>
@@ -42,10 +42,10 @@ export default function ApiSessionsPage({ highlighted }: { highlighted: string[]
       <DocsLayout toc={toc}>
         <h1>Sessions</h1>
         <p>
-          A session is a persistent shell inside a VM: its own working
-          directory, environment, and run queue. Create one to keep state
-          across multiple <code>runs</code> calls, the same way a terminal tab
-          keeps its own state.
+          A session is a working directory and environment inside a VM that
+          its <code>runs</code> start in. Each run is a shell of its own, so a{" "}
+          <code>cd</code> or <code>export</code> in one run does not carry to
+          the next, and runs do not wait for each other.
         </p>
 
         <Endpoint
