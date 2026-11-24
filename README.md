@@ -14,13 +14,13 @@
 
 ## Quick Start
 
-BLAST runs on Linux with KVM and the SmolVM 1.13.3 release, which it no longer
+BLAST runs on Linux with KVM and the SmolVM 1.37.0 release, which it no longer
 installs itself:
 
 ```bash
 sudo mkdir -p /opt/smolvm
-curl -fsSL "https://github.com/calebwin/smolvm/releases/download/v1.13.3/smolvm-1.13.3-linux-$(uname -m).tar.gz" \
-  | sudo tar -xz -C /opt/smolvm
+curl -fsSL "https://github.com/smol-machines/smolvm/releases/download/v1.37.0/smolvm-1.37.0-linux-$(uname -m | sed s/aarch64/arm64/).tar.gz" \
+  | sudo tar -xz -C /opt/smolvm --strip-components=1
 sudo ln -sf /opt/smolvm/smolvm /usr/local/bin/smolvm
 sudo usermod -aG kvm "$USER"   # takes effect at your next login
 ```

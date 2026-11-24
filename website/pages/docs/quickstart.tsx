@@ -13,8 +13,8 @@ const BLOCKS = [
   {
     lang: "bash",
     code: `sudo mkdir -p /opt/smolvm
-curl -fsSL "https://github.com/calebwin/smolvm/releases/download/v1.13.3/smolvm-1.13.3-linux-$(uname -m).tar.gz" \\
-  | sudo tar -xz -C /opt/smolvm
+curl -fsSL "https://github.com/smol-machines/smolvm/releases/download/v1.37.0/smolvm-1.37.0-linux-$(uname -m | sed s/aarch64/arm64/).tar.gz" \\
+  | sudo tar -xz -C /opt/smolvm --strip-components=1
 sudo ln -sf /opt/smolvm/smolvm /usr/local/bin/smolvm
 sudo usermod -aG kvm "$USER"   # takes effect at your next login
 
@@ -68,7 +68,7 @@ export default function QuickstartPage({ highlighted }: { highlighted: string[] 
         <h2 id="install">Install</h2>
         <p>
           Install BLAST on the local or BYOC machine, a Linux machine with
-          KVM. BLAST runs the SmolVM 1.13.3 release, and building it needs a
+          KVM. BLAST runs the SmolVM 1.37.0 release, and building it needs a
           Rust toolchain and a C compiler:
         </p>
         <CodeBlock lang="bash" code={BLOCKS[0].code} html={highlighted[0]} />

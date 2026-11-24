@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::config::BackendConfig;
 
-pub const SMOLVM_RELEASE_VERSION: &str = "1.13.3";
+pub const SMOLVM_RELEASE_VERSION: &str = "1.37.0";
 
 pub fn ensure_backend_ready(cfg: &mut BackendConfig, _data_dir: &Path) -> Result<()> {
     match cfg {
