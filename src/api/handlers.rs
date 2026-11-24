@@ -781,12 +781,10 @@ async fn pin_source_snapshot(
     s.snapshots
         .check_backend_tag(&src.vm_id, s.backend.kind())
         .await?;
-    let pinned = s
-        .snapshots
+    s.snapshots
         .pin_local(&src.vm_id)
         .await
-        .map_err(|e| ApiError::internal(format!("pin source snapshot: {e:#}")))?;
-    Ok(Arc::new(pinned))
+        .map_err(|e| ApiError::internal(format!("pin source snapshot: {e:#}")))
 }
 
 /// Checkpoints a running source, or reuses a checkpoint another fork began

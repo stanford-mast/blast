@@ -358,11 +358,24 @@ impl SnapshotStore {
     /// Hard-links the local snapshot into a transient directory, which keeps
     /// it readable after the VM's own directory is replaced or removed.
     /// Snapshot files are replaced, never rewritten in place.
-    pub async fn pin_local(&self, vm_id: &str) -> Result<TransientSnapshot> {
+    ///
+    /// Forks of the same snapshot share one pin: a new link to a file changes
+    /// it (its link count and change time) under any fork already reading
+    /// it, and a backend may refuse a checkpoint that changes while it is
+    /// read.
+    pub async fn pin_local(&self, vm_id: &str) -> Result<Arc<TransientSnapshot>> {
         let source = self.snap_dir(vm_id);
+        let files = list_files(&source).await?;
+        let mut pins = self.local_pins.lock().await;
+        pins.retain(|_, pin| pin.strong_count() > 0);
+        if let Some(pin) = pins.get(vm_id).and_then(Weak::upgrade) {
+            if pins_files(&source, pin.path(), &files).await? {
+                return Ok(pin);
+            }
+        }
         let pinned = self.transient_snapshot(vm_id).await?;
-        for rel in list_files(&source).await? {
-            let (from, to) = (source.join(&rel), pinned.path().join(&rel));
+        for rel in &files {
+            let (from, to) = (source.join(rel), pinned.path().join(rel));
             if let Some(parent) = to.parent() {
                 fs::create_dir_all(parent).await?;
             }
@@ -370,6 +383,9 @@ impl SnapshotStore {
                 copy_file(&from, &to).await?;
             }
         }
+        let pinned = Arc::new(pinned);
+        pins.insert(vm_id.to_owned(), Arc::downgrade(&pinned));
+        drop(pins);
         Ok(pinned)
     }
 

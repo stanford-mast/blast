@@ -71,6 +71,10 @@ pub struct SnapshotStore {
     /// Each running VM's latest fork checkpoint and when it began, kept
     /// while a fork still reads it.
     fork_checkpoints: Mutex<HashMap<String, (Instant, Weak<TransientSnapshot>)>>,
+    /// Each VM's pin of its local snapshot, kept while a fork still reads it.
+    /// Held while a pin is made, so two forks never link the same files at
+    /// once.
+    local_pins: tokio::sync::Mutex<HashMap<String, Weak<TransientSnapshot>>>,
 }
 
 pub struct LastSnapshot {
@@ -174,6 +178,7 @@ impl SnapshotStore {
             storage,
             shared_storage,
             fork_checkpoints: Mutex::default(),
+            local_pins: tokio::sync::Mutex::default(),
         }
     }
 

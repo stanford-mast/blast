@@ -368,6 +368,61 @@ async fn ensure_local_reuses_the_selected_generation_it_restored() {
     assert!(store.ensure_local("vm_a").await.is_err());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn forks_of_one_snapshot_share_its_pin_and_link_it_once() {
+    use std::os::unix::fs::MetadataExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SnapshotStore::new(tmp.path(), Storage::None);
+    let dir = store.snap_dir("vm_a");
+    fs::create_dir_all(&dir).await.unwrap();
+    fs::write(dir.join("machine.smolcheckpoint"), b"checkpoint")
+        .await
+        .unwrap();
+
+    let first = store.pin_local("vm_a").await.unwrap();
+    let links = |path: &std::path::Path| std::fs::metadata(path).unwrap().nlink();
+    let pinned_links = links(&dir.join("machine.smolcheckpoint"));
+    let second = store.pin_local("vm_a").await.unwrap();
+
+    assert_eq!(first.path(), second.path());
+    assert_eq!(links(&dir.join("machine.smolcheckpoint")), pinned_links);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_replaced_snapshot_is_pinned_anew() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SnapshotStore::new(tmp.path(), Storage::None);
+    let dir = store.snap_dir("vm_a");
+    fs::create_dir_all(&dir).await.unwrap();
+    fs::write(dir.join("machine.smolcheckpoint"), b"old")
+        .await
+        .unwrap();
+    let old = store.pin_local("vm_a").await.unwrap();
+
+    fs::write(dir.join("next"), b"new").await.unwrap();
+    fs::rename(dir.join("next"), dir.join("machine.smolcheckpoint"))
+        .await
+        .unwrap();
+    let new = store.pin_local("vm_a").await.unwrap();
+
+    assert_ne!(old.path(), new.path());
+    assert_eq!(
+        fs::read(old.path().join("machine.smolcheckpoint"))
+            .await
+            .unwrap(),
+        b"old"
+    );
+    assert_eq!(
+        fs::read(new.path().join("machine.smolcheckpoint"))
+            .await
+            .unwrap(),
+        b"new"
+    );
+}
+
 #[tokio::test]
 async fn a_pinned_snapshot_outlives_its_replacement_and_removal() {
     let data = tempfile::tempdir().unwrap();

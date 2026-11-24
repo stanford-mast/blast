@@ -284,3 +284,35 @@ pub(super) async fn remove_dir_if_exists(path: &Path) -> Result<()> {
         _ => Ok(()),
     }
 }
+
+/// Whether `pinned` holds exactly `files` of `source`, each the very same
+/// file (hard-linked, not a copy of an earlier one).
+#[cfg(unix)]
+pub(super) async fn pins_files(source: &Path, pinned: &Path, files: &[String]) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    if list_files(pinned).await?.len() != files.len() {
+        return Ok(false);
+    }
+    for rel in files {
+        let (from, to) = (
+            fs::metadata(source.join(rel)).await,
+            fs::metadata(pinned.join(rel)).await,
+        );
+        match (from, to) {
+            (Ok(from), Ok(to)) if from.dev() == to.dev() && from.ino() == to.ino() => {}
+            (Ok(_), Ok(_)) => return Ok(false),
+            (Err(error), _) | (_, Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(false)
+            }
+            (Err(error), _) | (_, Err(error)) => return Err(error.into()),
+        }
+    }
+    Ok(true)
+}
+
+/// Without file identities to compare, every fork pins its own copy.
+#[cfg(not(unix))]
+pub(super) async fn pins_files(_source: &Path, _pinned: &Path, _files: &[String]) -> Result<bool> {
+    Ok(false)
+}
