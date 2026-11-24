@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.7", features = ["macros", "ws"] }
 clap = { version = "4", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }
@@ -30,6 +30,27 @@ base64 = "0.22"
 urlencoding = "2"
 config = "0.14"
 which = "6"
+futures = "0.3"
+fs2 = "0.4"
+humantime = "2"
+opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic-messages", "logs"] }
+prost = "0.14"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "service"] }
+libc = "0.2"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+yamux = "0.13"
+hmac = "0.12"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_SystemInformation"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
 opt-level = 3

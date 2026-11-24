@@ -1,5 +1,6 @@
-port = 7240
-data_dir = "/var/lib/blast"
+port = 7240                 # the local API listens on 0.0.0.0:<port>; set [api] token
+data_dir = "/var/lib/blast"  # also holds worker_id, this worker's identity in a pool, and
+                             # snapshots/, the local copy of every suspended VM
 
 [backend]
 kind = "smolvm"       # recommended: libkrun-based microVMs, real hardware-isolated
@@ -21,21 +22,36 @@ binary = "smolvm"     # memory snapshotting (fork/snapshot/restore) via fork_sna
 #                            # Bare "hypeman" resolves via PATH; use an absolute path
 #                            # if it isn't on it.
 
-[worker]
-# Leave these unset to run standalone (no external control plane).
-control_plane_endpoint = "https://api.arker.ai"
-# api_key: a worker_registration-scoped key (POST /api/v1/api-keys with worker_registration=true)
-api_key = "ark_..."
-# registration_token: optional single-use token from POST /api/v1/regions.
-# When set, validates the org+region binding on first registration.
-# registration_token = "wrt_..."
-provider = "byoc"
-region = "customer-acme-us-east"
-# platform = "linux/aarch64"   # auto-detected if absent
+[api]
+# Bearer token required on the local API (every route but /v1/live). Unset
+# means anyone who can reach the port can drive this worker's VMs, so leave it
+# unset only behind your own network boundary. Requests that arrive over the
+# worker tunnel are not checked: only the control plane can send them.
+# token = "change-me"
 
-# Total pool this worker makes available for VMs + snapshots. Leave the whole
-# section out to run unlimited (no local admission control, zero capacity
-# advertised upstream) -- this applies whether or not [worker] is configured.
+[worker]
+# Set these fields to join a remote pool. Without them, BLAST uses its embedded
+# local control plane.
+control_plane_endpoint = "https://control-plane.example.com"   # the pool's regional endpoint
+api_key = "<join key>"                                          # the pool's join key (scope pool:<uuid>:join)
+pool_id = "00000000-0000-0000-0000-000000000000"
+# platform = "blast-x86"   # must be the pool's; default blast-x86 or blast-arm by CPU
+#                          # architecture. `--platform` wins.
+# drain_timeout_secs = 300   # on SIGTERM or `blast leave`, how long to let in-flight runs
+#                            # and snapshot copies finish
+#
+# Where suspended VMs' snapshots are kept durably, so a VM survives a restart
+# and can resume on another worker of the pool running the same backend. By
+# default, the bucket and short-lived credentials the control plane sends with
+# every heartbeat response; set storage_dir to keep them yourself instead:
+# storage_dir = "/mnt/blast-snapshots"   # local restart durability by default
+# storage_dir_shared = true              # only for a mount shared by every worker, such as s3fs
+#                                        # mount of your own bucket.
+# object_storage_endpoint = "http://127.0.0.1:9000"   # S3-compatible server (path-style); default AWS S3
+
+# Total pool this worker makes available for VMs + snapshots, and the capacity
+# it advertises to the control plane. Leave the whole section out to run unlimited (no local
+# admission control); a connected worker then advertises the host's own size.
 [resources]
 vcpu = 8
 memory_mib = 16384
@@ -44,10 +60,7 @@ admission_queue_secs = 120   # how long a fork waits for pool headroom before gi
 
 [lifecycle]
 pause_ttl_secs   = 60      # idle before pausing   (CPU freed)
-suspend_ttl_secs = 300     # idle before suspending (CPU + memory freed)
-evict_ttl_secs   = 3600    # idle before evicting   (CPU + memory + disk freed)
-dirty_sync_ttl_secs = 60   # interval between dirty-sync snapshots (only when registered)
+suspend_ttl_secs = 300     # idle before suspending (CPU + memory freed; snapshot kept on disk)
 
-memory_pressure_thresh = 0.15   # suspend when available mem < 15% of total
-disk_pressure_thresh   = 0.10   # evict when available disk < 10% of total
-max_snapshot_disk_mib  = 50000
+vcpu_pressure_thresh   = 0.15   # pause early when free pool vcpu < 15%
+memory_pressure_thresh = 0.15   # suspend early when free pool memory < 15%
