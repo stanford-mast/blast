@@ -352,8 +352,9 @@ pub trait VmBackend: Send + Sync + 'static {
 /// - with no input to read;
 /// - as the leader of its own process group, which a timeout or a cancel
 ///   kills whole, where the backend alone would leave it running;
-/// - printing to files in the guest, of which the run keeps the start, so a
-///   command may print more than the backend's exec can carry.
+/// - printing to the guest's memory, which keeps the start of each stream,
+///   so a command may print more than the backend's exec can carry and
+///   still be heard on a guest whose disk is full.
 ///
 /// `id` names the run among those of its VM.
 pub async fn run_supervised<B: VmBackend + ?Sized>(
@@ -400,10 +401,16 @@ pub async fn run_supervised<B: VmBackend + ?Sized>(
 /// for one argument, with room for its quoting.
 const MAX_ARGUMENT_COMMAND: usize = 64 * 1024;
 
-/// Where run `id` keeps its process id and what it printed.
+/// The name of the directory where run `id` keeps its process id and what it
+/// printed, under the first of [`RUN_DIRS`] the guest can write.
 fn run_dir(id: &str) -> String {
-    shell_quote(&format!("/tmp/.blast-run-{id}"))
+    shell_quote(&format!(".blast-run-{id}"))
 }
+
+/// Sets `$d` to the run directory named `$1`: on a memory-backed filesystem
+/// where the guest has one, so that a full disk cannot silence a run.
+const RUN_DIRS: &str = r#"for base in /dev/shm /run /tmp; do [ -d "$base" ] && [ -w "$base" ] && break; done
+d="$base/$1""#;
 
 /// One more byte than a run keeps tells a stream at the limit from a longer one.
 const KEPT: usize = OUTPUT_LIMIT + 1;
@@ -411,44 +418,94 @@ const KEPT: usize = OUTPUT_LIMIT + 1;
 fn supervise_command(command: &str, id: &str) -> String {
     format!(
         "sh -c {} sh {} {} {KEPT}",
-        shell_quote(SUPERVISE),
+        shell_quote(&scripted(SUPERVISE)),
+        run_dir(id),
         shell_quote(command),
-        run_dir(id)
     )
 }
 
 fn stop_command(id: &str) -> String {
-    format!("sh -c {} sh {} {KEPT}", shell_quote(STOP), run_dir(id))
+    format!(
+        "sh -c {} sh {} {KEPT}",
+        shell_quote(&scripted(STOP)),
+        run_dir(id)
+    )
 }
 
-/// `$1` the command, `$2` the run's directory, `$3` the bytes of each stream
-/// to print. Without the directory the command runs unsupervised.
+/// `script` with the run directory in `$d`, the stream reader in `$keep`
+/// and [`DRAIN`] defined.
+fn scripted(script: &str) -> String {
+    format!("keep={}\n{RUN_DIRS}\n{DRAIN}\n{script}", shell_quote(KEEP))
+}
+
+/// A stream reader: `$1` the bytes to keep, `$2` the file to keep them in.
+/// Appends each read to that file as it arrives, through a descriptor that
+/// outlives the file's name, until `$1` bytes are kept; then reads and drops
+/// the rest until every writer has closed, so a writer never sees its pipe
+/// close.
+const KEEP: &str = r#"exec 3>>"$2"
+kept=0
+while [ "$kept" -lt "$1" ]; do
+    read=$(dd bs=4096 count=1 2>/dev/null | tee -a /dev/fd/3 | wc -c)
+    [ "$read" -gt 0 ] || exit 0
+    kept=$((kept + read))
+done
+exec cat >/dev/null"#;
+
+/// `drain FILE`: waits until the readers whose pids `FILE` lists have reached
+/// the end of their streams, or for 100 ms when something the command
+/// started still holds one open; their readers then keep reading, so the
+/// run need not wait for it.
+const DRAIN: &str = r#"drain() {
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        open=
+        for reader in $(cat "$1" 2>/dev/null); do
+            case $(sed -n 's/^State:[[:space:]]*\(.\).*/\1/p' "/proc/$reader/status" 2>/dev/null) in
+                '' | Z) ;;
+                *) open=1 ;;
+            esac
+        done
+        [ -n "$open" ] || return 0
+        sleep 0.01 2>/dev/null || return 0
+    done
+}"#;
+
+/// `$d` the run's directory, `$2` the command, `$3` the bytes of each stream
+/// to keep and print. The run ends when the command does. Each stream reaches
+/// a reader in a session of its own, holding none of the run's own output,
+/// which keeps the stream's first `$3` bytes in memory and drains the rest
+/// for as long as anything writes to it, so a write never fails and a
+/// process the command left running may print on. Without the directory the
+/// command runs unsupervised.
 const SUPERVISE: &str = r#"shell=sh; command -v bash >/dev/null 2>&1 && shell=bash
-mkdir -p "$2" 2>/dev/null || exec "$shell" -c "$1"
-if command -v setsid >/dev/null 2>&1; then
-    ( exec setsid "$shell" -c "$1" ) </dev/null >"$2/out" 2>"$2/err" &
-else
-    ( exec "$shell" -c "$1" ) </dev/null >"$2/out" 2>"$2/err" &
-fi
-echo $! >"$2/pid"
+mkdir -p "$d" 2>/dev/null && mkfifo "$d/o" "$d/e" 2>/dev/null || exec "$shell" -c "$2"
+detach=; command -v setsid >/dev/null 2>&1 && detach=setsid
+$detach sh -c "$keep" keep "$3" "$d/out" <"$d/o" >/dev/null 2>&1 &
+readers=$!
+$detach sh -c "$keep" keep "$3" "$d/err" <"$d/e" >/dev/null 2>&1 &
+echo "$readers $!" >"$d/readers"
+( exec $detach "$shell" -c "$2" ) </dev/null >"$d/o" 2>"$d/e" &
+echo $! >"$d/pid"
 wait $!
 status=$?
-head -c "$3" "$2/out" 2>/dev/null
-head -c "$3" "$2/err" >&2 2>/dev/null
-rm -rf "$2" "$2.cmd"
+drain "$d/readers"
+head -c "$3" "$d/out" 2>/dev/null
+head -c "$3" "$d/err" >&2 2>/dev/null
+rm -rf "$d" "/tmp/$1.cmd"
 exit "$status""#;
 
-/// `$1` the run's directory, `$2` the bytes of each stream to print. Takes
-/// the directory from the supervisor first, so what the command printed is
-/// still there to read once it is killed.
-const STOP: &str = r#"mv "$1" "$1.stopped" 2>/dev/null || exit 0
-pid=$(cat "$1.stopped/pid" 2>/dev/null)
+/// `$d` the run's directory, `$2` the bytes of each stream to print. Takes the
+/// directory from the supervisor first, so what the command printed is still
+/// there to read once it is killed.
+const STOP: &str = r#"mv "$d" "$d.stopped" 2>/dev/null || exit 0
+pid=$(cat "$d.stopped/pid" 2>/dev/null)
 if [ -n "$pid" ]; then
     kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
 fi
-head -c "$2" "$1.stopped/out" 2>/dev/null
-head -c "$2" "$1.stopped/err" >&2 2>/dev/null
-rm -rf "$1.stopped" "$1.cmd""#;
+drain "$d.stopped/readers"
+head -c "$2" "$d.stopped/out" 2>/dev/null
+head -c "$2" "$d.stopped/err" >&2 2>/dev/null
+rm -rf "$d.stopped" "/tmp/$1.cmd""#;
 
 /// Quotes `s` as one POSIX shell word.
 pub fn shell_quote(s: &str) -> String {
@@ -646,6 +703,57 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(String::from_utf8_lossy(&left.stdout.bytes).trim(), "0");
+    }
+
+    #[tokio::test]
+    async fn a_command_that_leaves_a_process_on_its_output_ends_when_it_exits() {
+        let id = ulid::Ulid::new().to_string();
+        let tag = format!("9{}", std::process::id());
+        let cancel = CancellationToken::new();
+        let command = format!("sleep {tag} & echo STARTED");
+
+        let started = std::time::Instant::now();
+        let out = exec_client(
+            sh(&supervise_command(&command, &id)),
+            &exec(Some(Duration::from_secs(30)), Stdout::Capture, &cancel),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.ended, Ended::Exited(0));
+        assert_eq!(out.stdout.bytes, b"STARTED\n");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        let left = exec_client(
+            sh(&format!(
+                "pgrep -f '[s]leep {tag}' | wc -l; pkill -f '[s]leep {tag}'"
+            )),
+            &exec(None, Stdout::Capture, &cancel),
+        )
+        .await
+        .unwrap();
+        assert_eq!(String::from_utf8_lossy(&left.stdout.bytes).trim(), "1");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_supervised_command_keeps_its_output_in_memory() {
+        let id = ulid::Ulid::new().to_string();
+        let cancel = CancellationToken::new();
+        let command = format!("test -p /dev/shm/.blast-run-{id}/o && echo IN_MEMORY");
+
+        let out = exec_client(
+            sh(&supervise_command(&command, &id)),
+            &exec(None, Stdout::Capture, &cancel),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.ended, Ended::Exited(0));
+        assert_eq!(out.stdout.bytes, b"IN_MEMORY\n");
     }
 
     #[tokio::test]
